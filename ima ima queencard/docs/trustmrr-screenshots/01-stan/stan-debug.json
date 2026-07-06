@@ -1,0 +1,462 @@
+{
+  "home": {
+    "err": "Timed out waiting for tab 2 to navigate to https://www.stan.store/?ref=trustmrr.",
+    "signals": {
+      "body": "Meet Your All·in·One Creator Store Stan is the easiest way to make money online. All of your courses, digital products, and bookings are now hosted within your link-in-bio. Continue The Best Creators Use Stan 🚀 See how our creators use Stan to superpower their businesses! Abigail Peugh @abigailpeugh 100K+ Followers 💰 . Business Coach Millie Adrian @itsmodernmillie 150K+ Followers 📲 . Social Media Coach Eddie Abbew @eddieabbew 554K+ Followers 💪 . Fitness Coach Sarah Perl @hothighpriestess 2.4M+ Followers ✨ . Spirituality Creator Tatiana Londono @tatlondono 2.8M+ Followers 🏠 . Real Estate Coach See What People Are Saying 👀 Stan is the easiest way to start selling online. 0% Transaction Fees, Always. Not just another link·in·bio🚀 Stan has everything you need to run your business. All-in-one place. A Simpler Solution 💰 No more paying for 5+ different apps! Stan brings it all home. Start My Trial No Coding Required Stan is the simplest and easiest way to get started. You can build your Store in just a few minutes! 1-Tap Checkout Your audience shouldn’t have to go through hurdles to purchase your product. Stan maximizes your checkout conversion rates. Integrates with Your Favorite Apps Stan integrates with all the third party tools you use. Try Stan for 14 Days Free Start My Trial Sign In Blog Referral Program Jobs Help Privacy Policy Terms and Conditions",
+      "buttons": [
+        {
+          "aria": "Toggle Nav",
+          "disabled": false,
+          "index": 0,
+          "text": "",
+          "type": "button"
+        },
+        {
+          "aria": "",
+          "disabled": false,
+          "index": 1,
+          "text": "Continue",
+          "type": ""
+        },
+        {
+          "aria": "",
+          "disabled": false,
+          "index": 2,
+          "text": "Start My Trial",
+          "type": ""
+        },
+        {
+          "aria": "",
+          "disabled": false,
+          "index": 3,
+          "text": "Start My Trial",
+          "type": ""
+        }
+      ],
+      "h1": "Meet Your All·in·One Creator Store",
+      "inputs": [
+        {
+          "autocomplete": "",
+          "name": "",
+          "placeholder": "",
+          "type": "checkbox"
+        },
+        {
+          "autocomplete": "",
+          "name": "",
+          "placeholder": "",
+          "type": "checkbox"
+        },
+        {
+          "autocomplete": "",
+          "name": "",
+          "placeholder": "",
+          "type": "checkbox"
+        }
+      ],
+      "links": [
+        {
+          "aria": "Stan Logo",
+          "href": "https://www.stan.store/",
+          "text": ""
+        },
+        {
+          "aria": "Home",
+          "href": "https://www.stan.store/",
+          "text": "Home"
+        },
+        {
+          "aria": "Our Mission",
+          "href": "https://www.stan.store/about",
+          "text": "Our Mission"
+        },
+        {
+          "aria": "Blog",
+          "href": "",
+          "text": "Blog"
+        },
+        {
+          "aria": "",
+          "href": "https://www.stan.store/?ref=trustmrr#",
+          "text": "Log in"
+        },
+        {
+          "aria": "",
+          "href": "https://www.stan.store/?ref=trustmrr#",
+          "text": "Sign Up"
+        },
+        {
+          "aria": "Home",
+          "href": "https://www.stan.store/",
+          "text": "Home"
+        },
+        {
+          "aria": "Our Mission",
+          "href": "https://www.stan.store/about",
+          "text": "Our Mission"
+        },
+        {
+          "aria": "Blog",
+          "href": "",
+          "text": "Blog"
+        },
+        {
+          "aria": "Home",
+          "href": "",
+          "text": "Log in"
+        },
+        {
+          "aria": "Home",
+          "href": "",
+          "text": "Sign Up"
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/abigailpeugh",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/itsmodernmillie",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/eddieabbew",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/hothighpriestess",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.tiktok.com/@tatlondono",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.youtube.com/channel/UCQ1wox_PP5Lds__fQdy6NvQ",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://twitter.com/stanforcreators",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.instagram.com/stanforcreators",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.tiktok.com/@stanforcreators",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.linkedin.com/company/stanwithme",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://admin.stan.store/register",
+          "text": "Sign In"
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/blog",
+          "text": "Blog"
+        },
+        {
+          "aria": "",
+          "href": "https://help.stan.store/article/89-referral-program-overview",
+          "text": "Referral Program"
+        },
+        {
+          "aria": "",
+          "href": "https://careers.kula.ai/stan",
+          "text": "Jobs"
+        },
+        {
+          "aria": "",
+          "href": "https://help.stan.store/",
+          "text": "Help"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/privacy-policy.pdf",
+          "text": "Privacy Policy"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/terms-of-service.pdf",
+          "text": "Terms and Conditions"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/terms-of-service.pdf",
+          "text": "Terms"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/privacy-policy.pdf",
+          "text": "Privacy Policy"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/privacy-policy.pdf",
+          "text": "Read our full Cookie Policy."
+        }
+      ],
+      "title": "Stan - Your Creator Store",
+      "url": "https://www.stan.store/?ref=trustmrr"
+    }
+  },
+  "snapshot": "- navigation:\n  - link \"Stan Logo\":\n    - /url: /\n  - button \"Toggle Nav\"\n- heading \"Meet Your All·in·One Creator Store\" [level=1]\n- heading \"Stan is the easiest way to make money online. All of your courses, digital products, and bookings are now hosted within your link-in-bio.\" [level=3]:\n  - text: Stan is the easiest way to make money online.\n  - text: All of your courses, digital products, and bookings are now hosted within your link-in-bio.\n- button \"Continue\":\n  - heading \"Continue\" [level=2]\n- heading \"The Best Creators Use Stan 🚀\" [level=1]\n- heading \"See how our creators use Stan to superpower their businesses!\" [level=2]\n- heading \"Abigail Peugh\" [level=1]\n- heading \"@abigailpeugh\" [level=2]\n- img \"Instagram\"\n- heading \"100K+ Followers\" [level=4]\n- heading \"💰 . Business Coach\" [level=3]\n- link \"store\":\n  - /url: https://stan.store/abigailpeugh\n  - img \"store\"\n- heading \"Millie Adrian\" [level=1]\n- heading \"@itsmodernmillie\" [level=2]\n- img \"Instagram\"\n- heading \"150K+ Followers\" [level=4]\n- heading \"📲 . Social Media Coach\" [level=3]\n- link \"store\":\n  - /url: https://stan.store/itsmodernmillie\n  - img \"store\"\n- heading \"Eddie Abbew\" [level=1]\n- heading \"@eddieabbew\" [level=2]\n- img \"Instagram\"\n- heading \"554K+ Followers\" [level=4]\n- heading \"💪 . Fitness Coach\" [level=3]\n- link \"store\":\n  - /url: https://stan.store/eddieabbew\n  - img \"store\"\n- heading \"Sarah Perl\" [level=1]\n- heading \"@hothighpriestess\" [level=2]\n- img \"Instagram\"\n- heading \"2.4M+ Followers\" [level=4]\n- heading \"✨ . Spirituality Creator\" [level=3]\n- link \"store\":\n  - /url: https://stan.store/hothighpriestess\n  - img \"store\"\n- heading \"Tatiana Londono\" [level=1]\n- heading \"@tatlondono\" [level=2]\n- img \"Instagram\"\n- heading \"2.8M+ Followers\" [level=4]\n- heading \"🏠 . Real Estate Coach\" [level=3]\n- link \"profile\":\n  - /url: https://www.tiktok.com/@tatlondono\n  - img \"profile\"\n- heading \"See What People Are Saying 👀\" [level=1]\n- heading \"Stan is the easiest way to start selling online.\" [level=2]\n- heading \"0%\" [level=1]\n- heading \"Transaction Fees, Always.\" [level=2]\n- heading \"Not just another link·in·bio🚀\" [level=1]\n- heading \"Stan has everything you need to run your business. All-in-one place.\" [level=2]\n- img \"slide\"\n- heading \"A Simpler Solution 💰\" [level=1]\n- heading \"No more paying for 5+ different apps! Stan brings it all home.\" [level=2]\n- img \"Simpler Solution\"\n- button \"Start My Trial\":\n  - generic: Start My Trial\n- img \"img\"\n- heading \"No Coding Required\" [level=1]\n- paragraph: Stan is the simplest and easiest way to get started. You can build your Store in just a few minutes!\n- img \"img\"\n- heading \"1-Tap Checkout\" [level=1]\n- paragraph: Your audience shouldn’t have to go through hurdles to purchase your product. Stan maximizes your checkout conversion rates.\n- img \"img\"\n- heading \"Integrates with Your Favorite Apps\" [level=1]\n- paragraph: Stan integrates with all the third party tools you use.\n- heading \"Try Stan for 14 Days Free\" [level=3]\n- button \"Start My Trial\":\n  - generic: Start My Trial\n- link \"Youtube\":\n  - /url: https://www.youtube.com/channel/UCQ1wox_PP5Lds__fQdy6NvQ\n  - img \"Youtube\"\n- link \"Twitter\":\n  - /url: https://twitter.com/stanforcreators\n  - img \"Twitter\"\n- link \"Instagram\":\n  - /url: https://www.instagram.com/stanforcreators\n  - img \"Instagram\"\n- link \"TikTok\":\n  - /url: https://www.tiktok.com/@stanforcreators\n  - img \"TikTok\"\n- link \"Linkedin\":\n  - /url: https://www.linkedin.com/company/stanwithme\n  - img \"Linkedin\"\n- img \"Stan\"\n- link \"Sign In\":\n  - /url: https://admin.stan.store/register\n- link \"Blog\":\n  - /url: https://stan.store/blog\n- link \"Referral Program\":\n  - /url: https://help.stan.store/article/89-referral-program-overview\n- link \"Jobs\":\n  - /url: https://careers.kula.ai/stan\n- link \"Help\":\n  - /url: https://help.stan.store/\n- link \"Privacy Policy\":\n  - /url: https://assets.stanwith.me/legal/privacy-policy.pdf\n- link \"Terms and Conditions\":\n  - /url: https://assets.stanwith.me/legal/terms-of-service.pdf\n- iframe",
+  "login": {
+    "label": "Stan login",
+    "selector": "a:has-text(\"Log in\")",
+    "count": 2
+  },
+  "signupHome": {
+    "err": "Timed out waiting for tab 2 to navigate to https://www.stan.store/?ref=trustmrr. | screenshot:Timed out running CDP command \"Page.captureScreenshot\" for tab 2",
+    "signals": {
+      "body": "",
+      "buttons": [],
+      "h1": "",
+      "inputs": [],
+      "links": [],
+      "title": "Stan - Your Creator Store",
+      "url": "https://www.stan.store/?ref=trustmrr"
+    }
+  },
+  "signup": {
+    "label": "Stan signup",
+    "selector": "a:has-text(\"Sign Up\")",
+    "count": 0
+  },
+  "trialHome": {
+    "err": "Timed out waiting for tab 2 to navigate to https://www.stan.store/?ref=trustmrr.",
+    "signals": {
+      "body": "Meet Your All·in·One Creator Store Stan is the easiest way to make money online. All of your courses, digital products, and bookings are now hosted within your link-in-bio. Continue The Best Creators Use Stan 🚀 See how our creators use Stan to superpower their businesses! Abigail Peugh @abigailpeugh 100K+ Followers 💰 . Business Coach Millie Adrian @itsmodernmillie 150K+ Followers 📲 . Social Media Coach Eddie Abbew @eddieabbew 554K+ Followers 💪 . Fitness Coach Sarah Perl @hothighpriestess 2.4M+ Followers ✨ . Spirituality Creator Tatiana Londono @tatlondono 2.8M+ Followers 🏠 . Real Estate Coach See What People Are Saying 👀 Stan is the easiest way to start selling online. 0% Transaction Fees, Always. Not just another link·in·bio🚀 Stan has everything you need to run your business. All-in-one place. A Simpler Solution 💰 No more paying for 5+ different apps! Stan brings it all home. Start My Trial No Coding Required Stan is the simplest and easiest way to get started. You can build your Store in just a few minutes! 1-Tap Checkout Your audience shouldn’t have to go through hurdles to purchase your product. Stan maximizes your checkout conversion rates. Integrates with Your Favorite Apps Stan integrates with all the third party tools you use. Try Stan for 14 Days Free Start My Trial Sign In Blog Referral Program Jobs Help Privacy Policy Terms and Conditions",
+      "buttons": [
+        {
+          "aria": "Toggle Nav",
+          "disabled": false,
+          "index": 0,
+          "text": "",
+          "type": "button"
+        },
+        {
+          "aria": "",
+          "disabled": false,
+          "index": 1,
+          "text": "Continue",
+          "type": ""
+        },
+        {
+          "aria": "",
+          "disabled": false,
+          "index": 2,
+          "text": "Start My Trial",
+          "type": ""
+        },
+        {
+          "aria": "",
+          "disabled": false,
+          "index": 3,
+          "text": "Start My Trial",
+          "type": ""
+        }
+      ],
+      "h1": "Meet Your All·in·One Creator Store",
+      "inputs": [
+        {
+          "autocomplete": "",
+          "name": "",
+          "placeholder": "",
+          "type": "checkbox"
+        },
+        {
+          "autocomplete": "",
+          "name": "",
+          "placeholder": "",
+          "type": "checkbox"
+        },
+        {
+          "autocomplete": "",
+          "name": "",
+          "placeholder": "",
+          "type": "checkbox"
+        }
+      ],
+      "links": [
+        {
+          "aria": "Stan Logo",
+          "href": "https://www.stan.store/",
+          "text": ""
+        },
+        {
+          "aria": "Home",
+          "href": "https://www.stan.store/",
+          "text": "Home"
+        },
+        {
+          "aria": "Our Mission",
+          "href": "https://www.stan.store/about",
+          "text": "Our Mission"
+        },
+        {
+          "aria": "Blog",
+          "href": "",
+          "text": "Blog"
+        },
+        {
+          "aria": "",
+          "href": "https://www.stan.store/?ref=trustmrr#",
+          "text": "Log in"
+        },
+        {
+          "aria": "",
+          "href": "https://www.stan.store/?ref=trustmrr#",
+          "text": "Sign Up"
+        },
+        {
+          "aria": "Home",
+          "href": "https://www.stan.store/",
+          "text": "Home"
+        },
+        {
+          "aria": "Our Mission",
+          "href": "https://www.stan.store/about",
+          "text": "Our Mission"
+        },
+        {
+          "aria": "Blog",
+          "href": "",
+          "text": "Blog"
+        },
+        {
+          "aria": "Home",
+          "href": "",
+          "text": "Log in"
+        },
+        {
+          "aria": "Home",
+          "href": "",
+          "text": "Sign Up"
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/abigailpeugh",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/itsmodernmillie",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/eddieabbew",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/hothighpriestess",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.tiktok.com/@tatlondono",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.youtube.com/channel/UCQ1wox_PP5Lds__fQdy6NvQ",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://twitter.com/stanforcreators",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.instagram.com/stanforcreators",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.tiktok.com/@stanforcreators",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://www.linkedin.com/company/stanwithme",
+          "text": ""
+        },
+        {
+          "aria": "",
+          "href": "https://admin.stan.store/register",
+          "text": "Sign In"
+        },
+        {
+          "aria": "",
+          "href": "https://stan.store/blog",
+          "text": "Blog"
+        },
+        {
+          "aria": "",
+          "href": "https://help.stan.store/article/89-referral-program-overview",
+          "text": "Referral Program"
+        },
+        {
+          "aria": "",
+          "href": "https://careers.kula.ai/stan",
+          "text": "Jobs"
+        },
+        {
+          "aria": "",
+          "href": "https://help.stan.store/",
+          "text": "Help"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/privacy-policy.pdf",
+          "text": "Privacy Policy"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/terms-of-service.pdf",
+          "text": "Terms and Conditions"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/terms-of-service.pdf",
+          "text": "Terms"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/privacy-policy.pdf",
+          "text": "Privacy Policy"
+        },
+        {
+          "aria": "",
+          "href": "https://assets.stanwith.me/legal/privacy-policy.pdf",
+          "text": "Read our full Cookie Policy."
+        }
+      ],
+      "title": "Stan - Your Creator Store",
+      "url": "https://www.stan.store/?ref=trustmrr"
+    }
+  },
+  "trial": {
+    "label": "Stan start trial",
+    "selector": "button:has-text(\"Start My Trial\")",
+    "count": 2
+  }
+}

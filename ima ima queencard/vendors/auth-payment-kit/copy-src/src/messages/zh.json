@@ -1,0 +1,565 @@
+{
+  "Metadata": {
+    "title": "Goya.ai - AI 视频生成平台",
+    "description": "使用 Sora 2、Veo 3.1、Wan 2.6 等模型在几分钟内创建惊人的 AI 视频"
+  },
+  "Common": {
+    "login": "登录",
+    "signup": "注册",
+    "logout": "退出",
+    "language": "语言",
+    "submit": "提交",
+    "cancel": "取消",
+    "save": "保存",
+    "delete": "删除",
+    "edit": "编辑",
+    "loading": "加载中...",
+    "error": "出错了",
+    "success": "成功"
+  },
+  "Header": {
+    "models": "模型",
+    "tools": "工具",
+    "pricing": "定价",
+    "docs": "文档",
+    "myCreations": "我的作品",
+    "credits": "积分",
+    "settings": "设置"
+  },
+  "Hero": {
+    "badge": "全球最先进的视频生成技术。",
+    "title": "将您的想法转化为精彩视频",
+    "subtitle": "使用 AI",
+    "description": "在几分钟内创建专业的 AI 生成视频。支持文本转视频、图片转视频，或增强现有素材。",
+    "startCreating": "免费开始创作",
+    "viewExamples": "查看示例",
+    "features": {
+      "fast": "闪电般快速",
+      "easy": "简单易用",
+      "ai": "AI 驱动"
+    },
+    "stats": {
+      "videos": "个视频已创建",
+      "users": "位满意用户",
+      "rating": "用户评分"
+    },
+    "creditsHint": "{credits} 个免费积分开始 • 无需信用卡"
+  },
+  "Notifications": {
+    "generationWillNotify": "生成时间较长，我们会在生成完成后通知你。",
+    "enableNotifications": "开启通知",
+    "notificationDescription": "视频生成完成后，我们将通过浏览器通知告知您。",
+    "maybeLater": "稍后再说",
+    "allow": "允许",
+    "videoReadyTitle": "{siteName} - 视频已生成",
+    "videoReadyBody": "提示词：{prompt}\n生成已完成，点击查看。",
+    "videoReadyBodyShort": "生成已完成，点击查看。"
+  },
+  "ToolPage": {
+    "generator": "生成器",
+    "result": "结果",
+    "queueTitle": "生成队列",
+    "queueEmpty": "暂无进行中的任务",
+    "recentTitle": "最近结果",
+    "recentEmpty": "暂无结果",
+    "resultTitle": "结果",
+    "newGeneration": "新建生成",
+    "exploreTitle": "探索示例",
+    "exploreSubtitle": "暂无社区内容，先从你的创作开始",
+    "emptyTitle": "预览会出现在这里",
+    "emptySubtitle": "在左侧发起生成后即可显示",
+    "promptIdeas": "提示词灵感",
+    "promptExample1": "霓虹雨夜街景特写，慢动作氛围感。",
+    "promptExample2": "金色夕阳下的咖啡馆，轻微横移镜头。",
+    "promptExample3": "雾气中的未来城市天际线，柔和光影。",
+    "tipsTitle": "小提示",
+    "tipsLine1": "描述主体、光线与动作更清晰。",
+    "tipsLine2": "加入镜头运动：平移/推拉/变焦。",
+    "tipsLine3": "补充情绪词：电影感、梦幻、极简。",
+    "generatingTag": "生成中",
+    "generatingHint": "视频生成中，可继续发起新任务。",
+    "modelLabel": "模型",
+    "download": "下载"
+  },
+  "Showcase": {
+    "badge": "用 Goya 创作",
+    "title": "用 goya 创作。",
+    "subtitle": "真实输出。真实提示词。",
+    "description": "以下每一帧都来自一段文字描述。没有摄像机，没有剧组。",
+    "ctaText": "你的下一帧，只差一个提示词。",
+    "ctaButton": "开始创作"
+  },
+  "Hero": {
+    "badge": "全球最先进的视频生成技术。",
+    "title": "将您的想法转化为精彩视频",
+    "subtitle": "使用 AI",
+    "description": "在几分钟内创建专业的 AI 生成视频。",
+    "startCreating": "免费开始创作",
+    "viewExamples": "查看示例",
+    "features": {
+      "fast": "闪电般快速",
+      "easy": "简单易用",
+      "ai": "AI 驱动"
+    },
+    "stats": {
+      "videos": "个视频已创建",
+      "users": "位满意用户",
+      "rating": "用户评分"
+    },
+    "creditsHint": "{credits} 个免费积分 · 无需信用卡",
+    "trustBadge1": "注册即送积分",
+    "trustBadge2": "Seedance 2.0 驱动",
+    "trustBadge3": "4K 电影质感"
+  },
+  "Features": {
+    "badge": "强大功能",
+    "title": "goya 能做什么。",
+    "subtitle": "六个停止等待的理由",
+    "description": "从真实人体动态到电影级光影——为追求极致的创作者而生。",
+    "learnMore": "了解更多",
+    "bottomCTA": {
+      "text": "准备好拍你的第一部短片了吗？",
+      "button": "开始创作"
+    },
+    "textToVideo": {
+      "title": "真实人体动态",
+      "description": "Seedance 2.0 算法，拒绝僵硬的 AI 感——流畅自然的动作，经得起大屏检验。",
+      "stat": "生成速度"
+    },
+    "imageToVideo": {
+      "title": "物理光影反馈",
+      "description": "水面、皮肤、金属——真实的折射与反射，逐帧烘焙进画面。",
+      "stat": "最高分辨率"
+    },
+    "referenceGen": {
+      "title": "多尺度输出",
+      "description": "从 9:16 短视频到 2.35:1 宽幅电影。一个提示词，覆盖所有格式。",
+      "stat": "宽高比"
+    },
+    "enhancement": {
+      "title": "负向提示词引擎",
+      "description": "自动过滤崩坏体态和扭曲解剖结构，确保每次输出干净纯粹。",
+      "stat": "AI 模型"
+    },
+    "fast": {
+      "title": "并行渲染引擎",
+      "description": "并发处理技术，生成速度提升最高 300%。一杯咖啡的时间。"
+    },
+    "secure": {
+      "title": "你的内容，你的版权",
+      "description": "100% 商业授权，端到端加密。你创作的一切，完全属于你。"
+    },
+    "realtime": {
+      "title": "实时更新",
+      "description": "实时跟踪视频生成进度"
+    },
+    "formats": {
+      "title": "多种格式",
+      "description": "支持多种宽高比，适用于任何平台"
+    },
+    "ai": {
+      "title": "先进 AI",
+      "description": "由最新的 AI 视频生成模型驱动"
+    }
+  },
+  "HowItWorks": {
+    "badge": "简单流程",
+    "title": "四步，完成一部短片。",
+    "subtitle": "喝完一杯咖啡的时间",
+    "description": "没有摄像机，没有剧组，没有剪辑软件。只需一段描述，几分钟后见。",
+    "bottomHint": "无需信用卡 · {credits} 个免费积分",
+    "cta": "开始创作",
+    "steps": {
+      "prompt": {
+        "title": "写下你的场景",
+        "description": "描述你脑海中的画面。一句话就够——剩下的交给我们。",
+        "stat": "平均时间"
+      },
+      "upload": {
+        "title": "添加参考（可选）",
+        "description": "上传一张图片，锚定风格、角色或场景。",
+        "stat": "支持格式"
+      },
+      "generate": {
+        "title": "AI 渲染你的影片",
+        "description": "Seedance 2.0 处理你的提示词，生成独一无二的电影级片段。",
+        "stat": "生成时间"
+      },
+      "download": {
+        "title": "下载并发布",
+        "description": "视频已就绪。4K 下载，随处发布——它是你的。",
+        "stat": "最高质量"
+      }
+    }
+  },
+  "CTA": {
+    "badge": "限时优惠",
+    "title": "下一步，就是导演。",
+    "subtitle": "首批生成点数，我们请客。",
+    "description": "现在开始，免费领取积分，无需信用卡。你的想象力，是唯一的预算。",
+    "getStarted": "领取免费积分",
+    "learnMore": "了解更多",
+    "benefits": {
+      "free": "注册送 {credits} 积分",
+      "noCard": "无需信用卡",
+      "cancel": "随时取消",
+      "support": "7x24 支持"
+    },
+    "generating": "生成中...",
+    "readyIn": "就绪时间",
+    "minutes": "分钟",
+    "from": "来自",
+    "reviews": "条评价",
+    "testimonials": {
+      "title": "创作者喜爱",
+      "subtitle": "看看用户怎么说"
+    }
+  },
+  "FAQ": {
+    "title": "问题。",
+    "subtitle": "大家真正想问的那些。",
+    "contact": "还有其他问题？联系我们",
+    "general": {
+      "question": "我拥有生成视频的版权吗？",
+      "answer": "完全拥有。Goya 基于合法合规的商业授权模型构建。你生成的每一个视频都属于你，享有完整商业版权。用于广告、影片、社交媒体或出售均可，没有任何附加条件。"
+    },
+    "commercial": {
+      "question": "我完全不会写提示词，也能用吗？",
+      "answer": "当然。我们的输入框内置 AI 润色层——输入几个关键词，我们会自动补全成电影级描述。你不需要成为提示词工程师，也能得到出色的结果。"
+    },
+    "aiModels": {
+      "question": "你们支持哪些 AI 模型？",
+      "answer": "我们集成了 Sora 2、Veo 3.1、Wan 2.6 和 Seedance 1.5 Pro。我们持续接入最新模型，确保你始终用到最强的能力。"
+    },
+    "credits": {
+      "question": "积分系统是如何工作的？",
+      "answer": "每次生成消耗积分，不同模型和时长消耗不同。新用户免费获得积分，无需信用卡。可购买积分包或订阅月度计划，以优惠价格持续创作。"
+    },
+    "refund": {
+      "question": "提供退款吗？",
+      "answer": "如果因系统错误导致生成失败，我们立即退还积分。订阅付款如有不满，请在 7 天内联系支持团队。"
+    },
+    "support": {
+      "question": "如何获取支持？",
+      "answer": "发邮件至 support@goya.ai，我们通常在几小时内回复。紧急问题请使用网站上的联系表格。"
+    }
+  },
+  "Footer": {
+    "product": "产品",
+    "company": "公司",
+    "legal": "法律",
+    "copyright": "© {year} Goya.ai. 保留所有权利。",
+    "privacy": "隐私政策",
+    "terms": "服务条款",
+    "cookie": "Cookie 政策"
+  },
+  "Credits": {
+    "title": "积分",
+    "balance": "积分余额",
+    "available": "可用",
+    "frozen": "冻结",
+    "used": "已使用",
+    "expiringSoon": "即将过期",
+    "buyCredits": "购买积分",
+    "history": "交易历史",
+    "packages": {
+      "starter": {
+        "name": "入门积分包",
+        "description": "280 积分 - 适合试用体验"
+      },
+      "basic": {
+        "name": "基础版",
+        "description": "280 积分/月 - 适合轻度使用"
+      },
+      "pro": {
+        "name": "专业版",
+        "description": "960 积分/月 - 适合专业人士"
+      },
+      "team": {
+        "name": "旗舰版",
+        "description": "2,850 积分/月 - 适合重度用户"
+      },
+      "standard": {
+        "name": "标准积分包",
+        "description": "960 积分 - 性价比之选"
+      }
+    },
+    "features": {
+      "hd_videos": "高清视频生成",
+      "fast_generation": "快速生成",
+      "no_watermark": "无水印",
+      "commercial_use": "商业使用授权",
+      "priority_support": "优先支持",
+      "api_access": "API 访问",
+      "custom_models": "自定义 AI 模型"
+    }
+  },
+  "VideoGenerator": {
+    "selectModel": "选择模型",
+    "uploadImage": "上传图片",
+    "enterPrompt": "输入提示词",
+    "duration": "时长",
+    "aspectRatio": "宽高比",
+    "quality": "质量",
+    "estimateCredits": "预计积分",
+    "generate": "生成视频",
+    "regenerate": "重新生成",
+    "download": "下载",
+    "status": {
+      "pending": "等待中",
+      "generating": "生成中...",
+      "completed": "已完成",
+      "failed": "失败"
+    }
+  },
+  "PricingCards": {
+    "pricing": "定价",
+    "slogan": "简单透明的价格",
+    "onetime": "积分包",
+    "monthly": "按月",
+    "yearly": "按年",
+    "off_percent": "40% OFF",
+    "no_products": "暂无可用产品",
+    "per_year": "/年",
+    "per_month": "/月",
+    "monthly_bill": "按月付费",
+    "annual_bill": "按年付费",
+    "mo": "/月",
+    "annual_info": "/年",
+    "monthly_info": "每月",
+    "go_to_dashboard": "前往控制台",
+    "signup": "注册",
+    "contact": "获取支持。",
+    "contact_2": "我们随时为您提供帮助。",
+    "manage_subscription": "管理订阅",
+    "upgrade": "升级"
+  },
+  "PricingFaq": {
+    "faq": "常见问题",
+    "faq_detail": "查找关于我们定价的常见问题答案"
+  },
+  "Sidebar": {
+    "title": "导航菜单",
+    "upgradeTitle": "升级专业版",
+    "upgradeSubtitle": "解锁更快生成与更多额度"
+  },
+  "UpgradeModal": {
+    "default_title": "升级您的方案",
+    "default_description": "选择适合您的方案",
+    "insufficient_credits_title": "积分不足",
+    "insufficient_credits_description": "您需要至少 {credits} 积分来生成此视频。请购买积分包或升级方案以继续。",
+    "expired_title": "积分已过期",
+    "expired_description": "您的积分已过期。请购买新的积分包或订阅方案以继续创作。"
+  },
+  "UserAccountNav": {
+    "dashboard": "控制台",
+    "billing": "账单",
+    "settings": "设置",
+    "sign_out": "退出登录"
+  },
+  "NavBar": {
+    "login": "登录",
+    "signup": "注册"
+  },
+  "Login": {
+    "back": "返回",
+    "welcome_back": "欢迎回来",
+    "signin_title": "输入您的电子邮件以登录您的账户",
+    "singup_title": "还没有账户？立即注册。",
+    "signin_email": "用电子邮件登录",
+    "signin_others": "或者继续使用",
+    "signup": "注册",
+    "privacy": "只有您的电子邮件和头像会被存储。",
+    "signup_github": "使用 Github 注册",
+    "create_account": "创建账户",
+    "create_account_desc": "输入您的邮箱创建账户",
+    "agree_prefix": "点击继续即表示您同意我们的",
+    "terms_of_service": "服务条款",
+    "and": "和",
+    "privacy_policy": "隐私政策"
+  },
+  "SignInModal": {
+    "signin_title": "登录您的账户",
+    "signin_subtitle": "立即开始使用 Goya.ai",
+    "privacy": "继续即表示您同意我们的服务条款和隐私政策。",
+    "continue_google": "使用 Google 继续",
+    "continue_email": "使用邮箱继续",
+    "or_continue_with": "或使用以下方式继续",
+    "email_placeholder": "name@example.com",
+    "terms_notice": "继续即表示您同意我们的服务条款和隐私政策。"
+  },
+  "MainNav": {
+    "introducing": "介绍 Goya.ai"
+  },
+  "SiteFooter": {
+    "copyright": "© {currentYear} Goya.ai. 保留所有权利。"
+  },
+  "Mail": {
+    "common": {
+      "team": "{name} 团队",
+      "copyright": "© {year} 保留所有权利。"
+    },
+    "welcome": {
+      "subject": "欢迎加入 Goya.ai！",
+      "greeting": "您好 {name}，",
+      "title": "欢迎来到 Goya.ai！",
+      "body": "感谢您注册 Goya.ai！我们很高兴您的加入。",
+      "features": "使用 Goya.ai，您可以：",
+      "featuresList": {
+        "generate": "在几分钟内生成精彩的 AI 视频",
+        "models": "使用 Sora 2、Veo 3.1 等多种 AI 模型",
+        "share": "随时随地下载和分享您的作品"
+      },
+      "cta": "开始创作视频",
+      "footer": "如果您有任何问题，欢迎随时联系我们的支持团队。"
+    },
+    "resetPassword": {
+      "subject": "重置您的密码",
+      "greeting": "您好 {name}，",
+      "title": "重置您的密码",
+      "body": "我们收到了您重置 Goya.ai 账户密码的请求。",
+      "instruction": "点击下方按钮重置您的密码：",
+      "button": "重置密码",
+      "validity": "此链接将在 30 分钟后过期，且只能使用一次。",
+      "security": "出于安全考虑，此链接将在 30 分钟后过期。",
+      "ignore": "如果您没有请求重置密码，可以安全地忽略此邮件。",
+      "footer": "如果您没有请求此操作，请忽略此邮件。"
+    },
+    "magicLink": {
+      "subject": "登录 Goya.ai",
+      "greeting": "您好 {name}，",
+      "title": "登录 Goya.ai",
+      "body": "我们收到了您登录 Goya.ai 账户的请求。",
+      "instruction": "点击下方按钮登录：",
+      "button": "登录",
+      "validity": "此链接将在 24 小时后过期。",
+      "security": "出于安全考虑，此链接只能使用一次。",
+      "footer": "如果您没有请求此操作，请忽略此邮件。"
+    }
+  },
+  "Emails": {
+    "welcome": {
+      "subject": "欢迎加入 Goya.ai！",
+      "greeting": "您好 {name}，",
+      "title": "欢迎来到 Goya.ai！",
+      "body": "感谢您注册 Goya.ai！我们很高兴您的加入。",
+      "features": "使用 Goya.ai，您可以：",
+      "featuresList": {
+        "generate": "在几分钟内生成精彩的 AI 视频",
+        "models": "使用 Sora 2、Veo 3.1 等多种 AI 模型",
+        "share": "随时随地下载和分享您的作品"
+      },
+      "cta": "开始创作视频",
+      "footer": "如果您有任何问题，欢迎随时联系我们的支持团队。",
+      "copyright": "© {year} Goya.ai. 保留所有权利。"
+    },
+    "resetPassword": {
+      "subject": "重置您的密码",
+      "greeting": "您好 {name}，",
+      "title": "重置您的密码",
+      "body": "我们收到了您重置 Goya.ai 账户密码的请求。",
+      "instruction": "点击下方按钮重置您的密码：",
+      "button": "重置密码",
+      "validity": "此链接将在 30 分钟后过期，且只能使用一次。",
+      "ignore": "如果您没有请求重置密码，可以安全地忽略此邮件。",
+      "security": "出于安全考虑，此链接将在 30 分钟后过期。",
+      "footer": "如果您没有请求此操作，请忽略此邮件。",
+      "copyright": "© {year} Goya.ai. 保留所有权利。"
+    }
+  },
+  "dashboard": {
+    "myCreations": {
+      "title": "我的创作",
+      "filter": {
+        "allStatus": "全部状态",
+        "all": "全部",
+        "completed": "已完成",
+        "processing": "生成中",
+        "generating": "生成中",
+        "failed": "失败",
+        "allModels": "全部模型",
+        "newest": "最新",
+        "oldest": "最旧"
+      },
+      "status": {
+        "pending": "等待中",
+        "generating": "生成中...",
+        "uploading": "上传中...",
+        "completed": "已完成",
+        "processing": "生成中...",
+        "failed": "失败"
+      },
+      "actions": {
+        "play": "播放",
+        "download": "下载",
+        "delete": "删除",
+        "retry": "重试",
+        "viewDetails": "查看详情",
+        "downloadSuccess": "开始下载",
+        "downloadError": "下载失败",
+        "deleteSuccess": "删除成功",
+        "deleteError": "删除失败",
+        "retrySuccess": "已开始重试",
+        "retryError": "重试失败"
+      },
+      "empty": {
+        "title": "暂无创作",
+        "description": "您生成的视频将显示在这里"
+      },
+      "deleteConfirm": {
+        "title": "删除视频？",
+        "message": "此操作无法撤销。",
+        "confirm": "删除",
+        "cancel": "取消"
+      },
+      "detail": {
+        "model": "模型",
+        "duration": "时长",
+        "aspectRatio": "宽高比",
+        "prompt": "提示词",
+        "createdAt": "创建时间",
+        "creditsUsed": "消耗积分"
+      }
+    },
+    "credits": {
+      "title": "积分",
+      "available": "可用积分",
+      "frozen": "冻结",
+      "used": "已用",
+      "buyCredits": "购买积分",
+      "history": "积分历史",
+      "loadMore": "加载更多",
+      "types": {
+        "new_user": "新用户赠送",
+        "order_pay": "积分包购买",
+        "subscription": "订阅充值",
+        "video_consume": "视频生成",
+        "refund": "退款",
+        "expired": "已过期",
+        "system_adjust": "管理员调整"
+      }
+    },
+    "settings": {
+      "title": "账单",
+      "account": "账户",
+      "email": "邮箱",
+      "userId": "用户ID",
+      "joined": "加入时间",
+      "billingHistory": "购买记录",
+      "status": {
+        "paid": "已支付",
+        "pending": "待支付",
+        "failed": "失败"
+      }
+    }
+  },
+  "VideoHistory": {
+    "title": "最近生成",
+    "demoTitle": "示例视频",
+    "generating": "正在生成视频...",
+    "download": "下载",
+    "copyLink": "复制链接",
+    "removeFromHistory": "从历史中移除",
+    "generationFailed": "生成失败"
+  }
+}

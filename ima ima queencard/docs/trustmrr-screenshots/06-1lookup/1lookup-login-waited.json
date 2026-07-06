@@ -1,0 +1,62 @@
+{
+  "err": null,
+  "signals": {
+    "body": "1lookup Welcome back Sign in to your account to continue Email address Password Remember me Forgot password? Sign in Sign in with Google Or Don't have an account? Sign up for free",
+    "buttons": [
+      {
+        "aria": "",
+        "disabled": false,
+        "index": 1,
+        "text": "Sign in",
+        "type": "submit"
+      },
+      {
+        "aria": "",
+        "disabled": false,
+        "index": 2,
+        "text": "Sign in with Google",
+        "type": "button"
+      }
+    ],
+    "h1": "Welcome back",
+    "inputs": [
+      {
+        "autocomplete": "email",
+        "name": "email",
+        "placeholder": "you@example.com",
+        "type": "email"
+      },
+      {
+        "autocomplete": "current-password",
+        "name": "password",
+        "placeholder": "••••••••",
+        "type": "password"
+      },
+      {
+        "autocomplete": "",
+        "name": "",
+        "placeholder": "",
+        "type": "checkbox"
+      }
+    ],
+    "links": [
+      {
+        "aria": "",
+        "href": "https://1lookup.io/",
+        "text": "1lookup"
+      },
+      {
+        "aria": "",
+        "href": "https://app.1lookup.io/forgot-password",
+        "text": "Forgot password?"
+      },
+      {
+        "aria": "",
+        "href": "https://app.1lookup.io/signup",
+        "text": "Sign up for free"
+      }
+    ],
+    "title": "Login - 1Lookup Phone Validation API & Email Verification Platform 2025",
+    "url": "https://app.1lookup.io/login"
+  }
+}
