@@ -46,6 +46,7 @@ venv/
 95_git-history/
 old-generated-apps/
 .archive/
+.worktrees/
 *.mp4
 *.mov
 *.mkv
