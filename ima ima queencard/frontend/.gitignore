@@ -1,0 +1,24 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build output
+.next
+dist
+dist-ssr
+*.tsbuildinfo
+
+# Local env and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# Large local-only prompt library gallery; move to object storage for production.
+public/xhs-cases/gallery
+
+# Editor and OS files
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json

@@ -1,3 +1,7 @@
+import { eq } from "drizzle-orm";
+
+import { db } from "@/db";
+import { users } from "@/db/schema";
 import { auth, type User } from "@/lib/auth";
 import { env } from "@/lib/auth/env.mjs";
 
@@ -55,6 +59,12 @@ export async function requireAuth(request: Request): Promise<User> {
 export async function requireAdmin(request: Request): Promise<User> {
   const user = await requireAuth(request);
   if (!user.isAdmin) {
+    const adminEmail = env.ADMIN_EMAIL?.trim().toLowerCase();
+    if (adminEmail && user.email?.trim().toLowerCase() === adminEmail) {
+      await db.update(users).set({ isAdmin: true }).where(eq(users.id, user.id));
+      return { ...user, isAdmin: true };
+    }
+
     throw new ApiError("Forbidden", 403);
   }
   return user;

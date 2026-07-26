@@ -1,0 +1,14 @@
+node_modules
+.pnpm-store
+.next
+dist
+dist-ssr
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+public/xhs-cases/gallery
+.DS_Store
+.idea
+.vscode

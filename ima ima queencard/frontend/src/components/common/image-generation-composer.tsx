@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
@@ -105,7 +112,7 @@ function aspectRatioForSeed(seed: ImageGenerationSeed | undefined, referenceImag
 function outputCountForSeed(seed: ImageGenerationSeed | undefined) {
   return seed?.outputCount && OUTPUT_COUNTS.includes(seed.outputCount)
     ? seed.outputCount
-    : 4;
+    : 1;
 }
 
 function outputCountsForOption(option: ImageGenerationModelOption) {
@@ -437,6 +444,7 @@ export function ImageGenerationComposer({
   onDraftChange,
   draftStorageKey,
   submitMode = "create-task",
+  onCollapse,
 }: {
   seed?: ImageGenerationSeed;
   className?: string;
@@ -448,6 +456,7 @@ export function ImageGenerationComposer({
   onDraftChange?: (draft: ComposerDraft) => void;
   draftStorageKey?: string;
   submitMode?: "create-task" | "open-generated" | "preview-result";
+  onCollapse?: () => void;
 }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -688,6 +697,20 @@ export function ImageGenerationComposer({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleCompactShellClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!onCollapse) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (
+      target.closest(
+        "button, input, textarea, a, [role='button'], [data-radix-popper-content-wrapper]"
+      )
+    ) {
+      return;
+    }
+    onCollapse();
   };
 
   if (layout === "workbench") {
@@ -940,6 +963,7 @@ export function ImageGenerationComposer({
   if (layout === "compact") {
     return (
       <div
+        onClick={handleCompactShellClick}
         className={cn(
           frameless
             ? "overflow-hidden bg-surface-white"
@@ -959,7 +983,7 @@ export function ImageGenerationComposer({
           }}
         />
 
-        <div className="bg-surface-white/72 p-3 md:p-4">
+        <div className="cursor-pointer bg-surface-white/72 p-3 md:p-4">
           <div className="grid gap-3 md:grid-cols-[132px_1fr] md:items-stretch">
             <Popover>
               <PopoverTrigger asChild>
@@ -1077,6 +1101,17 @@ export function ImageGenerationComposer({
         ) : null}
 
         <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-charcoal/12 bg-surface-white/88 p-2.5 md:flex-nowrap">
+          {onCollapse ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onCollapse}
+              className="min-h-[44px] rounded-[14px] border border-charcoal/18 bg-surface-white/88 px-3 font-manrope text-[13px] font-extrabold text-charcoal shadow-[0_10px_24px_rgba(26,23,20,0.05)] hover:bg-lemon"
+            >
+              <ChevronDown size={15} strokeWidth={2.7} />
+              收起
+            </Button>
+          ) : null}
           <Popover>
             <PopoverTrigger asChild>
               <button

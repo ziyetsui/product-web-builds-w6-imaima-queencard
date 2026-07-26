@@ -7,6 +7,7 @@ import {
   Bookmark,
   ChevronLeft,
   ChevronRight,
+  Download,
   Heart,
   Search,
   Send,
@@ -571,7 +572,7 @@ function PromptHero({
             frameless
             layout="compact"
             onPromptChange={setPrompt}
-            submitMode="open-generated"
+            submitMode="create-task"
             submitLabel="生成"
           />
         </div>
@@ -812,7 +813,7 @@ function CaseImageCarousel({
                   ref={(node) => {
                     slideRefs.current[index] = node;
                   }}
-                  className="case-image-slide min-w-0 shrink-0 grow-0 basis-full"
+                  className="case-image-slide group/slide relative min-w-0 shrink-0 grow-0 basis-full"
                   role="group"
                   aria-roledescription="slide"
                   aria-label={`${index + 1} / ${images.length}`}
@@ -835,6 +836,16 @@ function CaseImageCarousel({
                       draggable={false}
                     />
                   </button>
+                  <a
+                    href={src}
+                    download
+                    onClick={(event) => event.stopPropagation()}
+                    className="case-image-download-button"
+                    aria-label={`下载 ${item.title} 第 ${index + 1} 张原图`}
+                    title="下载原图"
+                  >
+                    <Download size={17} strokeWidth={2.8} aria-hidden="true" />
+                  </a>
                 </div>
               ))}
             </div>

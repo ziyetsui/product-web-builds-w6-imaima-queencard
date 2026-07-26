@@ -12,7 +12,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "lint": "eslint .",
-    "start": "next start -p 8080",
+    "start": "next start -p ${PORT:-8080}",
     "test": "vitest run",
     "test:watch": "vitest",
     "pInstall": "pnpm install"

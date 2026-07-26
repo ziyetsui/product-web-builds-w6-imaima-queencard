@@ -106,14 +106,12 @@ const IMAGE_MODEL_ROUTES: Record<string, ImageModelRoute> = {
   "nano-banana-2": {
     providerModel: "gemini-3.1-flash-image-preview",
     capability: "image-edit",
-    mode: "gptproto-v3",
-    endpoint: "/api/v3/google/gemini-3.1-flash-image-preview/image-edit",
+    mode: "openai-edit",
   },
   "gemini-3.1-flash-image-preview": {
     providerModel: "gemini-3.1-flash-image-preview",
     capability: "image-edit",
-    mode: "gptproto-v3",
-    endpoint: "/api/v3/google/gemini-3.1-flash-image-preview/image-edit",
+    mode: "openai-edit",
   },
   "seedream-5-0-260128": {
     providerModel: "seedream-5-0-260128",
@@ -124,14 +122,12 @@ const IMAGE_MODEL_ROUTES: Record<string, ImageModelRoute> = {
   "nano-banana-2-edit": {
     providerModel: "gemini-3.1-flash-image-preview",
     capability: "image-edit",
-    mode: "gptproto-v3",
-    endpoint: "/api/v3/google/gemini-3.1-flash-image-preview/image-edit",
+    mode: "openai-edit",
   },
   "gemini-3.1-flash-edit": {
     providerModel: "gemini-3.1-flash-image-preview",
     capability: "image-edit",
-    mode: "gptproto-v3",
-    endpoint: "/api/v3/google/gemini-3.1-flash-image-preview/image-edit",
+    mode: "openai-edit",
   },
   "seedream-5-edit": {
     providerModel: "seedream-5-0-260128",
@@ -160,8 +156,7 @@ const IMAGE_MODEL_ROUTES: Record<string, ImageModelRoute> = {
   "gpt-image-2-edit": {
     providerModel: "gpt-image-2",
     capability: "image-edit",
-    mode: "gptproto-v3",
-    endpoint: "/api/v3/openai/gpt-image-2/image-edit",
+    mode: "openai-edit",
   },
   "viduq2-i2i": {
     providerModel: "viduq2",
@@ -264,6 +259,14 @@ function sizeFromAspectRatio(aspectRatio: string | undefined, resolution?: strin
     default:
       return `${base}x${base}`;
   }
+}
+
+function openAIEditSize(route: ImageModelRoute, input: ImageGenerationInput) {
+  if (route.providerModel === "gemini-3.1-flash-image-preview") {
+    return input.size ?? input.aspectRatio ?? "auto";
+  }
+
+  return input.size ?? sizeFromAspectRatio(input.aspectRatio, input.resolution);
 }
 
 function dataUriToFile(dataUri: string, index: number): GptProtoImageFile {
@@ -401,7 +404,7 @@ export async function generateImage(
           images:
             input.images ??
             (await loadReferenceImageFiles(referenceImageUrls)),
-          size: input.size ?? sizeFromAspectRatio(input.aspectRatio, input.resolution),
+          size: openAIEditSize(route, input),
           n: outputNumber,
           responseFormat: input.responseFormat,
         });
@@ -431,7 +434,7 @@ export async function generateImageFromFiles(
     model: route.providerModel,
     prompt: input.prompt,
     images: input.images,
-    size: input.size ?? sizeFromAspectRatio(input.aspectRatio, input.resolution),
+    size: openAIEditSize(route, input),
     n: outputNumber,
     responseFormat: input.responseFormat,
   });

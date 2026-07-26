@@ -76,6 +76,21 @@ function getAppUrl() {
   );
 }
 
+function userFacingGenerationError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "Image generation failed";
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("safety system") ||
+    normalized.includes("rejected by the safety")
+  ) {
+    return "上游安全系统拒绝了这次请求，积分已释放。可以去掉具体艺术家、影视/IP 名称或敏感描述，改成更通用的画面风格后再试。";
+  }
+
+  return message;
+}
+
 function normalizeReferenceImage(image: string) {
   const value = image.trim();
   if (!value) return null;
@@ -439,7 +454,7 @@ export async function runImageGenerationTask(userId: string, taskId: string) {
 
     return publicTask(completedTask!, assets);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Image generation failed";
+    const message = userFacingGenerationError(error);
     const [failedTask] = await db
       .update(generationTasks)
       .set({

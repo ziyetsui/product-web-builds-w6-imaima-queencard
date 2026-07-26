@@ -97,6 +97,10 @@ html {
     linear-gradient(180deg, #fff8f5 0%, #f6e0db 48%, #fff6f2 100%);
 }
 
+.generated-shell .font-manrope {
+  font-family: 'Manrope', sans-serif;
+}
+
 .generated-rail {
   background: rgba(255, 255, 255, 0.76);
   border-right: 1px solid rgba(26, 23, 20, 0.14);
@@ -114,9 +118,9 @@ html {
 .generated-panel {
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(26, 23, 20, 0.16);
-  border-radius: 24px;
+  border-radius: 18px;
   box-shadow:
-    0 22px 70px rgba(26, 23, 20, 0.09),
+    0 14px 42px rgba(26, 23, 20, 0.07),
     inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
@@ -149,21 +153,6 @@ html {
   border: 1px solid rgba(26, 23, 20, 0.9);
   border-radius: 16px;
   box-shadow: 0 14px 34px rgba(239, 114, 79, 0.3);
-}
-
-.generated-title {
-  font-size: clamp(46px, 6.5vw, 82px);
-  line-height: 0.94;
-  letter-spacing: 0;
-}
-
-.generated-label {
-  font-family: 'Manrope', sans-serif;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: rgba(26, 23, 20, 0.42);
 }
 
 /* Shared eyebrow / kicker label */
@@ -936,6 +925,43 @@ html {
   outline: 0;
   box-shadow: none;
   will-change: transform;
+}
+
+.case-image-download-button {
+  position: absolute;
+  z-index: 6;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #1a1714;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #1a1714;
+  box-shadow: 0 10px 22px rgba(26, 23, 20, 0.16);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate3d(0, -6px, 0) scale(0.96);
+  transition:
+    opacity 160ms ease-out,
+    transform 160ms ease-out,
+    background-color 160ms ease-out;
+}
+
+.case-image-download-button:hover,
+.case-image-download-button:focus-visible {
+  background: #e7db4c;
+  outline: 0;
+}
+
+.case-image-card-shell:hover .case-image-download-button,
+.case-image-slide:focus-within .case-image-download-button {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate3d(0, 0, 0) scale(1);
 }
 
 .case-gallery-thumbs {

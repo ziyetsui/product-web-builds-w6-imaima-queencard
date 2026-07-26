@@ -6,6 +6,16 @@ The runnable Next.js product lives in `frontend/`. The project root stays clean
 and only carries project-level docs, rules, future backend boundary, and vendor
 references.
 
+Canonical W6 specs now live in the global 20-29 specs ledger:
+
+```text
+../../../specs/w6/
+```
+
+The local `docs/spec/` folder is a legacy source copy during migration. Do not
+add new long-lived PRDs, design specs, implementation plans, reviews, or
+acceptance specs there.
+
 ## Structure
 
 ```text

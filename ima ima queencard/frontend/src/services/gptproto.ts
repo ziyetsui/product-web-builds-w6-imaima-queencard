@@ -341,6 +341,33 @@ function getTaskId(task: { id?: string; taskId?: string; data?: { id?: string } 
   return task.id ?? task.taskId ?? task.data?.id ?? null;
 }
 
+function stringifyFailureDetail(value: unknown) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value).slice(0, 800);
+  } catch {
+    return String(value);
+  }
+}
+
+function getTaskFailureDetail(result: Record<string, unknown>) {
+  const data = isRecord(result.data) ? result.data : null;
+  const error = isRecord(result.error) ? result.error : null;
+  const dataError = isRecord(data?.error) ? data.error : null;
+  const message =
+    data?.message ??
+    data?.error_message ??
+    data?.fail_reason ??
+    data?.reason ??
+    dataError?.message ??
+    error?.message ??
+    result.message ??
+    result.error_message;
+
+  return stringifyFailureDetail(message || data?.error || result.error || result);
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -375,7 +402,12 @@ export async function pollGptProtoV3Task(
       return result;
     }
     if (["failed", "error", "cancelled", "canceled"].includes(status)) {
-      throw new Error(`GPTProto task failed with status: ${status}`);
+      const detail = getTaskFailureDetail(result);
+      throw new Error(
+        `GPTProto task failed with status: ${status}${
+          detail ? `: ${detail}` : ""
+        }`
+      );
     }
 
     await sleep(intervalMs);

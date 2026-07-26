@@ -15,7 +15,7 @@ const DEFAULT_GENERATION_PAYLOAD = {
   language: "zh",
   parameters: {
     image: {
-      n: 4,
+      n: 1,
       lang: "zh",
       style: "craft-handmade",
       aspect: "landscape",

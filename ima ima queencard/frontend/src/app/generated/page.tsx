@@ -42,11 +42,16 @@ import { Wordmark } from "@/components/layout/Wordmark";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   IMAGE_GENERATION_MODEL_OPTIONS,
   getImageGenerationModelOption,
-  imageGenerationCapabilityLabel,
 } from "@/config/image-generation-models";
 import {
   addReferenceImageToDraft,
@@ -206,8 +211,11 @@ function useGeneratedTask(taskId: string) {
   const [task, setTask] = useState<GeneratedTask | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
+    hasLoadedRef.current = false;
+
     if (!taskId) {
       setTask(null);
       setError(null);
@@ -218,7 +226,9 @@ function useGeneratedTask(taskId: string) {
     let cancelled = false;
 
     const loadTask = async () => {
-      setIsLoading(true);
+      if (!hasLoadedRef.current) {
+        setIsLoading(true);
+      }
       try {
         if (taskId.startsWith("preview_")) {
           const preview = window.localStorage.getItem(
@@ -257,7 +267,10 @@ function useGeneratedTask(taskId: string) {
           setError(err instanceof Error ? err.message : "读取生成任务失败");
         }
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled) {
+          hasLoadedRef.current = true;
+          setIsLoading(false);
+        }
       }
     };
 
@@ -395,6 +408,10 @@ function statusTone(status: string) {
   }
 }
 
+function isTaskWaitingForResult(task: GeneratedTask) {
+  return task.status === "queued" || task.status === "generating";
+}
+
 function aspectClass(aspectRatio: string | undefined) {
   switch (aspectRatio) {
     case "1:1":
@@ -417,24 +434,32 @@ function aspectClass(aspectRatio: string | undefined) {
   }
 }
 
+function assetFrameWidthClass(aspectRatio: string | undefined) {
+  switch (aspectRatio) {
+    case "1:1":
+      return "max-w-[312px]";
+    case "4:3":
+    case "3:2":
+      return "max-w-[416px]";
+    case "16:9":
+    case "21:9":
+      return "max-w-[496px]";
+    case "9:16":
+      return "max-w-[240px]";
+    case "2:3":
+      return "max-w-[272px]";
+    case "3:4":
+    default:
+      return "max-w-[304px]";
+  }
+}
+
 function titleForPrompt(prompt: string) {
   const firstLine = prompt
     .split(/\n|。|！|!|？|\?/)
     .map((line) => line.trim())
     .find(Boolean);
   return firstLine ? firstLine.slice(0, 42) : "图生图生成";
-}
-
-function formatTime(value?: string | Date | null) {
-  if (!value) return "刚刚";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "刚刚";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
 }
 
 function modelOption(model: string | undefined) {
@@ -543,7 +568,7 @@ function GeneratedWorkbenchContent() {
   const [scope, setScope] = useState<WorkspaceScope>("current");
   const [historyQuery, setHistoryQuery] = useState("");
   const [railCollapsed, setRailCollapsed] = useState(false);
-  const [composerExpanded, setComposerExpanded] = useState(true);
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [manualComposerSeed, setManualComposerSeed] =
     useState<ImageGenerationSeed | null>(null);
   const [composerDraft, setComposerDraft] = useState<ComposerDraft | null>(null);
@@ -582,6 +607,7 @@ function GeneratedWorkbenchContent() {
     setComposerDraft(null);
     setPendingPromptQuote(null);
     setPendingReferenceReplacement(null);
+    setComposerExpanded(false);
   }, [taskId]);
 
   useEffect(() => {
@@ -608,10 +634,7 @@ function GeneratedWorkbenchContent() {
       }
       return;
     }
-    if (!task || task.status === "queued" || task.status === "generating" || task.status === "failed") {
-      setComposerExpanded(true);
-      if (!task) completedTaskRef.current = "";
-    }
+    if (!task) completedTaskRef.current = "";
   }, [task]);
 
   const applyDraftToComposer = (
@@ -717,16 +740,8 @@ function GeneratedWorkbenchContent() {
             railCollapsed={railCollapsed}
           />
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-6 md:px-8 lg:px-10 xl:px-12">
-            <div className="mx-auto grid w-full max-w-[1160px] gap-6">
-              <WorkspaceHeader
-                state={workbenchState}
-                task={task}
-                seed={workspaceSeed}
-                scope={scope}
-                historyTotal={history.total}
-                query={historyQuery}
-              />
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-5 md:px-8 lg:px-10 xl:px-12">
+            <div className="grid w-full max-w-[760px] gap-4">
               {scope === "history" ? (
                 <HistoryStream
                   records={history.records}
@@ -778,6 +793,7 @@ function GeneratedWorkbenchContent() {
                   submitLabel={task ? "继续生成" : "生成"}
                   draftStorageKey={draftStorageKey}
                   onDraftChange={setComposerDraft}
+                  onCollapse={() => setComposerExpanded(false)}
                 />
               ) : (
                 <CollapsedComposerSummary
@@ -969,7 +985,7 @@ function WorkspaceTopbar({
 }) {
   return (
     <header className="generated-topbar sticky top-0 z-20 px-4 py-3 md:px-8 lg:px-10 xl:px-12">
-      <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex w-full flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
@@ -1012,7 +1028,7 @@ function WorkspaceTopbar({
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:items-center md:justify-end">
+        <div className="ml-auto flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:items-center md:justify-end">
           <label className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[15px] border border-charcoal/18 bg-surface-white/78 px-3 shadow-[0_12px_30px_rgba(26,23,20,0.06)] md:max-w-[420px]">
             <Search className="size-4 shrink-0 text-charcoal/42" aria-hidden="true" />
             <input
@@ -1057,80 +1073,6 @@ function WorkspaceTopbar({
   );
 }
 
-function WorkspaceHeader({
-  state,
-  task,
-  seed,
-  scope,
-  historyTotal,
-  query,
-}: {
-  state: WorkbenchState;
-  task: GeneratedTask | null;
-  seed: ImageGenerationSeed;
-  scope: WorkspaceScope;
-  historyTotal: number;
-  query: string;
-}) {
-  const title =
-    scope === "history"
-      ? query.trim()
-        ? `搜索：${query.trim()}`
-        : "所有历史"
-      : task
-      ? titleForPrompt(task.prompt)
-      : seed.title ?? "图生图生成";
-  const referenceCount = task?.referenceImages.length ?? seed.referenceImages?.length ?? 0;
-
-  return (
-    <section className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-      <div className="min-w-0">
-        <p className="generated-label">
-          {scope === "history" ? "Generation History" : "Image to Image Workbench"}
-        </p>
-        <h1 className="generated-title mt-2 line-clamp-2 font-alfa text-charcoal">
-          {title}
-        </h1>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {scope === "history" ? (
-          <>
-            <MetaBadge icon={<History size={14} />} label={`${historyTotal} 条记录`} />
-            <MetaBadge icon={<Search size={14} />} label={query.trim() ? "搜索中" : "全部"} />
-          </>
-        ) : (
-          <>
-            <StatusBadge state={state} />
-            <Badge className="generated-chip h-9 gap-1.5 px-3 font-mono text-[12px] font-black text-charcoal hover:bg-surface-white">
-              <ImageIcon size={14} strokeWidth={2.5} />
-              ref {referenceCount}/{MAX_REFERENCE_IMAGES}
-            </Badge>
-          </>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function StatusBadge({ state }: { state: WorkbenchState }) {
-  const Icon = statusIcon(state);
-
-  return (
-    <Badge
-      className={cn(
-        "h-9 gap-1.5 rounded-full border border-charcoal/18 px-3 font-manrope text-[12px] font-black text-charcoal shadow-[0_8px_22px_rgba(26,23,20,0.06)] hover:bg-inherit",
-        statusTone(state)
-      )}
-    >
-      <Icon
-        className={cn("size-3.5", state === "generating" ? "animate-spin" : "")}
-        aria-hidden="true"
-      />
-      {statusLabel(state)}
-    </Badge>
-  );
-}
-
 function SessionStream({
   state,
   task,
@@ -1163,11 +1105,14 @@ function SessionStream({
   }
 
   if (task) {
+    if (isTaskWaitingForResult(task)) {
+      return <WaitingForResult task={task} />;
+    }
+
     return (
       <GenerationRecord
         task={task}
         onUseAsset={onUseAsset}
-        onQuotePrompt={onQuotePrompt}
       />
     );
   }
@@ -1175,6 +1120,37 @@ function SessionStream({
   if (state === "idle") return <IdleRecord />;
 
   return <SeedRecord seed={seed} blocked={state === "blocked"} />;
+}
+
+function WaitingForResult({ task }: { task: GeneratedTask }) {
+  const Icon = statusIcon(task.status);
+
+  return (
+    <div className="grid min-h-[360px] place-items-center px-4 py-10 text-center">
+      <div className="grid max-w-[520px] justify-items-center gap-4">
+        <div className="grid size-16 place-items-center rounded-full border border-charcoal/18 bg-lemon shadow-[0_14px_32px_rgba(26,23,20,0.08)]">
+          <Icon
+            className={cn(
+              "size-7 text-charcoal",
+              task.status === "generating" ? "animate-spin" : ""
+            )}
+            aria-hidden="true"
+          />
+        </div>
+        <div>
+          <p className="font-manrope text-[13px] font-black uppercase tracking-[0.18em] text-charcoal/42">
+            Image generation in progress
+          </p>
+          <h2 className="mt-2 font-manrope text-[28px] font-black text-charcoal">
+            {statusLabel(task.status)}
+          </h2>
+          <p className="mt-2 font-manrope text-[14px] font-semibold leading-6 text-charcoal/58">
+            结果生成完成后，任务面板会自动出现在这里。
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function HistoryStream({
@@ -1272,7 +1248,6 @@ function HistoryStream({
               key={record.taskId}
               task={record}
               onUseAsset={onUseAsset}
-              onQuotePrompt={onQuotePrompt}
             />
           ))}
         </section>
@@ -1320,13 +1295,19 @@ function SeedRecord({
   seed: ImageGenerationSeed;
   blocked: boolean;
 }) {
+  const state = blocked ? "blocked" : "seeded_input";
+  const Icon = statusIcon(state);
+
   return (
     <section className="generated-panel p-5">
       <div className="flex flex-col gap-5 md:flex-row md:items-start">
         <ReferenceStack images={seed.referenceImages ?? []} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge state={blocked ? "blocked" : "seeded_input"} />
+            <Badge className={cn("h-8 gap-1.5 rounded-full border border-charcoal/18 px-3 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-inherit", statusTone(state))}>
+              <Icon className="size-3.5" aria-hidden="true" />
+              {statusLabel(state)}
+            </Badge>
             <MetaBadge icon={<ImageIcon size={14} />} label="Image to Image" />
             <MetaBadge icon={<Zap size={14} />} label={seed.fastMode === false ? "精细模式" : "快速模式"} />
           </div>
@@ -1353,86 +1334,80 @@ function SeedRecord({
 function GenerationRecord({
   task,
   onUseAsset,
-  onQuotePrompt,
 }: {
   task: GeneratedTask;
   onUseAsset: (task: GeneratedTask, assetUrl: string) => void;
-  onQuotePrompt: (task: GeneratedTask) => void;
 }) {
   const option = modelOption(task.model);
   const Icon = statusIcon(task.status);
 
   return (
-    <article className="generated-panel overflow-hidden">
-      <div className="grid gap-5 border-b border-charcoal/12 p-5 md:grid-cols-[auto_minmax(0,1fr)]">
+    <article className="w-full">
+      <div className="grid gap-3 pb-3 md:grid-cols-[auto_minmax(0,1fr)]">
         <ReferenceStack images={task.referenceImages} />
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge className={cn("h-8 gap-1.5 rounded-full border border-charcoal/18 px-3 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-inherit", statusTone(task.status))}>
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            <Badge className={cn("h-8 shrink-0 gap-1.5 rounded-full border border-charcoal/18 px-3 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-inherit", statusTone(task.status))}>
               <Icon
                 className={cn("size-3.5", task.status === "generating" ? "animate-spin" : "")}
                 aria-hidden="true"
               />
               {statusLabel(task.status)}
             </Badge>
-            <MetaBadge icon={<ImageIcon size={14} />} label={imageGenerationCapabilityLabel(task.capability)} />
-            <MetaBadge icon={<Clock3 size={14} />} label={formatTime(task.createdAt)} />
-            <MetaBadge icon={<Zap size={14} />} label={`${task.settledCredits || task.requestedCredits} 积分`} />
-          </div>
-
-          <h2 className="mt-4 line-clamp-2 font-manrope text-[24px] font-black leading-tight text-charcoal md:text-[30px]">
-            {titleForPrompt(task.prompt)}
-          </h2>
-          <p className="mt-3 whitespace-pre-wrap font-manrope text-[14px] font-semibold leading-7 text-charcoal/62">
-            {task.prompt}
-          </p>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Badge className="h-8 gap-2 rounded-full border border-charcoal/18 bg-canvas-pink/70 px-3 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-canvas-pink">
+            <Badge className="h-8 shrink-0 gap-2 rounded-full border border-charcoal/18 bg-canvas-pink/70 px-3 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-canvas-pink">
               <ModelBrandLogo logo={option.brandLogo} active className="h-5 w-7 rounded-[5px] border" />
               {option.label}
             </Badge>
             <MetaBadge icon={<Wand2 size={14} />} label={task.aspectRatio} />
             <MetaBadge icon={<ImageIcon size={14} />} label={`${task.outputCount} 张`} />
-            <MetaBadge icon={<Sparkles size={14} />} label={task.resolution === "auto" ? "自动" : task.resolution.toUpperCase()} />
+            <MetaBadge icon={<Zap size={14} />} label={`${task.settledCredits || task.requestedCredits} 积分`} />
             <MetaBadge icon={<RefreshCcw size={14} />} label="可重新生成" />
           </div>
+
+          <h2 className="mt-3 truncate font-manrope text-[16px] font-black leading-snug text-charcoal md:text-[18px]">
+            {titleForPrompt(task.prompt)}
+          </h2>
+
         </div>
       </div>
 
       <AssetStage task={task} onUseAsset={onUseAsset} />
-      <ContinuationStrip task={task} onQuotePrompt={onQuotePrompt} />
     </article>
   );
 }
 
 function ReferenceStack({ images }: { images: string[] }) {
-  const slotCount =
-    images.length > 0
-      ? Math.min(MAX_REFERENCE_IMAGES, images.length)
-      : 1;
+  const visibleImages = images.slice(0, MAX_REFERENCE_IMAGES);
+  const firstImage = visibleImages[0];
+  const stackCount = visibleImages.length;
 
   return (
-    <div className="flex shrink-0 gap-2 md:w-[116px] md:flex-col">
-      {Array.from({ length: slotCount }).map((_, index) => {
-        const image = images[index];
-        return (
-          <div
-            key={image ?? `reference-slot-${index}`}
-            className="relative grid size-16 place-items-center overflow-hidden rounded-[16px] border border-charcoal/18 bg-canvas-pink md:size-[96px]"
-          >
-            {image ? (
-              <img
-                src={image}
-                alt={`参考图 ${index + 1}`}
-                className="h-full w-full object-cover object-top"
-              />
-            ) : (
-              <ImagePlus size={20} strokeWidth={2.5} className="text-charcoal/38" />
-            )}
-          </div>
-        );
-      })}
+    <div
+      className="relative h-[66px] w-[72px] shrink-0 md:h-[78px] md:w-[86px]"
+      aria-label={`参考图 ${stackCount}/${MAX_REFERENCE_IMAGES}`}
+    >
+      {stackCount > 2 ? (
+        <div className="absolute left-3.5 top-2.5 size-14 rounded-[12px] border border-charcoal/12 bg-canvas-pink/80 shadow-[0_10px_22px_rgba(26,23,20,0.05)] md:size-[66px]" />
+      ) : null}
+      {stackCount > 1 ? (
+        <div className="absolute left-1.5 top-1 size-14 rounded-[12px] border border-charcoal/14 bg-surface-white shadow-[0_10px_22px_rgba(26,23,20,0.06)] md:size-[66px]" />
+      ) : null}
+      <div className="relative grid size-14 place-items-center overflow-hidden rounded-[12px] border border-charcoal/18 bg-canvas-pink shadow-[0_14px_32px_rgba(26,23,20,0.08)] md:size-[66px]">
+        {firstImage ? (
+          <img
+            src={firstImage}
+            alt="参考图预览"
+            className="h-full w-full object-cover object-top"
+          />
+        ) : (
+          <ImagePlus size={20} strokeWidth={2.5} className="text-charcoal/38" />
+        )}
+        {stackCount > 1 ? (
+          <span className="absolute bottom-1 right-1 rounded-full border border-charcoal bg-lemon px-1.5 py-0.5 font-mono text-[10px] font-black leading-none text-charcoal shadow-[0_6px_14px_rgba(26,23,20,0.12)]">
+            {stackCount}
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1444,6 +1419,7 @@ function AssetStage({
   task: GeneratedTask;
   onUseAsset: (task: GeneratedTask, assetUrl: string) => void;
 }) {
+  const [previewAsset, setPreviewAsset] = useState<GeneratedAsset | null>(null);
   const isRunning = task.status === "queued" || task.status === "generating";
   const isFailed = task.status === "failed";
 
@@ -1480,22 +1456,29 @@ function AssetStage({
   }
 
   return (
-    <div className="bg-canvas-pink/55 p-4 md:p-5">
-      <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
-        {task.assets.map((asset, index) => (
-          <figure
-            key={asset.id}
-            className="group relative mb-4 break-inside-avoid overflow-hidden rounded-[22px] border border-charcoal/16 bg-surface-white shadow-[0_16px_42px_rgba(26,23,20,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_24px_64px_rgba(26,23,20,0.12)]"
-          >
-            <div className={cn("relative flex items-center justify-center bg-surface-white", aspectClass(task.aspectRatio))}>
-              <img
-                src={asset.url}
-                alt={`生成结果 ${index + 1}`}
-                className="h-full w-full object-contain"
-              />
-              <span className="absolute left-3 top-3 grid size-7 place-items-center rounded-full border border-charcoal/18 bg-surface-white/90 font-mono text-[12px] font-black text-charcoal shadow-[0_8px_18px_rgba(26,23,20,0.07)]">
-                {index + 1}
-              </span>
+    <>
+      <div className="py-2">
+        <div className={cn("grid justify-items-start gap-3", assetFrameWidthClass(task.aspectRatio))}>
+          {task.assets.map((asset, index) => (
+            <figure
+              key={asset.id}
+              className="group relative overflow-hidden rounded-[16px] border border-charcoal/16 bg-surface-white shadow-[0_12px_30px_rgba(26,23,20,0.07)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(26,23,20,0.1)]"
+            >
+              <button
+                type="button"
+                onClick={() => setPreviewAsset(asset)}
+                className={cn("relative flex w-full cursor-zoom-in items-center justify-center bg-surface-white", aspectClass(task.aspectRatio))}
+                aria-label={`放大查看生成结果 ${index + 1}`}
+              >
+                <img
+                  src={asset.url}
+                  alt={`生成结果 ${index + 1}`}
+                  className="h-full w-full object-contain"
+                />
+                <span className="absolute left-3 top-3 grid size-7 place-items-center rounded-full border border-charcoal/18 bg-surface-white/90 font-mono text-[12px] font-black text-charcoal shadow-[0_8px_18px_rgba(26,23,20,0.07)]">
+                  {index + 1}
+                </span>
+              </button>
               <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-end p-3 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
                 <div className="pointer-events-auto flex items-center gap-2 rounded-[14px] border border-charcoal/16 bg-surface-white/92 p-1 shadow-[0_12px_26px_rgba(26,23,20,0.08)] backdrop-blur">
                   <Button
@@ -1519,62 +1502,31 @@ function AssetStage({
                   </Button>
                 </div>
               </div>
-            </div>
-            <figcaption className="flex items-center justify-between border-t border-charcoal/12 bg-surface-white px-3 py-2 font-mono text-[12px] font-bold text-charcoal/52">
-              <span>{asset.width && asset.height ? `${asset.width}x${asset.height}` : task.resolution}</span>
-              <span>{asset.creditsCharged} credits</span>
-            </figcaption>
-          </figure>
-        ))}
+              <figcaption className="flex items-center justify-between border-t border-charcoal/12 bg-surface-white px-3 py-1.5 font-mono text-[11px] font-bold text-charcoal/52">
+                <span>{asset.width && asset.height ? `${asset.width}x${asset.height}` : task.resolution}</span>
+                <span>{asset.creditsCharged} credits</span>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
       </div>
-    </div>
-  );
-}
 
-function ContinuationStrip({
-  task,
-  onQuotePrompt,
-}: {
-  task: GeneratedTask;
-  onQuotePrompt: (task: GeneratedTask) => void;
-}) {
-  const canContinue = task.assets.length > 0 && task.status !== "failed";
-
-  return (
-    <div className="flex flex-col gap-3 border-t border-charcoal/12 bg-surface-white/84 px-4 py-4 md:flex-row md:items-center md:justify-between">
-      <p className="font-manrope text-[13px] font-extrabold text-charcoal/58">
-        {canContinue ? "底部输入器已带入结果图，可以继续迭代。" : "调整参考图和提示词后可再次生成。"}
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => onQuotePrompt(task)}
-          className="min-h-9 rounded-[12px] border border-charcoal/18 bg-surface-white px-3 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-lemon"
-        >
-          <Copy size={15} strokeWidth={2.7} />
-          引用提示词
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => onQuotePrompt(task)}
-          className="min-h-9 rounded-[12px] border border-charcoal/18 bg-pumpkin px-3 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-pumpkin"
-        >
-          <RefreshCcw size={15} strokeWidth={2.7} />
-          重新生成
-        </Button>
-        <Badge className="rounded-full border border-charcoal/18 bg-lemon px-3 py-1.5 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-lemon">
-          更贴近参考风格
-        </Badge>
-        <Badge className="rounded-full border border-charcoal/18 bg-seafoam px-3 py-1.5 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-seafoam">
-          放大主体
-        </Badge>
-        <Badge className="rounded-full border border-charcoal/18 bg-sky px-3 py-1.5 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-sky">
-          优化脸部细节
-        </Badge>
-      </div>
-    </div>
+      <Dialog open={Boolean(previewAsset)} onOpenChange={(open) => !open && setPreviewAsset(null)}>
+        <DialogContent className="w-fit max-w-[92vw] gap-0 border-0 bg-transparent p-0 shadow-none sm:rounded-[20px] [&>button]:right-3 [&>button]:top-3 [&>button]:rounded-full [&>button]:border [&>button]:border-charcoal/18 [&>button]:bg-surface-white/90 [&>button]:p-1.5 [&>button]:opacity-100 [&>button]:shadow-[0_10px_24px_rgba(26,23,20,0.14)]">
+          <DialogTitle className="sr-only">生成结果预览</DialogTitle>
+          <DialogDescription className="sr-only">
+            放大查看生成图片，按 Escape 关闭。
+          </DialogDescription>
+          {previewAsset ? (
+            <img
+              src={previewAsset.url}
+              alt="放大的生成结果"
+              className="block max-h-[88vh] max-w-[min(88vw,760px)] rounded-[18px] bg-surface-white object-contain shadow-[0_24px_80px_rgba(26,23,20,0.26)]"
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

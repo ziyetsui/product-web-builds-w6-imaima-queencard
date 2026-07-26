@@ -5,6 +5,7 @@ function publicEnv(nextName: string, viteName: string, fallback = "") {
 }
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   env: {
     NEXT_PUBLIC_ENTER_ANALYTICS_ENABLED: publicEnv("NEXT_PUBLIC_ENTER_ANALYTICS_ENABLED", "VITE_ENTER_ANALYTICS_ENABLED"),
     NEXT_PUBLIC_ENTER_ANALYTICS_TOKEN: publicEnv("NEXT_PUBLIC_ENTER_ANALYTICS_TOKEN", "VITE_ENTER_ANALYTICS_TOKEN"),
