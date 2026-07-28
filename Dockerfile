@@ -8,8 +8,8 @@ ENV MINIAPP_DB_PATH=/data/miniapp.sqlite
 ENV MINIAPP_UPLOAD_ROOT=/data/uploads
 ENV MINIAPP_TEMPLATE_SOURCE=github
 
-COPY miniapp-backend ./miniapp-backend
-COPY ima\ ima\ queencard ./ima\ ima\ queencard
+COPY ["miniapp-backend", "./miniapp-backend"]
+COPY ["ima ima queencard", "./ima ima queencard"]
 
 WORKDIR /app/miniapp-backend
 
