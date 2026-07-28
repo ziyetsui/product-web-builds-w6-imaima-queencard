@@ -93,6 +93,48 @@ function publicBaseUrl(env, request) {
   return getEnv(env, "MINIAPP_PUBLIC_ASSET_BASE_URL", new URL(request.url).origin).replace(/\/$/, "");
 }
 
+function publicAssetUrl(value, env, request) {
+  if (!value || typeof value !== "string") return value;
+  const baseUrl = publicBaseUrl(env, request);
+  if (value.startsWith("/")) return `${baseUrl}${value}`;
+  if (!/^https?:\/\//i.test(value)) return value;
+
+  try {
+    const url = new URL(value);
+    const isLocal = url.hostname === "127.0.0.1" || url.hostname === "localhost";
+    if (!isLocal) return value;
+    return `${baseUrl}${url.pathname}${url.search}`;
+  } catch {
+    return value;
+  }
+}
+
+function publicTemplateAssets(template, env, request) {
+  if (!template) return template;
+  const referenceImages = Array.isArray(template.referenceImages)
+    ? template.referenceImages.map((image) => publicAssetUrl(image, env, request))
+    : [];
+  return {
+    ...template,
+    thumbnailUrl: publicAssetUrl(template.thumbnailUrl, env, request),
+    previewUrl: publicAssetUrl(template.previewUrl, env, request),
+    referenceImages,
+    seed: template.seed ? {
+      ...template.seed,
+      referenceImages: Array.isArray(template.seed.referenceImages)
+        ? template.seed.referenceImages.map((image) => publicAssetUrl(image, env, request))
+        : template.seed.referenceImages,
+    } : template.seed,
+  };
+}
+
+function publicTemplateListAssets(data, env, request) {
+  return {
+    ...data,
+    records: (data.records || []).map((template) => publicTemplateAssets(template, env, request)),
+  };
+}
+
 async function saveReferenceImage(request, env) {
   const form = await request.formData();
   const file = form.get("file");
@@ -157,15 +199,18 @@ function createApp(options = {}) {
   }
 
   async function getTemplate(templateId, request) {
+    let template;
     if (store.getTemplate) {
       await ensureTemplatesSynced(request);
-      return store.getTemplate(templateId);
+      template = store.getTemplate(templateId);
+    } else {
+      template = await fetchTemplateById({
+        id: templateId,
+        ...templateOptions(env, new URLSearchParams({ page: "1", limit: "50", category: "image", language: "zh" }), request),
+        fetch: fetchImpl,
+      });
     }
-    return fetchTemplateById({
-      id: templateId,
-      ...templateOptions(env, new URLSearchParams({ page: "1", limit: "50", category: "image", language: "zh" }), request),
-      fetch: fetchImpl,
-    });
+    return publicTemplateAssets(template, env, request);
   }
 
   async function generateAndCreateTask(input) {
@@ -264,6 +309,7 @@ function createApp(options = {}) {
             fetch: fetchImpl,
           });
         }
+        data = publicTemplateListAssets(data, env, request);
         return json({
           success: true,
           data: {

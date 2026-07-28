@@ -190,6 +190,43 @@ test("returns a synced template by id", async () => {
   app.close();
 });
 
+test("rewrites persisted local template assets to the request origin", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_TEMPLATE_API_BASE_URL: "https://templates.example",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+    fetch: async () => Response.json({
+      success: true,
+      data: [
+        {
+          id: "tpl-local-asset",
+          category: "image",
+          scenario_category: "Social Graphics",
+          name: "Local asset template",
+          condition_prompt: "Generate with local asset",
+          work_url: "http://127.0.0.1:8080/xhs-cases/template.jpg",
+        },
+      ],
+      pagination: {
+        page: 1,
+        limit: 1,
+        total: 1,
+        totalPages: 1,
+      },
+    }),
+  });
+
+  const list = await readJson(await app.fetch(new Request("https://mini.example/api/miniapp/templates?page=1&limit=1")));
+  const detail = await readJson(await app.fetch(new Request("https://mini.example/api/miniapp/templates/tpl-local-asset")));
+
+  assert.equal(list.data.records[0].thumbnailUrl, "https://mini.example/xhs-cases/template.jpg");
+  assert.equal(list.data.records[0].previewUrl, "https://mini.example/xhs-cases/template.jpg");
+  assert.deepEqual(list.data.records[0].referenceImages, ["https://mini.example/xhs-cases/template.jpg"]);
+  assert.equal(detail.data.thumbnailUrl, "https://mini.example/xhs-cases/template.jpg");
+  app.close();
+});
+
 test("uploads a reference image and creates a generic generation task", async () => {
   let providerInput = null;
   const app = createApp({
