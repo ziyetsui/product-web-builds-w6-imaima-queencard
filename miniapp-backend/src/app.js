@@ -90,7 +90,19 @@ function uploadId(fileName, mimeType) {
 }
 
 function publicBaseUrl(env, request) {
-  return getEnv(env, "MINIAPP_PUBLIC_ASSET_BASE_URL", new URL(request.url).origin).replace(/\/$/, "");
+  const configured = getEnv(env, "MINIAPP_PUBLIC_ASSET_BASE_URL");
+  if (configured) return configured.replace(/\/$/, "");
+
+  const requestUrl = new URL(request.url);
+  const forwardedHost = (request.headers.get("x-forwarded-host") || request.headers.get("host") || requestUrl.host)
+    .split(",")[0]
+    .trim();
+  const forwardedProto = (request.headers.get("x-forwarded-proto") || requestUrl.protocol.replace(":", ""))
+    .split(",")[0]
+    .trim();
+  const isLocalHost = forwardedHost.startsWith("127.0.0.1") || forwardedHost.startsWith("localhost");
+  const protocol = !isLocalHost && forwardedProto === "http" ? "https" : forwardedProto;
+  return `${protocol}://${forwardedHost}`.replace(/\/$/, "");
 }
 
 function publicAssetUrl(value, env, request) {

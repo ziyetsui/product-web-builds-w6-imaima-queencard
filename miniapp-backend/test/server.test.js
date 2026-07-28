@@ -227,6 +227,41 @@ test("rewrites persisted local template assets to the request origin", async () 
   app.close();
 });
 
+test("upgrades public proxied asset origins to https", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_TEMPLATE_API_BASE_URL: "https://templates.example",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+    fetch: async () => Response.json({
+      success: true,
+      data: [
+        {
+          id: "tpl-proxy-origin",
+          category: "image",
+          name: "Proxy origin template",
+          work_url: "http://127.0.0.1:8080/xhs-cases/proxy.jpg",
+        },
+      ],
+      pagination: {
+        page: 1,
+        limit: 1,
+        total: 1,
+        totalPages: 1,
+      },
+    }),
+  });
+
+  const response = await readJson(await app.fetch(new Request("http://ima.example/api/miniapp/templates?page=1&limit=1", {
+    headers: {
+      Host: "ima.example",
+    },
+  })));
+
+  assert.equal(response.data.records[0].thumbnailUrl, "https://ima.example/xhs-cases/proxy.jpg");
+  app.close();
+});
+
 test("uploads a reference image and creates a generic generation task", async () => {
   let providerInput = null;
   const app = createApp({
