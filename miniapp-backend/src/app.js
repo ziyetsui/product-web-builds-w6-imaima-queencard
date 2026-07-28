@@ -115,13 +115,13 @@ async function saveReferenceImage(request, env) {
   };
 }
 
-function templateOptions(env, query) {
+function templateOptions(env, query, request) {
   const source = getEnv(env, "MINIAPP_TEMPLATE_SOURCE", getEnv(env, "MINIAPP_TEMPLATE_API_BASE_URL") ? "remote" : "github");
   return {
     source,
     baseUrl: source === "remote" ? getEnv(env, "MINIAPP_TEMPLATE_API_BASE_URL") : "",
     githubCasesFile: getEnv(env, "MINIAPP_GITHUB_CASES_FILE"),
-    assetBaseUrl: getEnv(env, "MINIAPP_PUBLIC_ASSET_BASE_URL"),
+    assetBaseUrl: request ? publicBaseUrl(env, request) : getEnv(env, "MINIAPP_PUBLIC_ASSET_BASE_URL"),
     env,
     query,
   };
@@ -140,7 +140,7 @@ function createApp(options = {}) {
   });
   let templatesSynced = false;
 
-  async function ensureTemplatesSynced() {
+  async function ensureTemplatesSynced(request) {
     if (templatesSynced || !store.syncTemplates) return;
     const syncQuery = new URLSearchParams({
       page: "1",
@@ -149,21 +149,21 @@ function createApp(options = {}) {
       language: "zh",
     });
     const data = await fetchTemplateList({
-      ...templateOptions(env, syncQuery),
+      ...templateOptions(env, syncQuery, request),
       fetch: fetchImpl,
     });
     store.syncTemplates(data.records || []);
     templatesSynced = true;
   }
 
-  async function getTemplate(templateId) {
+  async function getTemplate(templateId, request) {
     if (store.getTemplate) {
-      await ensureTemplatesSynced();
+      await ensureTemplatesSynced(request);
       return store.getTemplate(templateId);
     }
     return fetchTemplateById({
       id: templateId,
-      ...templateOptions(env, new URLSearchParams({ page: "1", limit: "50", category: "image", language: "zh" })),
+      ...templateOptions(env, new URLSearchParams({ page: "1", limit: "50", category: "image", language: "zh" }), request),
       fetch: fetchImpl,
     });
   }
@@ -256,11 +256,11 @@ function createApp(options = {}) {
       if (path === "/api/miniapp/templates" && request.method === "GET") {
         let data;
         if (store.listTemplates) {
-          await ensureTemplatesSynced();
+          await ensureTemplatesSynced(request);
           data = store.listTemplates(url.searchParams);
         } else {
           data = await fetchTemplateList({
-            ...templateOptions(env, url.searchParams),
+            ...templateOptions(env, url.searchParams, request),
             fetch: fetchImpl,
           });
         }
@@ -275,7 +275,7 @@ function createApp(options = {}) {
 
       const templateDetailMatch = path.match(/^\/api\/miniapp\/templates\/([^/]+)$/);
       if (templateDetailMatch && request.method === "GET") {
-        const template = await getTemplate(decodeURIComponent(templateDetailMatch[1]));
+        const template = await getTemplate(decodeURIComponent(templateDetailMatch[1]), request);
         if (!template) return json({ success: false, error: "Template not found" }, 404);
         return json({ success: true, data: template });
       }
@@ -287,7 +287,7 @@ function createApp(options = {}) {
         if (user.balance < 1) return json({ success: false, error: "Insufficient credits" }, 402);
         const body = await readJson(request);
         const templateId = decodeURIComponent(generateMatch[1]);
-        const template = await getTemplate(templateId);
+        const template = await getTemplate(templateId, request);
         if (!template) return json({ success: false, error: "Template not found" }, 404);
 
         const task = await generateAndCreateTask({
@@ -305,7 +305,7 @@ function createApp(options = {}) {
         if (user.balance < 1) return json({ success: false, error: "Insufficient credits" }, 402);
         const body = await readJson(request);
         const referenceImages = Array.isArray(body.referenceImages) ? body.referenceImages : [];
-        const template = body.templateId ? await getTemplate(String(body.templateId)) : {
+        const template = body.templateId ? await getTemplate(String(body.templateId), request) : {
           id: "custom",
           title: body.topic || "自定义生成",
           prompt: body.prompt || "",
