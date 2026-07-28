@@ -1,0 +1,82 @@
+<view class="page">
+  <view class="topbar">
+    <button class="icon-button" bindtap="goHome">‹</button>
+    <view class="brand">
+      <text class="brand-main">ima ima</text>
+      <text class="brand-accent">queencard</text>
+    </view>
+    <view class="status-dot {{apiReady ? 'ready' : 'offline'}}"></view>
+  </view>
+
+  <view class="hero-panel">
+    <text class="kicker">REFERENCE TO POST</text>
+    <text class="title">上传参考图，生成自己的爆款图文</text>
+    <text class="subtitle">小程序用微信 openid 作为入口，后端负责独立账号、额度和生成记录。</text>
+  </view>
+
+  <view wx:if="{{!apiReady}}" class="notice-card">
+    <text class="notice-title">当前是前端联调态</text>
+    <text class="notice-copy">真实生成需要独立后端提供 /api/miniapp/*，再把 config/env.js 的 API_BASE_URL 指到部署地址。</text>
+    <button class="small-button" bindtap="showBackendNotice">查看说明</button>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">账号</text>
+      <text class="section-hint">{{user ? '已连接生成额度' : '先登录或绑定微信'}}</text>
+    </view>
+    <view class="account-card">
+      <view class="account-copy">
+        <text class="account-name">{{userLabel}}</text>
+        <text class="account-desc">{{userDesc}}</text>
+      </view>
+      <button wx:if="{{!user}}" class="small-button lemon" loading="{{busy}}" bindtap="handleLogin">微信登录</button>
+      <button wx:else class="small-button white" bindtap="handleLogout">退出</button>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">参考图</text>
+      <text class="section-hint">从收藏图开始</text>
+    </view>
+    <view wx:if="{{referenceImagePath}}" class="image-card">
+      <image class="reference-image" mode="aspectFill" src="{{referenceImagePath}}" bindtap="previewReference" />
+      <view class="image-actions">
+        <button class="small-button white" bindtap="chooseReference">更换</button>
+        <button class="small-button white" bindtap="removeReference">移除</button>
+      </view>
+    </view>
+    <button wx:else class="upload-box" bindtap="chooseReference">
+      <text class="upload-plus">+</text>
+      <text class="upload-title">上传参考图</text>
+      <text class="upload-desc">相册或拍照，建议竖版小红书截图</text>
+    </button>
+  </view>
+
+  <view class="section form-section">
+    <view class="section-head">
+      <text class="section-title">生成要求</text>
+      <button class="text-button" bindtap="resetPrompt">恢复示例</button>
+    </view>
+    <input class="input" value="{{topic}}" placeholder="你的主题，比如：女性成长、门店活动、知识拆解" bindinput="onTopicInput" />
+    <textarea class="textarea" value="{{prompt}}" maxlength="900" bindinput="onPromptInput" />
+
+    <view class="control-row">
+      <view class="control">
+        <text class="control-label">模型</text>
+        <picker range="{{models}}" range-key="label" value="{{modelIndex}}" bindchange="onModelChange">
+          <view class="picker-box">{{modelLabel}}</view>
+        </picker>
+      </view>
+      <view class="control compact">
+        <text class="control-label">张数</text>
+        <picker range="{{outputCounts}}" value="{{countIndex}}" bindchange="onCountChange">
+          <view class="picker-box">{{outputCountLabel}}</view>
+        </picker>
+      </view>
+    </view>
+
+    <button class="submit-button" loading="{{busy}}" bindtap="submitGeneration">提交生成</button>
+  </view>
+</view>

@@ -1,0 +1,13 @@
+.git
+.DS_Store
+node_modules
+**/node_modules
+**/.env
+**/.env.*
+!miniapp-backend/.env.example
+!miniapp-backend/.env.zeabur.example
+miniapp-backend/data/*.sqlite
+miniapp-backend/data/*.sqlite-shm
+miniapp-backend/data/*.sqlite-wal
+miniapp-backend/data/uploads
+*.log
