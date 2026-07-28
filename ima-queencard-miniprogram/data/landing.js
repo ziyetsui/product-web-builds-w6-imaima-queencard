@@ -1,5 +1,7 @@
+const env = require("../config/env");
+
 function asset(path) {
-  return "/assets/" + path;
+  return env.API_BASE_URL.replace(/\/$/, "") + "/miniapp-assets/" + path;
 }
 
 module.exports = {

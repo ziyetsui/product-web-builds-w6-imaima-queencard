@@ -14,6 +14,7 @@ COPY ["miniapp-backend", "./miniapp-backend"]
 COPY ["ima ima queencard/frontend/src/data/xhsPromptCases.ts", "./template-data/xhsPromptCases.ts"]
 COPY ["ima ima queencard/frontend/public/xhs-cases", "./public/xhs-cases"]
 COPY ["ima ima queencard/frontend/public/model-logos", "./public/model-logos"]
+COPY ["ima-queencard-miniprogram/assets", "./public/miniapp-assets"]
 
 WORKDIR /app/miniapp-backend
 

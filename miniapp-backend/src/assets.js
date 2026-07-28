@@ -19,7 +19,10 @@ function contentType(filePath) {
 }
 
 function isAllowedAssetPath(pathname) {
-  return pathname.startsWith("/xhs-cases/") || pathname.startsWith("/model-logos/") || pathname.startsWith("/uploads/reference/");
+  return pathname.startsWith("/xhs-cases/")
+    || pathname.startsWith("/model-logos/")
+    || pathname.startsWith("/miniapp-assets/")
+    || pathname.startsWith("/uploads/reference/");
 }
 
 async function serveAsset(pathname, env = process.env) {

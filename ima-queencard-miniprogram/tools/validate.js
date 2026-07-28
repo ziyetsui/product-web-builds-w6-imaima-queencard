@@ -80,8 +80,10 @@ if (projectJson.compileType !== "miniprogram") {
 }
 
 const landing = require(path.join(root, "data/landing.js"));
+const env = require(path.join(root, "config/env.js"));
 const assetPaths = new Set();
 const remoteUrls = [];
+const apiBaseUrl = (env.API_BASE_URL || "").replace(/\/$/, "");
 
 walk(landing, (value) => {
   if (typeof value !== "string") return;
@@ -89,8 +91,9 @@ walk(landing, (value) => {
   if (value.startsWith("/assets/")) assetPaths.add(value);
 });
 
-if (remoteUrls.length > 0) {
-  fail(`landing data contains remote URLs: ${remoteUrls.join(", ")}`);
+const invalidRemoteUrls = remoteUrls.filter((url) => !apiBaseUrl || !url.startsWith(`${apiBaseUrl}/`));
+if (invalidRemoteUrls.length > 0) {
+  fail(`landing data contains unsupported remote URLs: ${invalidRemoteUrls.join(", ")}`);
 }
 
 assetPaths.forEach((assetPath) => {
@@ -124,4 +127,4 @@ if (process.exitCode) {
   process.exit();
 }
 
-console.log(`OK: ${requiredFiles.length} files, ${assetPaths.size} local assets, ${assetMb.toFixed(1)}MB assets`);
+console.log(`OK: ${requiredFiles.length} files, ${assetPaths.size} local assets, ${assetMb.toFixed(1)}MB assets, ${remoteUrls.length} backend assets`);

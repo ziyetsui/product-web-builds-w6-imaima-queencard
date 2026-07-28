@@ -1,11 +1,24 @@
 {
   "description": "Native WeChat Mini Program landing-page reconstruction for ima ima queencard.",
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      {
+        "type": "folder",
+        "value": "assets"
+      },
+      {
+        "type": "folder",
+        "value": "docs"
+      },
+      {
+        "type": "folder",
+        "value": "tools"
+      }
+    ],
     "include": []
   },
   "setting": {
-    "urlCheck": false,
+    "urlCheck": true,
     "es6": true,
     "enhance": true,
     "postcss": true,
@@ -35,7 +48,7 @@
   },
   "compileType": "miniprogram",
   "libVersion": "3.8.12",
-  "appid": "touristappid",
+  "appid": "wx5949306a2777910c",
   "projectname": "ima-queencard-miniprogram",
   "miniprogramRoot": "./",
   "condition": {},
