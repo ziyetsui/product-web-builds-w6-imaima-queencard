@@ -29,8 +29,11 @@ async function serveAsset(pathname, env = process.env) {
   if (!isAllowedAssetPath(pathname)) return null;
 
   const isUpload = pathname.startsWith("/uploads/reference/");
+  const isMiniappAsset = pathname.startsWith("/miniapp-assets/");
   const root = isUpload
     ? path.resolve(env.MINIAPP_UPLOAD_ROOT || path.resolve(__dirname, "../data/uploads"))
+    : isMiniappAsset
+      ? path.resolve(env.MINIAPP_MINIAPP_ASSET_ROOT || path.resolve(__dirname, "../public"))
     : path.resolve(env.MINIAPP_ASSET_ROOT || defaultAssetRoot());
   const relative = decodeURIComponent(pathname).replace(isUpload ? /^\/uploads\// : /^\/+/, "");
   const filePath = path.resolve(root, relative);
