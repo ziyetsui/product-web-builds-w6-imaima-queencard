@@ -35,9 +35,9 @@
     </view>
   </view>
 
-  <view class="section">
+  <view class="section mode-reference-section">
     <view class="section-head">
-      <text class="section-title">生成模式</text>
+      <text class="section-title">生成配置</text>
       <text class="section-hint">{{modeLabel}}</text>
     </view>
     <view class="mode-row">
@@ -49,10 +49,8 @@
         bindtap="onModeChange"
       >{{item.label}}</button>
     </view>
-  </view>
 
-  <view class="section">
-    <view class="section-head">
+    <view class="section-head compact-head">
       <text class="section-title">参考图</text>
       <text class="section-hint">{{capability == 'text-to-image' ? '纯文生图不使用参考图' : '最多 3 张'}}</text>
     </view>
@@ -64,12 +62,14 @@
     </view>
 
     <view wx:elif="{{referenceImagePaths.length > 0}}" class="image-card">
-      <view class="reference-grid">
-        <view wx:for="{{referenceImagePaths}}" wx:key="*this" class="reference-item">
-          <image class="reference-image" mode="aspectFill" src="{{item}}" data-current="{{item}}" bindtap="previewReference" />
-          <button class="remove-chip" data-index="{{index}}" bindtap="removeReference">移除</button>
+      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="reference-scroll">
+        <view class="reference-row">
+          <view wx:for="{{referenceImagePaths}}" wx:key="*this" class="reference-item">
+            <image class="reference-image" mode="aspectFill" src="{{item}}" data-current="{{item}}" bindtap="previewReference" />
+            <button class="remove-chip" data-index="{{index}}" bindtap="removeReference">移除</button>
+          </view>
         </view>
-      </view>
+      </scroll-view>
       <view class="image-actions">
         <button class="small-button white" bindtap="chooseReference">{{referenceImagePaths.length >= 3 ? '替换' : '继续添加'}}</button>
       </view>
