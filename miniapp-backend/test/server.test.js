@@ -36,6 +36,15 @@ async function waitForTask(app, taskId, auth, status = "completed") {
   return last;
 }
 
+async function login(app) {
+  const response = await readJson(await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
+    method: "POST",
+    body: JSON.stringify({ code: "dev-code" }),
+  })));
+  assert.equal(response.success, true);
+  return `Bearer ${response.data.token}`;
+}
+
 test("supports standalone login, balance, templates, generation task and result", async () => {
   const app = createApp({
     env: {
@@ -437,5 +446,257 @@ test("serves miniapp landing assets from backend public assets", async () => {
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-type"), "image/jpeg");
   assert.equal(body, "miniapp-image");
+  app.close();
+});
+
+test("lists completed image generations with reusable request metadata", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-test",
+      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
+      MINIAPP_INITIAL_CREDITS: "10",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+    imageProvider: {
+      name: "test-provider",
+      generate: async () => ({
+        provider: "test-provider",
+        status: "completed",
+        images: ["https://cdn.example.com/generated-history.png"],
+        raw: { ok: true },
+      }),
+    },
+  });
+  const auth = await login(app);
+
+  const created = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({
+      prompt: "Create a royal lemon profile card",
+      topic: "Royal lemon",
+      referenceImages: ["https://cdn.example.com/reference.png"],
+      model: "gpt-image-2-edit",
+      outputCount: 2,
+      aspectRatio: "1:1",
+      resolution: "1024x1024",
+    }),
+  })));
+  const completed = await waitForTask(app, created.data.taskId, auth);
+  assert.equal(completed.data.status, "completed");
+
+  const list = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations?page=1&limit=10&status=completed", {
+    headers: { Authorization: auth },
+  })));
+
+  assert.equal(list.success, true);
+  assert.equal(list.data.pagination.total, 1);
+  assert.equal(list.data.records[0].taskId, created.data.taskId);
+  assert.equal(list.data.records[0].prompt, "Create a royal lemon profile card");
+  assert.equal(list.data.records[0].topic, "Royal lemon");
+  assert.deepEqual(list.data.records[0].referenceImages, ["https://cdn.example.com/reference.png"]);
+  assert.equal(list.data.records[0].model, "gpt-image-2-edit");
+  assert.equal(list.data.records[0].outputCount, 2);
+  assert.equal(list.data.records[0].aspectRatio, "1:1");
+  assert.equal(list.data.records[0].resolution, "1024x1024");
+  app.close();
+});
+
+test("filters image generation history by prompt, model, and template id", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-test",
+      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
+      MINIAPP_INITIAL_CREDITS: "10",
+      MINIAPP_TEMPLATE_API_BASE_URL: "https://templates.example",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+    fetch: async () => Response.json({
+      success: true,
+      data: [
+        {
+          id: "tpl-filter",
+          category: "image",
+          scenario_category: "Social Graphics",
+          name: "Filter template",
+          condition_prompt: "Template prompt",
+          work_url: "https://cdn.example.com/template.png",
+        },
+      ],
+      pagination: {
+        page: 1,
+        limit: 1,
+        total: 1,
+        totalPages: 1,
+      },
+    }),
+  });
+  const auth = await login(app);
+
+  const custom = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({
+      prompt: "Searchable rose prompt",
+      model: "model-filter",
+      outputCount: 1,
+    }),
+  })));
+  const templated = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({
+      templateId: "tpl-filter",
+      prompt: "Template override",
+      model: "gpt-image-2-edit",
+      outputCount: 1,
+    }),
+  })));
+  await waitForTask(app, custom.data.taskId, auth);
+  await waitForTask(app, templated.data.taskId, auth);
+
+  const promptMatches = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations?q=rose", {
+    headers: { Authorization: auth },
+  })));
+  const modelMatches = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations?q=model-filter", {
+    headers: { Authorization: auth },
+  })));
+  const templateMatches = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations?q=tpl-filter", {
+    headers: { Authorization: auth },
+  })));
+
+  assert.deepEqual(promptMatches.data.records.map((task) => task.taskId), [custom.data.taskId]);
+  assert.deepEqual(modelMatches.data.records.map((task) => task.taskId), [custom.data.taskId]);
+  assert.deepEqual(templateMatches.data.records.map((task) => task.taskId), [templated.data.taskId]);
+  app.close();
+});
+
+test("estimates requested credits for image generation", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-test",
+      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+  });
+  const auth = await login(app);
+
+  const estimate = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations/estimate", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({
+      model: "gpt-image-2-edit",
+      outputCount: 3,
+    }),
+  })));
+
+  assert.equal(estimate.success, true);
+  assert.equal(estimate.data.requestedCredits, 3);
+  assert.equal(estimate.data.model, "gpt-image-2-edit");
+  assert.equal(estimate.data.outputCount, 3);
+  app.close();
+});
+
+test("regenerates a task from the original prompt, references, and model", async () => {
+  const providerInputs = [];
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-test",
+      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
+      MINIAPP_INITIAL_CREDITS: "10",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+    imageProvider: {
+      name: "test-provider",
+      generate: async (input) => {
+        providerInputs.push(input);
+        return {
+          provider: "test-provider",
+          status: "completed",
+          images: ["https://cdn.example.com/regenerated.png"],
+        };
+      },
+    },
+  });
+  const auth = await login(app);
+
+  const original = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({
+      prompt: "Regenerate this card",
+      topic: "Regeneration topic",
+      referenceImages: ["https://cdn.example.com/original-reference.png"],
+      model: "gpt-image-2-edit",
+      outputCount: 2,
+      aspectRatio: "3:4",
+      resolution: "768x1024",
+    }),
+  })));
+  await waitForTask(app, original.data.taskId, auth);
+
+  const regenerated = await readJson(await app.fetch(new Request(`http://local/api/miniapp/image-generations/${original.data.taskId}/regenerate`, {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({}),
+  })));
+  assert.equal(regenerated.success, true);
+  assert.notEqual(regenerated.data.taskId, original.data.taskId);
+  assert.equal(regenerated.data.status, "pending");
+
+  const pending = await readJson(await app.fetch(new Request(`http://local/api/miniapp/image-generations/${regenerated.data.taskId}`, {
+    headers: { Authorization: auth },
+  })));
+  assert.equal(pending.data.prompt, "Regenerate this card");
+  assert.deepEqual(pending.data.referenceImages, ["https://cdn.example.com/original-reference.png"]);
+  assert.equal(pending.data.model, "gpt-image-2-edit");
+  assert.equal(pending.data.outputCount, 2);
+
+  await waitForTask(app, regenerated.data.taskId, auth);
+  assert.equal(providerInputs.at(-1).prompt, "Regenerate this card");
+  assert.deepEqual(providerInputs.at(-1).referenceImages, ["https://cdn.example.com/original-reference.png"]);
+  app.close();
+});
+
+test("returns credit transaction history with pagination", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-test",
+      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
+      MINIAPP_INITIAL_CREDITS: "10",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+  });
+  const auth = await login(app);
+
+  const first = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({ prompt: "First credit charge", outputCount: 1 }),
+  })));
+  const second = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({ prompt: "Second credit charge", outputCount: 1 }),
+  })));
+  await waitForTask(app, first.data.taskId, auth);
+  await waitForTask(app, second.data.taskId, auth);
+
+  const history = await readJson(await app.fetch(new Request("http://local/api/miniapp/credit/history?page=1&limit=1", {
+    headers: { Authorization: auth },
+  })));
+
+  assert.equal(history.success, true);
+  assert.equal(history.data.records.length, 1);
+  assert.equal(history.data.records[0].amount, -1);
+  assert.equal(history.data.pagination.page, 1);
+  assert.equal(history.data.pagination.limit, 1);
+  assert.equal(history.data.pagination.total, 2);
+  assert.equal(history.data.pagination.totalPages, 2);
   app.close();
 });

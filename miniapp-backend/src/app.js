@@ -77,6 +77,33 @@ function taskId() {
   return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function estimateCredits(body = {}) {
+  return positiveInt(body.outputCount || body.outputNumber, 1);
+}
+
+function taskMetadata(template, body = {}) {
+  const seed = template && template.seed ? template.seed : {};
+  const referenceImages = Array.isArray(body.referenceImages)
+    ? body.referenceImages
+    : Array.isArray(template && template.referenceImages)
+      ? template.referenceImages
+      : [];
+  return {
+    prompt: body.prompt || (template && template.prompt) || "",
+    topic: body.topic || (template && template.title) || "",
+    referenceImages,
+    model: body.model || seed.model || "gpt-image-2-edit",
+    outputCount: estimateCredits(body),
+    aspectRatio: body.aspectRatio || seed.aspectRatio || "",
+    resolution: body.resolution || seed.resolution || "",
+  };
+}
+
 function mimeExt(mimeType) {
   if (mimeType === "image/png") return ".png";
   if (mimeType === "image/webp") return ".webp";
@@ -226,12 +253,13 @@ function createApp(options = {}) {
   }
 
   async function runGenerationTask(input, id) {
+    const metadata = taskMetadata(input.template, input.body);
     try {
       const generation = await imageProvider.generate({
         template: input.template,
-        prompt: input.body.prompt || input.template.prompt,
-        referenceImages: input.body.referenceImages || input.template.referenceImages || [],
-        outputNumber: input.body.outputNumber || input.body.outputCount || 1,
+        prompt: metadata.prompt,
+        referenceImages: metadata.referenceImages,
+        outputNumber: metadata.outputCount,
         user: input.user,
         request: input.body,
       });
@@ -245,6 +273,7 @@ function createApp(options = {}) {
         provider: generation.provider || imageProvider.name || "unknown",
         providerTaskId: generation.providerTaskId || "",
         mode: getEnv(env, "MINIAPP_IMAGE_PROVIDER", getEnv(env, "MINIAPP_GENERATION_MODE", "preview")),
+        ...metadata,
         rawProviderResult: generation.raw || null,
         createdAt: input.createdAt,
       });
@@ -259,6 +288,7 @@ function createApp(options = {}) {
         provider: imageProvider.name || "unknown",
         providerTaskId: "",
         mode: getEnv(env, "MINIAPP_IMAGE_PROVIDER", getEnv(env, "MINIAPP_GENERATION_MODE", "preview")),
+        ...metadata,
         rawProviderResult: {
           error: error.message || "Image generation failed",
         },
@@ -268,7 +298,9 @@ function createApp(options = {}) {
   }
 
   function createGenerationTask(input) {
-    store.charge(input.user.id, 1, input.reason);
+    const metadata = taskMetadata(input.template, input.body);
+    const requestedCredits = input.requestedCredits || metadata.outputCount;
+    store.charge(input.user.id, requestedCredits, input.reason);
     const id = taskId();
     const createdAt = new Date().toISOString();
     const task = store.createTask({
@@ -281,6 +313,7 @@ function createApp(options = {}) {
       provider: imageProvider.name || "unknown",
       providerTaskId: "",
       mode: getEnv(env, "MINIAPP_IMAGE_PROVIDER", getEnv(env, "MINIAPP_GENERATION_MODE", "preview")),
+      ...metadata,
       rawProviderResult: {
         request: input.body,
       },
@@ -397,15 +430,57 @@ function createApp(options = {}) {
           template,
           body,
           reason: `template:${template.id}`,
+          requestedCredits: estimateCredits(body),
         });
         return json({ success: true, data: { taskId: task.id, status: task.status } });
+      }
+
+      if (path === "/api/miniapp/image-generations" && request.method === "GET") {
+        const payload = getAuthPayload(request, env);
+        const user = store.ensureUser(payload);
+        const data = store.listTasks(user.id, url.searchParams);
+        return json({
+          success: true,
+          data: {
+            records: data.records,
+            pagination: data.pagination,
+          },
+        });
+      }
+
+      if (path === "/api/miniapp/image-generations/estimate" && request.method === "POST") {
+        getAuthPayload(request, env);
+        const body = await readJson(request);
+        const outputCount = estimateCredits(body);
+        return json({
+          success: true,
+          data: {
+            requestedCredits: outputCount,
+            model: body.model || "gpt-image-2-edit",
+            outputCount,
+          },
+        });
+      }
+
+      if (path === "/api/miniapp/credit/history" && request.method === "GET") {
+        const payload = getAuthPayload(request, env);
+        const user = store.ensureUser(payload);
+        const data = store.listCreditTransactions(user.id, url.searchParams);
+        return json({
+          success: true,
+          data: {
+            records: data.records,
+            pagination: data.pagination,
+          },
+        });
       }
 
       if (path === "/api/miniapp/image-generations" && request.method === "POST") {
         const payload = getAuthPayload(request, env);
         const user = store.ensureUser(payload);
-        if (user.balance < 1) return json({ success: false, error: "Insufficient credits" }, 402);
         const body = await readJson(request);
+        const requestedCredits = estimateCredits(body);
+        if (user.balance < requestedCredits) return json({ success: false, error: "Insufficient credits" }, 402);
         const referenceImages = Array.isArray(body.referenceImages) ? body.referenceImages : [];
         const template = body.templateId ? await getTemplate(String(body.templateId), request) : {
           id: "custom",
@@ -431,6 +506,51 @@ function createApp(options = {}) {
             referenceImages,
           },
           reason: body.templateId ? `template:${template.id}` : "custom:generation",
+          requestedCredits,
+        });
+        return json({ success: true, data: { taskId: task.id, status: task.status } });
+      }
+
+      const regenerateMatch = path.match(/^\/api\/miniapp\/image-generations\/([^/]+)\/regenerate$/);
+      if (regenerateMatch && request.method === "POST") {
+        const payload = getAuthPayload(request, env);
+        const user = store.ensureUser(payload);
+        const original = store.getTask(decodeURIComponent(regenerateMatch[1]));
+        if (!original || original.ownerId !== user.id) {
+          return json({ success: false, error: "Task not found" }, 404);
+        }
+        await readJson(request);
+        const referenceImages = Array.isArray(original.referenceImages) ? original.referenceImages : [];
+        const generationBody = {
+          prompt: original.prompt,
+          topic: original.topic,
+          referenceImages,
+          model: original.model,
+          outputCount: original.outputCount || 1,
+          aspectRatio: original.aspectRatio,
+          resolution: original.resolution,
+          sourceTaskId: original.id,
+        };
+        const requestedCredits = estimateCredits(generationBody);
+        if (user.balance < requestedCredits) return json({ success: false, error: "Insufficient credits" }, 402);
+        const template = {
+          id: original.templateId || "custom",
+          title: original.topic || "重新生成",
+          prompt: original.prompt,
+          previewUrl: referenceImages[0] || (Array.isArray(original.images) ? original.images[0] : ""),
+          referenceImages,
+          seed: {
+            model: original.model,
+            aspectRatio: original.aspectRatio,
+            resolution: original.resolution,
+          },
+        };
+        const task = createGenerationTask({
+          user,
+          template,
+          body: generationBody,
+          reason: `regenerate:${original.id}`,
+          requestedCredits,
         });
         return json({ success: true, data: { taskId: task.id, status: task.status } });
       }

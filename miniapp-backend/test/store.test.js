@@ -38,7 +38,7 @@ test("sqlite store persists users, credit charges, and generation tasks", () => 
   const reopened = createSqliteStore({ dbPath, initialCredits: 10 });
   assert.equal(reopened.getUser(user.id).balance, 9);
   assert.deepEqual(reopened.getTask("task-1").images, ["https://cdn.example.com/result.jpg"]);
-  assert.equal(reopened.listCreditTransactions(user.id).length, 1);
+  assert.equal(reopened.listCreditTransactions(user.id).records.length, 1);
   reopened.close();
 });
 
@@ -79,4 +79,68 @@ test("sqlite store syncs and pages templates", () => {
   assert.equal(page.pagination.total, 1);
   assert.equal(store.getTemplate("case-2").title, "腿记");
   store.close();
+});
+
+test("sqlite store persists and filters generation task history", () => {
+  const dbPath = tempDbPath();
+  const store = createSqliteStore({ dbPath, initialCredits: 10 });
+  const user = store.ensureUser(identity);
+  store.createTask({
+    id: "task-history-1",
+    ownerId: user.id,
+    status: "completed",
+    images: ["https://cdn.example.com/history-1.jpg"],
+    templateId: "tpl-queen",
+    provider: "preview",
+    prompt: "Create a lemon queen card",
+    topic: "Lemon queen",
+    referenceImages: ["https://cdn.example.com/reference.jpg"],
+    model: "gpt-image-2-edit",
+    outputCount: 2,
+    aspectRatio: "1:1",
+    resolution: "1024x1024",
+    createdAt: "2026-07-28T00:00:00.000Z",
+  });
+  store.createTask({
+    id: "task-history-2",
+    ownerId: user.id,
+    status: "failed",
+    images: [],
+    templateId: "tpl-other",
+    provider: "preview",
+    prompt: "Create a pumpkin poster",
+    topic: "Pumpkin poster",
+    referenceImages: [],
+    model: "preview",
+    outputCount: 1,
+    aspectRatio: "3:4",
+    resolution: "768x1024",
+    createdAt: "2026-07-28T00:01:00.000Z",
+  });
+  store.close();
+
+  const reopened = createSqliteStore({ dbPath, initialCredits: 10 });
+  const promptMatches = reopened.listTasks(user.id, new URLSearchParams({ q: "lemon", status: "completed" }));
+  assert.equal(promptMatches.pagination.total, 1);
+  assert.equal(promptMatches.records[0].id, "task-history-1");
+  assert.equal(promptMatches.records[0].prompt, "Create a lemon queen card");
+  assert.deepEqual(promptMatches.records[0].referenceImages, ["https://cdn.example.com/reference.jpg"]);
+  assert.equal(promptMatches.records[0].model, "gpt-image-2-edit");
+  assert.equal(promptMatches.records[0].outputCount, 2);
+  assert.equal(promptMatches.records[0].aspectRatio, "1:1");
+  assert.equal(promptMatches.records[0].resolution, "1024x1024");
+
+  const modelMatches = reopened.listTasks(user.id, new URLSearchParams({ q: "gpt-image-2-edit" }));
+  assert.equal(modelMatches.pagination.total, 1);
+
+  const templateMatches = reopened.listTasks(user.id, new URLSearchParams({ q: "tpl-other" }));
+  assert.equal(templateMatches.pagination.total, 1);
+  assert.equal(templateMatches.records[0].id, "task-history-2");
+
+  const firstPage = reopened.listTasks(user.id, new URLSearchParams({ page: "1", limit: "1" }));
+  assert.equal(firstPage.records.length, 1);
+  assert.equal(firstPage.records[0].id, "task-history-2");
+  assert.equal(firstPage.pagination.total, 2);
+  assert.equal(firstPage.pagination.totalPages, 2);
+  reopened.close();
 });

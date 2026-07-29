@@ -10,12 +10,16 @@ independent source product.
 - `GET /api/miniapp/auth/me`
 - `POST /api/miniapp/auth/logout`
 - `GET /api/miniapp/credit/balance`
+- `GET /api/miniapp/credit/history`
 - `POST /api/miniapp/uploads/reference-image`
 - `GET /api/miniapp/templates`
 - `GET /api/miniapp/templates/:id`
 - `POST /api/miniapp/templates/:id/generate`
 - `POST /api/miniapp/image-generations`
+- `GET /api/miniapp/image-generations`
+- `POST /api/miniapp/image-generations/estimate`
 - `GET /api/miniapp/image-generations/:taskId`
+- `POST /api/miniapp/image-generations/:taskId/regenerate`
 
 Accounts are standalone WeChat accounts keyed by:
 
@@ -77,6 +81,61 @@ It stores standalone WeChat users, credit transactions, generation tasks, and a
 synced copy of the GitHub templates. The first `/api/miniapp/templates` or
 generation request syncs templates into the local database; later pagination and
 search read from SQLite.
+
+Generation tasks persist the reusable request metadata needed by the native
+mini program history/result pages: `prompt`, `topic`, `referenceImages`,
+`model`, `outputCount`, `aspectRatio`, and `resolution`.
+
+Task history is available at:
+
+```text
+GET /api/miniapp/image-generations?page=1&limit=20&q=keyword&status=completed
+```
+
+`q` searches prompt, topic, model, and template id. The response shape is:
+
+```json
+{
+  "success": true,
+  "data": {
+    "records": [],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 0,
+      "totalPages": 1
+    }
+  }
+}
+```
+
+Credit history uses the same paginated shape:
+
+```text
+GET /api/miniapp/credit/history?page=1&limit=20
+```
+
+Generation cost estimation is intentionally simple in this standalone backend:
+
+```text
+POST /api/miniapp/image-generations/estimate
+```
+
+with JSON like:
+
+```json
+{
+  "model": "gpt-image-2-edit",
+  "outputCount": 2
+}
+```
+
+It returns `requestedCredits = outputCount * 1`. Regeneration clones the
+original task metadata into a new pending task:
+
+```text
+POST /api/miniapp/image-generations/:taskId/regenerate
+```
 
 Reference uploads are stored under:
 

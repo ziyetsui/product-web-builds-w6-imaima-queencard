@@ -55,17 +55,50 @@ function createMemoryStore(options = {}) {
     return user.balance;
   }
 
-  function listCreditTransactions(userId) {
-    return creditTransactions.filter((entry) => entry.userId === userId);
+  function listCreditTransactions(userId, options = new URLSearchParams()) {
+    const records = creditTransactions
+      .filter((entry) => entry.userId === userId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    return paginateRecords(records, options);
   }
 
   function createTask(task) {
-    tasks.set(task.id, task);
-    return task;
+    const createdAt = task.createdAt || new Date().toISOString();
+    const saved = {
+      ...task,
+      id: task.id,
+      taskId: task.id,
+      status: task.status || "completed",
+      images: Array.isArray(task.images) ? task.images : [],
+      referenceImages: Array.isArray(task.referenceImages) ? task.referenceImages : [],
+      outputCount: positiveInt(task.outputCount, 1),
+      createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+    tasks.set(saved.id, saved);
+    return saved;
   }
 
   function getTask(id) {
     return tasks.get(id) || null;
+  }
+
+  function listTasks(ownerId, options = new URLSearchParams()) {
+    const status = String(options.get("status") || "").trim();
+    const q = String(options.get("q") || "").trim().toLowerCase();
+    let records = Array.from(tasks.values())
+      .filter((task) => task.ownerId === ownerId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    if (status) records = records.filter((task) => task.status === status);
+    if (q) {
+      records = records.filter((task) => [
+        task.prompt,
+        task.topic,
+        task.model,
+        task.templateId,
+      ].filter(Boolean).join("\n").toLowerCase().includes(q));
+    }
+    return paginateRecords(records, options);
   }
 
   function syncTemplates(records = []) {
@@ -117,6 +150,7 @@ function createMemoryStore(options = {}) {
     listCreditTransactions,
     createTask,
     getTask,
+    listTasks,
     syncTemplates,
     listTemplates,
     getTemplate,
@@ -185,12 +219,29 @@ function createSqliteStore(options = {}) {
     return balanceAfter;
   }
 
-  function listCreditTransactions(userId) {
-    return db.prepare(`
+  function listCreditTransactions(userId, options = new URLSearchParams()) {
+    const page = positiveInt(options.get("page"), 1);
+    const limit = Math.min(positiveInt(options.get("limit"), 20), 100);
+    const offset = (page - 1) * limit;
+    const total = db.prepare(`
+      SELECT COUNT(*) AS total FROM credit_transactions
+      WHERE user_id = ?
+    `).get(userId).total;
+    const rows = db.prepare(`
       SELECT * FROM credit_transactions
       WHERE user_id = ?
       ORDER BY created_at DESC, id DESC
-    `).all(userId).map(rowToCreditTransaction);
+      LIMIT ? OFFSET ?
+    `).all(userId, limit, offset);
+    return {
+      records: rows.map(rowToCreditTransaction),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
   }
 
   function createTask(task) {
@@ -198,9 +249,11 @@ function createSqliteStore(options = {}) {
     db.prepare(`
       INSERT INTO generation_tasks (
         id, owner_id, status, images_json, template_id, provider,
-        provider_task_id, mode, raw_provider_result_json, created_at, updated_at
+        provider_task_id, mode, prompt, topic, reference_images_json, model,
+        output_count, aspect_ratio, resolution, raw_provider_result_json,
+        created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         owner_id = excluded.owner_id,
         status = excluded.status,
@@ -209,6 +262,13 @@ function createSqliteStore(options = {}) {
         provider = excluded.provider,
         provider_task_id = excluded.provider_task_id,
         mode = excluded.mode,
+        prompt = excluded.prompt,
+        topic = excluded.topic,
+        reference_images_json = excluded.reference_images_json,
+        model = excluded.model,
+        output_count = excluded.output_count,
+        aspect_ratio = excluded.aspect_ratio,
+        resolution = excluded.resolution,
         raw_provider_result_json = excluded.raw_provider_result_json,
         updated_at = excluded.updated_at
     `).run(
@@ -220,6 +280,13 @@ function createSqliteStore(options = {}) {
       task.provider || null,
       task.providerTaskId || null,
       task.mode || null,
+      task.prompt || null,
+      task.topic || null,
+      stringify(task.referenceImages || []),
+      task.model || null,
+      positiveInt(task.outputCount, 1),
+      task.aspectRatio || null,
+      task.resolution || null,
       stringify(task.rawProviderResult || null),
       createdAt,
       new Date().toISOString(),
@@ -230,6 +297,46 @@ function createSqliteStore(options = {}) {
   function getTask(id) {
     const row = db.prepare("SELECT * FROM generation_tasks WHERE id = ?").get(id);
     return row ? rowToTask(row) : null;
+  }
+
+  function listTasks(ownerId, options = new URLSearchParams()) {
+    const page = positiveInt(options.get("page"), 1);
+    const limit = Math.min(positiveInt(options.get("limit"), 20), 100);
+    const offset = (page - 1) * limit;
+    const filters = ["owner_id = ?"];
+    const values = [ownerId];
+
+    const status = String(options.get("status") || "").trim();
+    if (status) {
+      filters.push("status = ?");
+      values.push(status);
+    }
+
+    const q = String(options.get("q") || "").trim();
+    if (q) {
+      filters.push("(prompt LIKE ? OR topic LIKE ? OR model LIKE ? OR template_id LIKE ?)");
+      const like = `%${q}%`;
+      values.push(like, like, like, like);
+    }
+
+    const where = `WHERE ${filters.join(" AND ")}`;
+    const total = db.prepare(`SELECT COUNT(*) AS total FROM generation_tasks ${where}`).get(...values).total;
+    const rows = db.prepare(`
+      SELECT * FROM generation_tasks
+      ${where}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all(...values, limit, offset);
+
+    return {
+      records: rows.map(rowToTask),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
   }
 
   function syncTemplates(records = []) {
@@ -351,6 +458,7 @@ function createSqliteStore(options = {}) {
     listCreditTransactions,
     createTask,
     getTask,
+    listTasks,
     syncTemplates,
     listTemplates,
     getTemplate,
@@ -391,6 +499,13 @@ function migrate(db) {
       provider TEXT,
       provider_task_id TEXT,
       mode TEXT,
+      prompt TEXT,
+      topic TEXT,
+      reference_images_json TEXT NOT NULL DEFAULT '[]',
+      model TEXT,
+      output_count INTEGER,
+      aspect_ratio TEXT,
+      resolution TEXT,
       raw_provider_result_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -415,6 +530,18 @@ function migrate(db) {
       updated_at TEXT NOT NULL
     );
   `);
+  ensureColumn(db, "generation_tasks", "prompt", "TEXT");
+  ensureColumn(db, "generation_tasks", "topic", "TEXT");
+  ensureColumn(db, "generation_tasks", "reference_images_json", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(db, "generation_tasks", "model", "TEXT");
+  ensureColumn(db, "generation_tasks", "output_count", "INTEGER");
+  ensureColumn(db, "generation_tasks", "aspect_ratio", "TEXT");
+  ensureColumn(db, "generation_tasks", "resolution", "TEXT");
+}
+
+function ensureColumn(db, table, column, definition) {
+  const exists = db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+  if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function positiveInt(value, fallback) {
@@ -437,6 +564,21 @@ function parseJson(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function paginateRecords(records, options = new URLSearchParams()) {
+  const page = positiveInt(options.get("page"), 1);
+  const limit = Math.min(positiveInt(options.get("limit"), 20), 100);
+  const start = (page - 1) * limit;
+  return {
+    records: records.slice(start, start + limit),
+    pagination: {
+      page,
+      limit,
+      total: records.length,
+      totalPages: Math.max(1, Math.ceil(records.length / limit)),
+    },
+  };
 }
 
 function rowToUser(row) {
@@ -475,6 +617,13 @@ function rowToTask(row) {
     provider: row.provider,
     providerTaskId: row.provider_task_id,
     mode: row.mode,
+    prompt: row.prompt || "",
+    topic: row.topic || "",
+    referenceImages: parseJson(row.reference_images_json, []),
+    model: row.model || "",
+    outputCount: row.output_count || 1,
+    aspectRatio: row.aspect_ratio || "",
+    resolution: row.resolution || "",
     rawProviderResult: parseJson(row.raw_provider_result_json, null),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
