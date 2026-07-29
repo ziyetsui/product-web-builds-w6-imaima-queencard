@@ -280,23 +280,40 @@
 
 .feed-refresh,
 .small-feed-button {
-  height: 66rpx;
-  padding: 0 22rpx;
+  height: 56rpx;
+  padding: 0 18rpx;
   border: 4rpx solid #0d0d0d;
   border-radius: 8px;
   background: #e7db4c;
   color: #0d0d0d;
-  font-size: 24rpx;
+  font-size: 22rpx;
   font-weight: 900;
-  box-shadow: 5rpx 5rpx 0 rgba(13, 13, 13, 0.14);
+  box-shadow: 4rpx 4rpx 0 rgba(13, 13, 13, 0.14);
 }
 
 .template-feed {
+  padding-top: 54rpx;
+  padding-bottom: 54rpx;
   background: #ace2df;
 }
 
+.template-feed .section-head {
+  align-items: center;
+}
+
+.template-feed .section-title {
+  margin-bottom: 0;
+  font-size: 40rpx;
+  line-height: 1.16;
+}
+
+.template-feed .section-kicker {
+  margin-bottom: 8rpx;
+  font-size: 19rpx;
+}
+
 .feed-empty {
-  padding: 30rpx;
+  padding: 24rpx;
   border: 4rpx solid #0d0d0d;
   border-radius: 8px;
   background: #fff;
@@ -322,24 +339,24 @@
 .template-controls {
   display: flex;
   flex-direction: column;
-  gap: 16rpx;
-  margin: 28rpx 0 24rpx;
+  gap: 10rpx;
+  margin: 18rpx 0 18rpx;
 }
 
 .template-search {
-  height: 78rpx;
-  padding: 0 22rpx;
-  border: 4rpx solid #0d0d0d;
+  height: 62rpx;
+  padding: 0 18rpx;
+  border: 3rpx solid #0d0d0d;
   border-radius: 8px;
   background: #fff;
-  box-shadow: 6rpx 6rpx 0 rgba(13, 13, 13, 0.12);
+  box-shadow: 4rpx 4rpx 0 rgba(13, 13, 13, 0.12);
 }
 
 .template-search input {
   width: 100%;
-  height: 78rpx;
+  height: 62rpx;
   color: #0d0d0d;
-  font-size: 26rpx;
+  font-size: 24rpx;
   font-weight: 800;
 }
 
@@ -351,7 +368,7 @@
 .filter-row,
 .sort-row {
   display: flex;
-  gap: 12rpx;
+  gap: 10rpx;
 }
 
 .filter-row {
@@ -362,21 +379,21 @@
 .filter-chip,
 .sort-chip {
   flex: none;
-  height: 62rpx;
-  min-width: 118rpx;
-  padding: 0 18rpx;
-  border: 4rpx solid #0d0d0d;
+  height: 52rpx;
+  min-width: 100rpx;
+  padding: 0 14rpx;
+  border: 3rpx solid #0d0d0d;
   border-radius: 8px;
   background: #fff;
   color: #0d0d0d;
-  font-size: 23rpx;
+  font-size: 21rpx;
   font-weight: 900;
 }
 
 .filter-chip.active,
 .sort-chip.active {
   background: #ef724f;
-  box-shadow: 5rpx 5rpx 0 rgba(13, 13, 13, 0.14);
+  box-shadow: 4rpx 4rpx 0 rgba(13, 13, 13, 0.14);
 }
 
 .sort-chip {
@@ -390,10 +407,13 @@
 .template-list {
   display: flex;
   flex-direction: column;
-  gap: 22rpx;
+  gap: 16rpx;
 }
 
 .template-card {
+  display: grid;
+  grid-template-columns: 220rpx minmax(0, 1fr);
+  min-height: 220rpx;
   overflow: hidden;
   background: #fff;
 }
@@ -401,7 +421,8 @@
 .template-image {
   display: block;
   width: 100%;
-  height: 420rpx;
+  height: 100%;
+  min-height: 220rpx;
   background: #f6e0db;
 }
 
@@ -410,65 +431,70 @@
   align-items: center;
   justify-content: center;
   color: rgba(13, 13, 13, 0.26);
-  font-size: 70rpx;
+  font-size: 48rpx;
   font-weight: 900;
 }
 
 .template-copy {
-  padding: 24rpx;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 16rpx;
 }
 
 .template-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 12rpx;
-  margin-bottom: 16rpx;
+  gap: 8rpx;
+  margin-bottom: 10rpx;
 }
 
 .template-meta text {
-  padding: 7rpx 12rpx;
-  border: 4rpx solid #0d0d0d;
+  padding: 5rpx 9rpx;
+  border: 3rpx solid #0d0d0d;
   border-radius: 8px;
   background: #e7db4c;
   color: #0d0d0d;
-  font-size: 20rpx;
+  font-size: 18rpx;
   font-weight: 900;
 }
 
 .template-title {
   display: block;
-  margin-bottom: 12rpx;
+  margin-bottom: 8rpx;
   color: #0d0d0d;
-  font-size: 34rpx;
+  font-size: 26rpx;
   font-weight: 900;
-  line-height: 1.18;
+  line-height: 1.22;
 }
 
 .template-desc {
   display: block;
-  margin-bottom: 20rpx;
+  flex: 1;
+  min-height: 34rpx;
+  margin-bottom: 12rpx;
   color: rgba(13, 13, 13, 0.62);
-  font-size: 24rpx;
+  font-size: 20rpx;
   font-weight: 700;
-  line-height: 1.4;
+  line-height: 1.34;
 }
 
 .template-button {
   width: 100%;
-  height: 76rpx;
-  border: 4rpx solid #0d0d0d;
+  height: 56rpx;
+  border: 3rpx solid #0d0d0d;
   border-radius: 8px;
   background: #ef724f;
   color: #0d0d0d;
-  font-size: 27rpx;
+  font-size: 22rpx;
   font-weight: 900;
-  box-shadow: 6rpx 6rpx 0 rgba(13, 13, 13, 0.14);
+  box-shadow: 4rpx 4rpx 0 rgba(13, 13, 13, 0.14);
 }
 
 .feed-loading {
-  padding: 20rpx;
+  padding: 14rpx;
   color: rgba(13, 13, 13, 0.56);
-  font-size: 24rpx;
+  font-size: 22rpx;
   font-weight: 800;
   text-align: center;
 }

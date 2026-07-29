@@ -66,6 +66,7 @@
             wx:for="{{templateCategories}}"
             wx:key="label"
             class="filter-chip {{item.active ? 'active' : ''}}"
+            data-key="{{item.key}}"
             data-value="{{item.value}}"
             data-scenario-category="{{item.scenarioCategory}}"
             bindtap="selectTemplateCategory"

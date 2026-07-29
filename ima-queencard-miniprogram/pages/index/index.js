@@ -3,9 +3,8 @@ var api = require("../../services/api.js");
 var templatesService = require("../../services/templates.js");
 
 var TEMPLATE_CATEGORIES = [
-  { label: "全部图片", value: "image", scenarioCategory: "" },
-  { label: "社媒图", value: "image", scenarioCategory: "Social Graphics" },
-  { label: "全部类型", value: "", scenarioCategory: "" },
+  { label: "全部", key: "all", value: "", scenarioCategory: "" },
+  { label: "社媒图", key: "social", value: "image", scenarioCategory: "" },
 ];
 
 var TEMPLATE_SORT_OPTIONS = [
@@ -31,13 +30,14 @@ function appendTemplates(current, next) {
   return result;
 }
 
-function markCategoryOptions(selectedCategory, selectedScenarioCategory) {
+function markCategoryOptions(selectedKey) {
   return TEMPLATE_CATEGORIES.map(function (item) {
     return {
       label: item.label,
+      key: item.key,
       value: item.value,
       scenarioCategory: item.scenarioCategory,
-      active: item.value === selectedCategory && item.scenarioCategory === selectedScenarioCategory,
+      active: item.key === selectedKey,
     };
   });
 }
@@ -62,10 +62,11 @@ Page({
     apiReady: api.isConfigured(),
     templateReady: api.isConfigured() || templatesService.isConfigured(),
     templateSearch: "",
+    templateCategoryKey: "social",
     templateCategory: "image",
     templateScenarioCategory: "",
     templateSort: "default",
-    templateCategories: markCategoryOptions("image", ""),
+    templateCategories: markCategoryOptions("social"),
     templateSortOptions: markSortOptions("default"),
     templates: [],
     templatePage: 1,
@@ -200,13 +201,15 @@ Page({
   },
 
   selectTemplateCategory: function (event) {
+    var key = event.currentTarget.dataset.key || "all";
     var category = event.currentTarget.dataset.value || "";
     var scenarioCategory = event.currentTarget.dataset.scenarioCategory || "";
-    if (category === this.data.templateCategory && scenarioCategory === this.data.templateScenarioCategory) return;
+    if (key === this.data.templateCategoryKey) return;
     this.setData({
+      templateCategoryKey: key,
       templateCategory: category,
       templateScenarioCategory: scenarioCategory,
-      templateCategories: markCategoryOptions(category, scenarioCategory),
+      templateCategories: markCategoryOptions(key),
       templatePage: 1,
       templateHasMore: true,
     });
