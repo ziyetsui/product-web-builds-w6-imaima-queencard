@@ -324,7 +324,7 @@ function createOpenAiProvider(env, fetchImpl) {
           authorization: "Bearer " + apiKey,
         },
         body: JSON.stringify({
-          model: requestedModel(input, env.OPENAI_IMAGE_MODEL || "gpt-image-1"),
+          model: requestedModel(input, env.OPENAI_IMAGE_MODEL || "gpt-image-2"),
           prompt: input.prompt || input.template.prompt,
           size: env.OPENAI_IMAGE_SIZE || "1024x1536",
           n: Number(env.OPENAI_IMAGE_COUNT || input.outputNumber || 1),

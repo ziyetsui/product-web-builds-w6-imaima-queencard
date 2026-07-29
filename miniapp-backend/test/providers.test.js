@@ -109,6 +109,32 @@ test("gptproto provider calls the OpenAI-compatible image endpoint with the requ
   assert.deepEqual(result.images, ["https://cdn.example.com/generated.png"]);
 });
 
+test("openai provider defaults to GPT Image 2 when no model is requested", async () => {
+  let requestBody = null;
+  const provider = createImageProvider({
+    env: {
+      MINIAPP_IMAGE_PROVIDER: "openai",
+      OPENAI_IMAGE_API_KEY: "test-key",
+    },
+    fetch: async (url, options) => {
+      assert.equal(String(url), "https://api.openai.com/v1/images/generations");
+      requestBody = JSON.parse(options.body);
+      return Response.json({
+        data: [{ url: "https://cdn.example.com/openai.png" }],
+      });
+    },
+  });
+
+  const result = await provider.generate({
+    template,
+    prompt: template.prompt,
+    request: {},
+  });
+
+  assert.equal(requestBody.model, "gpt-image-2");
+  assert.deepEqual(result.images, ["https://cdn.example.com/openai.png"]);
+});
+
 test("gptproto provider routes Doubao Seedream through the V3 image-edit endpoint", async () => {
   let requestBody = null;
   const provider = createImageProvider({

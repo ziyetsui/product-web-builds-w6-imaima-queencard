@@ -123,6 +123,27 @@ if (/wx\.redirectTo\(\s*{\s*url:\s*["']\/pages\/generate\/index["']/.test(result
   fail("result page must navigateBack to the previous generate page instead of redirecting to a blank generate page");
 }
 
+const generatePageSource = fs.readFileSync(path.join(root, "pages/generate/index.js"), "utf8");
+if (!/DEFAULT_MODEL_LABEL\s*=\s*"GPT Image 2"/.test(generatePageSource)) {
+  fail("generate page default model label constant must be GPT Image 2");
+}
+
+if (!/label:\s*DEFAULT_MODEL_LABEL\s*,\s*value:\s*DEFAULT_MODEL_VALUE/.test(generatePageSource)) {
+  fail("generate page must expose GPT Image 2 as the miniapp default model option");
+}
+
+if (!/modelLabel:\s*DEFAULT_MODEL_LABEL/.test(generatePageSource)) {
+  fail("generate page default model label must be GPT Image 2");
+}
+
+if (!/DEFAULT_MODEL_VALUE\s*=\s*"gpt-image-2-edit"/.test(generatePageSource)) {
+  fail("generate page must centralize the default model as gpt-image-2-edit");
+}
+
+if (/modelIndexFor\(page\.data\.models,\s*seed\.model\)/.test(generatePageSource)) {
+  fail("template seed model must not override the miniapp GPT Image 2 default");
+}
+
 const envSource = fs.readFileSync(path.join(root, "config/env.js"), "utf8");
 if (/APP_SECRET|OPENAI_API_KEY|GPTPROTO_API_KEY|FIREBASE_PRIVATE_KEY/.test(envSource)) {
   fail("config/env.js must not contain server-side secrets");

@@ -3,6 +3,9 @@ var api = require("../../services/api.js");
 var auth = require("../../services/auth.js");
 var templatesService = require("../../services/templates.js");
 
+var DEFAULT_MODEL_VALUE = "gpt-image-2-edit";
+var DEFAULT_MODEL_LABEL = "GPT Image 2";
+
 function trim(value) {
   return String(value || "").replace(/^\s+|\s+$/g, "");
 }
@@ -85,11 +88,13 @@ function userDesc(user) {
 
 function modelIndexFor(models, value) {
   var i = 0;
-  if (!value) return 0;
+  var fallbackIndex = 0;
+  var target = value || DEFAULT_MODEL_VALUE;
   for (i = 0; i < models.length; i += 1) {
-    if (models[i].value === value) return i;
+    if (models[i].value === DEFAULT_MODEL_VALUE) fallbackIndex = i;
+    if (models[i].value === target) return i;
   }
-  return 0;
+  return fallbackIndex;
 }
 
 Page({
@@ -104,13 +109,13 @@ Page({
     topic: "",
     prompt: landing.hero.samplePrompt,
     models: [
+      { label: DEFAULT_MODEL_LABEL, value: DEFAULT_MODEL_VALUE },
       { label: "Doubao Seedream", value: "doubao-seedream-5-edit" },
       { label: "Seedream", value: "seedream-5-edit" },
-      { label: "GPT Image", value: "gpt-image-2-edit" },
       { label: "Gemini Flash", value: "gemini-3.1-flash-edit" }
     ],
     modelIndex: 0,
-    modelLabel: "Doubao Seedream",
+    modelLabel: DEFAULT_MODEL_LABEL,
     outputCounts: [1, 2, 4],
     countIndex: 0,
     outputCountLabel: "1 张",
@@ -148,8 +153,7 @@ Page({
 
     templatesService.getTemplate(templateId)
       .then(function (template) {
-        var seed = template.seed || {};
-        var modelIndex = modelIndexFor(page.data.models, seed.model);
+        var modelIndex = modelIndexFor(page.data.models, DEFAULT_MODEL_VALUE);
         page.setData({
           templateTitle: template.title || "",
           referenceImagePath: firstReferenceImage(template),
