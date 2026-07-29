@@ -225,30 +225,74 @@ function createApp(options = {}) {
     return publicTemplateAssets(template, env, request);
   }
 
-  async function generateAndCreateTask(input) {
-    const generation = await imageProvider.generate({
-      template: input.template,
-      prompt: input.body.prompt || input.template.prompt,
-      referenceImages: input.body.referenceImages || input.template.referenceImages || [],
-      outputNumber: input.body.outputNumber || input.body.outputCount || 1,
-      user: input.user,
-      request: input.body,
-    });
+  async function runGenerationTask(input, id) {
+    try {
+      const generation = await imageProvider.generate({
+        template: input.template,
+        prompt: input.body.prompt || input.template.prompt,
+        referenceImages: input.body.referenceImages || input.template.referenceImages || [],
+        outputNumber: input.body.outputNumber || input.body.outputCount || 1,
+        user: input.user,
+        request: input.body,
+      });
+      store.createTask({
+        id,
+        taskId: id,
+        ownerId: input.user.id,
+        status: generation.status || "completed",
+        images: generation.images || [],
+        templateId: input.template.id,
+        provider: generation.provider || imageProvider.name || "unknown",
+        providerTaskId: generation.providerTaskId || "",
+        mode: getEnv(env, "MINIAPP_IMAGE_PROVIDER", getEnv(env, "MINIAPP_GENERATION_MODE", "preview")),
+        rawProviderResult: generation.raw || null,
+        createdAt: input.createdAt,
+      });
+    } catch (error) {
+      store.createTask({
+        id,
+        taskId: id,
+        ownerId: input.user.id,
+        status: "failed",
+        images: [],
+        templateId: input.template.id,
+        provider: imageProvider.name || "unknown",
+        providerTaskId: "",
+        mode: getEnv(env, "MINIAPP_IMAGE_PROVIDER", getEnv(env, "MINIAPP_GENERATION_MODE", "preview")),
+        rawProviderResult: {
+          error: error.message || "Image generation failed",
+        },
+        createdAt: input.createdAt,
+      });
+    }
+  }
+
+  function createGenerationTask(input) {
     store.charge(input.user.id, 1, input.reason);
     const id = taskId();
-    return store.createTask({
+    const createdAt = new Date().toISOString();
+    const task = store.createTask({
       id,
       taskId: id,
       ownerId: input.user.id,
-      status: generation.status || "completed",
-      images: generation.images || [],
+      status: "pending",
+      images: [],
       templateId: input.template.id,
-      provider: generation.provider || imageProvider.name || "unknown",
-      providerTaskId: generation.providerTaskId || "",
+      provider: imageProvider.name || "unknown",
+      providerTaskId: "",
       mode: getEnv(env, "MINIAPP_IMAGE_PROVIDER", getEnv(env, "MINIAPP_GENERATION_MODE", "preview")),
-      rawProviderResult: generation.raw || null,
-      createdAt: new Date().toISOString(),
+      rawProviderResult: {
+        request: input.body,
+      },
+      createdAt,
     });
+    setTimeout(() => {
+      runGenerationTask({
+        ...input,
+        createdAt,
+      }, id);
+    }, 0);
+    return task;
   }
 
   async function handle(request) {
@@ -348,7 +392,7 @@ function createApp(options = {}) {
         const template = await getTemplate(templateId, request);
         if (!template) return json({ success: false, error: "Template not found" }, 404);
 
-        const task = await generateAndCreateTask({
+        const task = createGenerationTask({
           user,
           template,
           body,
@@ -379,7 +423,7 @@ function createApp(options = {}) {
         };
         if (!template) return json({ success: false, error: "Template not found" }, 404);
         if (!body.prompt && !template.prompt) return json({ success: false, error: "Missing prompt" }, 400);
-        const task = await generateAndCreateTask({
+        const task = createGenerationTask({
           user,
           template,
           body: {
@@ -398,7 +442,13 @@ function createApp(options = {}) {
         if (!task || task.ownerId !== payload.sub) {
           return json({ success: false, error: "Task not found" }, 404);
         }
-        return json({ success: true, data: task });
+        return json({
+          success: true,
+          data: {
+            ...task,
+            error: task.rawProviderResult && task.rawProviderResult.error ? task.rawProviderResult.error : "",
+          },
+        });
       }
 
       return json({ success: false, error: "Not found" }, 404);

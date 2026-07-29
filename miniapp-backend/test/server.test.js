@@ -14,6 +14,28 @@ function tempDbPath() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ima-app-db-")), "miniapp.sqlite");
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolveFn, rejectFn) => {
+    resolve = resolveFn;
+    reject = rejectFn;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitForTask(app, taskId, auth, status = "completed") {
+  let last = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    last = await readJson(await app.fetch(new Request(`http://local/api/miniapp/image-generations/${taskId}`, {
+      headers: { Authorization: auth },
+    })));
+    if (last.data.status === status) return last;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return last;
+}
+
 test("supports standalone login, balance, templates, generation task and result", async () => {
   const app = createApp({
     env: {
@@ -83,9 +105,7 @@ test("supports standalone login, balance, templates, generation task and result"
   assert.equal(generated.success, true);
   assert.match(generated.data.taskId, /^task_/);
 
-  const task = await readJson(await app.fetch(new Request(`http://local/api/miniapp/image-generations/${generated.data.taskId}`, {
-    headers: { Authorization: auth },
-  })));
+  const task = await waitForTask(app, generated.data.taskId, auth);
   assert.equal(task.data.status, "completed");
   assert.deepEqual(task.data.images, ["https://cdn.example.com/template.png"]);
   app.close();
@@ -144,14 +164,74 @@ test("template generation delegates image creation to the configured provider", 
     headers: { Authorization: auth },
     body: JSON.stringify({ prompt: "Override prompt" }),
   })));
-  const task = await readJson(await app.fetch(new Request(`http://local/api/miniapp/image-generations/${generated.data.taskId}`, {
-    headers: { Authorization: auth },
-  })));
+  const task = await waitForTask(app, generated.data.taskId, auth);
 
   assert.equal(providerInput.template.id, "tpl-provider");
   assert.equal(providerInput.prompt, "Override prompt");
   assert.equal(task.data.provider, "test-provider");
   assert.deepEqual(task.data.images, ["https://cdn.example.com/generated.png"]);
+  app.close();
+});
+
+test("generic generation returns a pending task before slow image creation completes", async () => {
+  const generation = deferred();
+  let providerStarted = false;
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-test",
+      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
+      MINIAPP_INITIAL_CREDITS: "10",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+    imageProvider: {
+      name: "slow-provider",
+      generate: async () => {
+        providerStarted = true;
+        return generation.promise;
+      },
+    },
+  });
+
+  const login = await readJson(await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
+    method: "POST",
+    body: JSON.stringify({ code: "dev-code" }),
+  })));
+  const auth = `Bearer ${login.data.token}`;
+  const created = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({
+      prompt: "Generate slowly",
+      referenceImages: ["https://cdn.example.com/reference.png"],
+      outputCount: 1,
+    }),
+  })));
+
+  assert.equal(created.success, true);
+  assert.equal(created.data.status, "pending");
+  assert.equal(providerStarted, false);
+
+  const pendingTask = await readJson(await app.fetch(new Request(`http://local/api/miniapp/image-generations/${created.data.taskId}`, {
+    headers: { Authorization: auth },
+  })));
+  assert.equal(pendingTask.data.status, "pending");
+
+  generation.resolve({
+    provider: "slow-provider",
+    status: "completed",
+    images: ["https://cdn.example.com/generated.png"],
+    raw: { ok: true },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const completedTask = await readJson(await app.fetch(new Request(`http://local/api/miniapp/image-generations/${created.data.taskId}`, {
+    headers: { Authorization: auth },
+  })));
+  assert.equal(providerStarted, true);
+  assert.equal(completedTask.data.status, "completed");
+  assert.deepEqual(completedTask.data.images, ["https://cdn.example.com/generated.png"]);
   app.close();
 });
 
@@ -311,9 +391,7 @@ test("uploads a reference image and creates a generic generation task", async ()
       outputCount: 1,
     }),
   })));
-  const task = await readJson(await app.fetch(new Request(`http://local/api/miniapp/image-generations/${generated.data.taskId}`, {
-    headers: { Authorization: auth },
-  })));
+  const task = await waitForTask(app, generated.data.taskId, auth);
 
   assert.equal(providerInput.prompt, "Generate with uploaded reference");
   assert.deepEqual(providerInput.referenceImages, [uploaded.data.url]);
