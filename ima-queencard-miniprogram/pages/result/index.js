@@ -187,7 +187,14 @@ Page({
   },
 
   createAnother: function () {
-    wx.redirectTo({
+    this.stopPolling();
+    if (typeof getCurrentPages === "function" && getCurrentPages().length > 1) {
+      wx.navigateBack({
+        delta: 1,
+      });
+      return;
+    }
+    wx.reLaunch({
       url: "/pages/generate/index",
     });
   },

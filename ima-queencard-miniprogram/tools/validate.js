@@ -118,6 +118,11 @@ if (wxml.includes("href=") || wxml.includes("<a ")) {
   fail("WXML should not contain web anchor tags");
 }
 
+const resultPageSource = fs.readFileSync(path.join(root, "pages/result/index.js"), "utf8");
+if (/wx\.redirectTo\(\s*{\s*url:\s*["']\/pages\/generate\/index["']/.test(resultPageSource)) {
+  fail("result page must navigateBack to the previous generate page instead of redirecting to a blank generate page");
+}
+
 const envSource = fs.readFileSync(path.join(root, "config/env.js"), "utf8");
 if (/APP_SECRET|OPENAI_API_KEY|GPTPROTO_API_KEY|FIREBASE_PRIVATE_KEY/.test(envSource)) {
   fail("config/env.js must not contain server-side secrets");
