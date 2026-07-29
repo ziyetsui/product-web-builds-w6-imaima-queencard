@@ -360,34 +360,34 @@
   font-weight: 800;
 }
 
-.filter-scroll {
-  width: 100%;
-  white-space: nowrap;
-}
-
 .filter-row,
 .sort-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 10rpx;
 }
 
 .filter-row {
-  width: max-content;
-  padding-right: 4rpx;
+  width: 100%;
 }
 
 .filter-chip,
 .sort-chip {
-  flex: none;
-  height: 52rpx;
-  min-width: 100rpx;
-  padding: 0 14rpx;
+  height: 48rpx;
+  min-width: 0;
+  margin: 0;
+  padding: 0 8rpx;
   border: 3rpx solid #0d0d0d;
   border-radius: 8px;
   background: #fff;
   color: #0d0d0d;
-  font-size: 21rpx;
+  font-size: 20rpx;
   font-weight: 900;
+  line-height: 42rpx;
+}
+
+.filter-chip {
+  flex: 1 1 calc((100% - 20rpx) / 3);
 }
 
 .filter-chip.active,
@@ -397,6 +397,7 @@
 }
 
 .sort-chip {
+  flex: 1 1 calc((100% - 10rpx) / 2);
   background: #f6e0db;
 }
 

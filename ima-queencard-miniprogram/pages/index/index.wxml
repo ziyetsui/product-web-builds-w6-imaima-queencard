@@ -60,20 +60,18 @@
         />
       </view>
 
-      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="filter-scroll">
-        <view class="filter-row">
-          <button
-            wx:for="{{templateCategories}}"
-            wx:key="label"
-            class="filter-chip {{item.active ? 'active' : ''}}"
-            data-key="{{item.key}}"
-            data-value="{{item.value}}"
-            data-scenario-category="{{item.scenarioCategory}}"
-            data-hot-only="{{item.hotOnly}}"
-            bindtap="selectTemplateCategory"
-          >{{item.label}}</button>
-        </view>
-      </scroll-view>
+      <view class="filter-row">
+        <button
+          wx:for="{{templateCategories}}"
+          wx:key="label"
+          class="filter-chip {{item.active ? 'active' : ''}}"
+          data-key="{{item.key}}"
+          data-value="{{item.value}}"
+          data-scenario-category="{{item.scenarioCategory}}"
+          data-hot-only="{{item.hotOnly}}"
+          bindtap="selectTemplateCategory"
+        >{{item.label}}</button>
+      </view>
 
       <view class="sort-row">
         <button
