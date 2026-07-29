@@ -74,16 +74,20 @@ test("gptproto provider requires GPTPROTO_API_KEY before it can run", async () =
   );
 });
 
-test("gptproto provider forwards the requested model when present", async () => {
+test("gptproto provider calls the OpenAI-compatible image endpoint with the requested model", async () => {
   let requestBody = null;
+  let requestHeaders = null;
   const provider = createImageProvider({
     env: {
       MINIAPP_IMAGE_PROVIDER: "gptproto",
       GPTPROTO_API_KEY: "test-key",
+      GPTPROTO_IMAGE_ENDPOINT: "/api/v1/images/generations",
       GPTPROTO_IMAGE_MODEL: "fallback-model",
+      GPTPROTO_IMAGE_SIZE: "1024x1536",
     },
     fetch: async (url, options) => {
-      assert.equal(String(url), "https://gptproto.com/api/v1/images/generations");
+      assert.equal(String(url), "https://gptproto.com/v1/images/generations");
+      requestHeaders = options.headers;
       requestBody = JSON.parse(options.body);
       return Response.json({
         images: ["https://cdn.example.com/generated.png"],
@@ -95,10 +99,37 @@ test("gptproto provider forwards the requested model when present", async () => 
     template,
     prompt: template.prompt,
     request: {
-      model: "doubao-seedream-5-edit",
+      model: "gpt-image-2-edit",
     },
   });
 
-  assert.equal(requestBody.model, "doubao-seedream-5-edit");
+  assert.equal(requestHeaders.authorization, "test-key");
+  assert.equal(requestBody.model, "gpt-image-2");
+  assert.equal(requestBody.size, "1024x1536");
   assert.deepEqual(result.images, ["https://cdn.example.com/generated.png"]);
+});
+
+test("gptproto provider reports non-json upstream responses with endpoint context", async () => {
+  const provider = createImageProvider({
+    env: {
+      MINIAPP_IMAGE_PROVIDER: "gptproto",
+      GPTPROTO_API_KEY: "test-key",
+    },
+    fetch: async () => new Response("<!DOCTYPE html><html></html>", {
+      status: 404,
+      headers: {
+        "content-type": "text/html",
+      },
+    }),
+  });
+
+  await assert.rejects(
+    () => provider.generate({ template, prompt: template.prompt }),
+    (error) => {
+      assert.match(error.message, /GPTProto image generation returned non-JSON/);
+      assert.match(error.message, /\/v1\/images\/generations/);
+      assert.match(error.message, /404/);
+      return true;
+    }
+  );
 });

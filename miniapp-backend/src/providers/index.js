@@ -42,10 +42,45 @@ function normalizeImages(payload) {
   return result;
 }
 
+function parseJsonResponse(text, context) {
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const preview = text.replace(/\s+/g, " ").slice(0, 120);
+    throw new Error(`${context.provider} image generation returned non-JSON from ${context.endpoint} (${context.status}, ${context.contentType || "unknown content-type"}): ${preview}`);
+  }
+}
+
+function providerModelFor(model) {
+  switch (model) {
+    case "gemini-3.1-flash-edit":
+      return "gemini-3.1-flash-image-preview";
+    case "seedream-5-edit":
+    case "seedream-5-0-260128-edit":
+      return "seedream-5-0-260128";
+    case "doubao-seedream-5-edit":
+    case "doubao-seedream-5-0-260128-edit":
+      return "doubao-seedream-5-0-260128";
+    case "gpt-image":
+    case "gpt-image-2-all":
+    case "gpt-image-2-edit":
+      return "gpt-image-2";
+    default:
+      return model;
+  }
+}
+
 function requestedModel(input, fallback) {
   const request = input.request || {};
   const model = request.model || (input.template.seed && input.template.seed.model);
-  return String(model || fallback || "").trim();
+  return providerModelFor(String(model || fallback || "").trim());
+}
+
+function gptProtoEndpoint(env) {
+  const endpoint = String(env.GPTPROTO_IMAGE_ENDPOINT || "/v1/images/generations").trim() || "/v1/images/generations";
+  if (endpoint === "/api/v1/images/generations") return "/v1/images/generations";
+  return endpoint.startsWith("/") ? endpoint : "/" + endpoint;
 }
 
 function createPreviewProvider() {
@@ -106,7 +141,12 @@ function createOpenAiProvider(env, fetchImpl) {
         }),
       });
       const text = await response.text();
-      const payload = text ? JSON.parse(text) : {};
+      const payload = parseJsonResponse(text, {
+        provider: "OpenAI",
+        endpoint,
+        status: response.status,
+        contentType: response.headers.get("content-type"),
+      });
       if (!response.ok) {
         const message = payload.error && payload.error.message ? payload.error.message : text;
         throw new Error("OpenAI image generation failed: " + response.status + " " + message);
@@ -129,23 +169,29 @@ function createGptProtoProvider(env, fetchImpl) {
       if (!apiKey) throw serviceUnavailable("GPTPROTO_API_KEY is not configured");
 
       const baseUrl = String(env.GPTPROTO_BASE_URL || "https://gptproto.com").replace(/\/$/, "");
-      const endpoint = String(env.GPTPROTO_IMAGE_ENDPOINT || "/api/v1/images/generations");
+      const endpoint = gptProtoEndpoint(env);
       const response = await fetchImpl(baseUrl + endpoint, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: "Bearer " + apiKey,
+          authorization: apiKey,
         },
         body: JSON.stringify({
           model: requestedModel(input, env.GPTPROTO_IMAGE_MODEL || env.OPENAI_IMAGE_MODEL || "gpt-image-2"),
           prompt: input.prompt || input.template.prompt,
+          size: env.GPTPROTO_IMAGE_SIZE || env.OPENAI_IMAGE_SIZE || "1024x1536",
           referenceImages: input.referenceImages || input.template.referenceImages || [],
           templateId: input.template.id,
           outputNumber: Number(input.outputNumber || 1),
         }),
       });
       const text = await response.text();
-      const payload = text ? JSON.parse(text) : {};
+      const payload = parseJsonResponse(text, {
+        provider: "GPTProto",
+        endpoint,
+        status: response.status,
+        contentType: response.headers.get("content-type"),
+      });
       if (!response.ok) {
         const message = payload.error || payload.message || text;
         throw new Error("GPTProto image generation failed: " + response.status + " " + message);
