@@ -1,0 +1,53 @@
+<view class="page">
+  <view class="topbar">
+    <button class="icon-button" bindtap="refreshCredits">↻</button>
+    <view class="brand">
+      <text class="brand-main">ima ima</text>
+      <text class="brand-accent">积分</text>
+    </view>
+    <view class="status-dot {{apiReady ? 'ready' : 'offline'}}"></view>
+  </view>
+
+  <view class="balance-panel">
+    <text class="kicker">CREDIT BALANCE</text>
+    <text class="balance-number">{{balance}}</text>
+    <text class="balance-label">可用积分</text>
+    <view class="account-row">
+      <text>{{userLabel}}</text>
+      <button class="small-button pumpkin" bindtap="goPricing">购买积分</button>
+    </view>
+  </view>
+
+  <view wx:if="{{error}}" class="notice-card">
+    <text class="notice-title">读取失败</text>
+    <text class="notice-copy">{{error}}</text>
+    <button class="small-button lemon" bindtap="refreshCredits">重试</button>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">积分流水</text>
+      <text class="section-hint">{{records.length}} 条</text>
+    </view>
+
+    <view wx:if="{{records.length === 0 && !loading}}" class="empty-card">
+      <text class="empty-title">暂无积分记录</text>
+      <text class="empty-desc">生成消耗、充值和赠送积分会显示在这里。</text>
+    </view>
+
+    <view wx:else class="history-list">
+      <view wx:for="{{records}}" wx:key="id" class="history-item">
+        <view class="history-copy">
+          <text class="history-title">{{item.title}}</text>
+          <text class="history-desc">{{item.desc}}</text>
+          <text class="history-time">{{item.createdAtLabel}}</text>
+        </view>
+        <text class="amount {{item.tone}}">{{item.amountLabel}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{loading}}" class="load-row">正在读取积分...</view>
+  <view wx:elif="{{loadingMore}}" class="load-row">继续加载...</view>
+  <view wx:elif="{{records.length > 0 && !hasMore}}" class="load-row">已经到底了</view>
+</view>

@@ -1,0 +1,33 @@
+<view class="page">
+  <view class="topbar">
+    <button class="icon-button" bindtap="goCredits">‹</button>
+    <view class="brand">
+      <text class="brand-main">ima ima</text>
+      <text class="brand-accent">购买积分</text>
+    </view>
+    <view class="top-spacer"></view>
+  </view>
+
+  <view class="hero-panel">
+    <text class="kicker">CREDIT PACKS</text>
+    <text class="title">按生成量补充积分</text>
+    <text class="subtitle">套餐先保持小程序展示态，支付按钮统一显示微信支付接入中。</text>
+  </view>
+
+  <view class="pack-list">
+    <view wx:for="{{packs}}" wx:key="id" class="pack-card {{item.accent}}">
+      <view class="pack-head">
+        <text class="pack-name">{{item.name}}</text>
+        <text class="pack-price">{{item.price}}</text>
+      </view>
+      <text class="pack-credits">{{item.credits}} 积分</text>
+      <text class="pack-desc">{{item.desc}}</text>
+      <button class="pay-button" disabled bindtap="choosePack">微信支付接入中</button>
+    </view>
+  </view>
+
+  <view class="notice-card">
+    <text class="notice-title">支付占位</text>
+    <text class="notice-copy">正式版本需要后端创建微信支付订单，完成支付回调后再写入积分流水。</text>
+  </view>
+</view>

@@ -1,0 +1,170 @@
+.page {
+  min-height: 100vh;
+  padding: 28rpx 32rpx 64rpx;
+  background: #f6e0db;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 30rpx;
+}
+
+.icon-button,
+.pay-button {
+  border: 4rpx solid #0d0d0d;
+  border-radius: 8px;
+  box-shadow: 6rpx 6rpx 0 rgba(13, 13, 13, 0.13);
+  color: #0d0d0d;
+  font-weight: 900;
+}
+
+.icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 68rpx;
+  height: 68rpx;
+  background: #fff;
+  font-size: 46rpx;
+  line-height: 1;
+}
+
+.top-spacer {
+  width: 68rpx;
+  height: 68rpx;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.brand-main,
+.brand-accent {
+  font-size: 30rpx;
+}
+
+.brand-accent {
+  color: #ef724f;
+}
+
+.hero-panel,
+.pack-card,
+.notice-card {
+  margin-bottom: 24rpx;
+  border: 4rpx solid #0d0d0d;
+  border-radius: 8px;
+  box-shadow: 8rpx 8rpx 0 rgba(13, 13, 13, 0.13);
+}
+
+.hero-panel {
+  padding: 34rpx 30rpx 38rpx;
+  background: #ace2df;
+}
+
+.kicker {
+  display: block;
+  margin-bottom: 18rpx;
+  color: rgba(13, 13, 13, 0.55);
+  font-size: 22rpx;
+  font-weight: 900;
+}
+
+.title {
+  display: block;
+  margin-bottom: 18rpx;
+  color: #0d0d0d;
+  font-size: 52rpx;
+  font-weight: 900;
+  line-height: 1.08;
+}
+
+.subtitle {
+  display: block;
+  color: rgba(13, 13, 13, 0.72);
+  font-size: 27rpx;
+  font-weight: 700;
+  line-height: 1.48;
+}
+
+.pack-card {
+  padding: 28rpx;
+  background: #fff;
+}
+
+.pack-card.lemon {
+  background: #e7db4c;
+}
+
+.pack-card.seafoam {
+  background: #ace2df;
+}
+
+.pack-card.pumpkin {
+  background: #ef724f;
+}
+
+.pack-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 14rpx;
+}
+
+.pack-name,
+.pack-price,
+.pack-credits,
+.notice-title {
+  display: block;
+  color: #0d0d0d;
+  font-weight: 900;
+}
+
+.pack-name {
+  font-size: 34rpx;
+}
+
+.pack-price {
+  font-size: 42rpx;
+  line-height: 1;
+}
+
+.pack-credits {
+  margin-bottom: 12rpx;
+  font-size: 56rpx;
+  line-height: 1.08;
+}
+
+.pack-desc,
+.notice-copy {
+  display: block;
+  color: rgba(13, 13, 13, 0.7);
+  font-size: 25rpx;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.pay-button {
+  width: 100%;
+  height: 82rpx;
+  margin-top: 24rpx;
+  background: #fff;
+  color: rgba(13, 13, 13, 0.48);
+  font-size: 28rpx;
+}
+
+.notice-card {
+  padding: 28rpx;
+  background: #fff;
+}
+
+.notice-title {
+  margin-bottom: 10rpx;
+  font-size: 30rpx;
+}
