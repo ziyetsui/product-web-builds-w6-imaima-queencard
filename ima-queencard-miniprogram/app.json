@@ -2,7 +2,10 @@
   "pages": [
     "pages/index/index",
     "pages/generate/index",
-    "pages/result/index"
+    "pages/result/index",
+    "pages/history/index",
+    "pages/credits/index",
+    "pages/pricing/index"
   ],
   "window": {
     "navigationBarTitleText": "ima ima queencard",

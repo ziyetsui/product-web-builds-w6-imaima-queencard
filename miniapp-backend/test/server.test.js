@@ -600,6 +600,57 @@ test("estimates requested credits for image generation", async () => {
   app.close();
 });
 
+test("validates text and reference image generation modes", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-test",
+      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
+      MINIAPP_INITIAL_CREDITS: "10",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+  });
+  const auth = await login(app);
+
+  const textTask = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({
+      capability: "text-to-image",
+      prompt: "A clean text-only poster",
+      model: "gpt-image",
+      outputCount: 1,
+    }),
+  })));
+  assert.equal(textTask.success, true);
+  await waitForTask(app, textTask.data.taskId, auth);
+
+  const invalidText = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({
+      capability: "text-to-image",
+      prompt: "Should not carry references",
+      referenceImages: ["https://cdn.example.com/ref.png"],
+    }),
+  })));
+  assert.equal(invalidText.success, false);
+  assert.match(invalidText.error, /must not include reference images/);
+
+  const invalidReference = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+    method: "POST",
+    headers: { Authorization: auth },
+    body: JSON.stringify({
+      capability: "image-edit",
+      prompt: "Missing references",
+      referenceImages: [],
+    }),
+  })));
+  assert.equal(invalidReference.success, false);
+  assert.match(invalidReference.error, /requires 1 to 3 reference images/);
+  app.close();
+});
+
 test("regenerates a task from the original prompt, references, and model", async () => {
   const providerInputs = [];
   const app = createApp({

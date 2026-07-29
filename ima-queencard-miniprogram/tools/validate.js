@@ -20,9 +20,23 @@ const requiredFiles = [
   "pages/result/index.js",
   "pages/result/index.wxml",
   "pages/result/index.wxss",
+  "pages/history/index.json",
+  "pages/history/index.js",
+  "pages/history/index.wxml",
+  "pages/history/index.wxss",
+  "pages/credits/index.json",
+  "pages/credits/index.js",
+  "pages/credits/index.wxml",
+  "pages/credits/index.wxss",
+  "pages/pricing/index.json",
+  "pages/pricing/index.js",
+  "pages/pricing/index.wxml",
+  "pages/pricing/index.wxss",
   "config/env.js",
   "services/api.js",
   "services/auth.js",
+  "services/credits.js",
+  "services/generation.js",
   "services/session.js",
   "services/templates.js",
   "docs/miniapp-backend-contract.md",
@@ -69,7 +83,7 @@ if (!Array.isArray(appJson.pages) || !appJson.pages.includes("pages/index/index"
   fail("app.json must include pages/index/index");
 }
 
-["pages/generate/index", "pages/result/index"].forEach((page) => {
+["pages/generate/index", "pages/result/index", "pages/history/index", "pages/credits/index", "pages/pricing/index"].forEach((page) => {
   if (!Array.isArray(appJson.pages) || !appJson.pages.includes(page)) {
     fail(`app.json must include ${page}`);
   }
@@ -143,6 +157,31 @@ if (!/DEFAULT_MODEL_VALUE\s*=\s*"gpt-image-2-edit"/.test(generatePageSource)) {
 if (/modelIndexFor\(page\.data\.models,\s*seed\.model\)/.test(generatePageSource)) {
   fail("template seed model must not override the miniapp GPT Image 2 default");
 }
+
+["prefillFromOptions", "referenceImage", "sourceTaskId", "estimatePayload", "refreshEstimate"].forEach((pattern) => {
+  if (!generatePageSource.includes(pattern)) {
+    fail(`generate page must support history reuse and credit estimate: missing ${pattern}`);
+  }
+});
+
+["MODE_TEXT_TO_IMAGE", "MODE_IMAGE_EDIT", "MAX_REFERENCE_IMAGES", "referenceImagePaths", "availableModels"].forEach((pattern) => {
+  if (!generatePageSource.includes(pattern)) {
+    fail(`generate page must support dual-mode generation and up to three references: missing ${pattern}`);
+  }
+});
+
+const indexPageSource = fs.readFileSync(path.join(root, "pages/index/index.js"), "utf8");
+["openHistory", "openCredits"].forEach((pattern) => {
+  if (!indexPageSource.includes(pattern)) {
+    fail(`index page must expose ${pattern}`);
+  }
+});
+
+["openHistory", "reuseImage", "regenerateTask"].forEach((pattern) => {
+  if (!resultPageSource.includes(pattern)) {
+    fail(`result page must expose ${pattern}`);
+  }
+});
 
 const envSource = fs.readFileSync(path.join(root, "config/env.js"), "utf8");
 if (/APP_SECRET|OPENAI_API_KEY|GPTPROTO_API_KEY|FIREBASE_PRIVATE_KEY/.test(envSource)) {

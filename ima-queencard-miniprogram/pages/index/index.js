@@ -104,6 +104,18 @@ Page({
     });
   },
 
+  openHistory: function () {
+    wx.navigateTo({
+      url: "/pages/history/index",
+    });
+  },
+
+  openCredits: function () {
+    wx.navigateTo({
+      url: "/pages/credits/index",
+    });
+  },
+
   copyPrompt: function () {
     wx.setClipboardData({
       data: this.data.landing.hero.samplePrompt,

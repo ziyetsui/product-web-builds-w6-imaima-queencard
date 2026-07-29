@@ -86,6 +86,46 @@ function estimateCredits(body = {}) {
   return positiveInt(body.outputCount || body.outputNumber, 1);
 }
 
+function generationCapability(body = {}, referenceImages = []) {
+  return body.capability || (referenceImages.length > 0 ? "image-edit" : "text-to-image");
+}
+
+function validateGenerationBody(body = {}) {
+  const referenceImages = Array.isArray(body.referenceImages) ? body.referenceImages : [];
+  const capability = generationCapability(body, referenceImages);
+  const outputCount = estimateCredits(body);
+
+  if (!["text-to-image", "image-edit", "image-to-image"].includes(capability)) {
+    const error = new Error("Unsupported generation capability");
+    error.status = 400;
+    throw error;
+  }
+
+  if (outputCount > 4) {
+    const error = new Error("Output count must be between 1 and 4");
+    error.status = 400;
+    throw error;
+  }
+
+  if (capability === "text-to-image" && referenceImages.length > 0) {
+    const error = new Error("Text-to-image generation must not include reference images");
+    error.status = 400;
+    throw error;
+  }
+
+  if (capability !== "text-to-image" && (referenceImages.length < 1 || referenceImages.length > 3)) {
+    const error = new Error("Image reference generation requires 1 to 3 reference images");
+    error.status = 400;
+    throw error;
+  }
+
+  return {
+    capability,
+    referenceImages,
+    outputCount,
+  };
+}
+
 function taskMetadata(template, body = {}) {
   const seed = template && template.seed ? template.seed : {};
   const referenceImages = Array.isArray(body.referenceImages)
@@ -93,11 +133,13 @@ function taskMetadata(template, body = {}) {
     : Array.isArray(template && template.referenceImages)
       ? template.referenceImages
       : [];
+  const capability = generationCapability(body, referenceImages);
   return {
     prompt: body.prompt || (template && template.prompt) || "",
     topic: body.topic || (template && template.title) || "",
     referenceImages,
-    model: body.model || seed.model || "gpt-image-2-edit",
+    capability,
+    model: body.model || seed.model || (capability === "text-to-image" ? "gpt-image" : "gpt-image-2-edit"),
     outputCount: estimateCredits(body),
     aspectRatio: body.aspectRatio || seed.aspectRatio || "",
     resolution: body.resolution || seed.resolution || "",
@@ -451,12 +493,14 @@ function createApp(options = {}) {
       if (path === "/api/miniapp/image-generations/estimate" && request.method === "POST") {
         getAuthPayload(request, env);
         const body = await readJson(request);
+        const validation = validateGenerationBody(body);
         const outputCount = estimateCredits(body);
         return json({
           success: true,
           data: {
             requestedCredits: outputCount,
-            model: body.model || "gpt-image-2-edit",
+            model: body.model || (validation.capability === "text-to-image" ? "gpt-image" : "gpt-image-2-edit"),
+            capability: validation.capability,
             outputCount,
           },
         });
@@ -479,9 +523,10 @@ function createApp(options = {}) {
         const payload = getAuthPayload(request, env);
         const user = store.ensureUser(payload);
         const body = await readJson(request);
+        const validation = validateGenerationBody(body);
         const requestedCredits = estimateCredits(body);
         if (user.balance < requestedCredits) return json({ success: false, error: "Insufficient credits" }, 402);
-        const referenceImages = Array.isArray(body.referenceImages) ? body.referenceImages : [];
+        const referenceImages = validation.referenceImages;
         const template = body.templateId ? await getTemplate(String(body.templateId), request) : {
           id: "custom",
           title: body.topic || "自定义生成",
@@ -491,7 +536,7 @@ function createApp(options = {}) {
           seed: {
             source: body.source || "wechat-miniapp",
             model: body.model || "",
-            capability: body.capability || "",
+            capability: validation.capability,
             aspectRatio: body.aspectRatio || "",
             resolution: body.resolution || "",
           },

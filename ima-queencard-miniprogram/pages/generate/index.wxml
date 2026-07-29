@@ -37,14 +37,41 @@
 
   <view class="section">
     <view class="section-head">
-      <text class="section-title">参考图</text>
-      <text class="section-hint">从收藏图开始</text>
+      <text class="section-title">生成模式</text>
+      <text class="section-hint">{{modeLabel}}</text>
     </view>
-    <view wx:if="{{referenceImagePath}}" class="image-card">
-      <image class="reference-image" mode="aspectFill" src="{{referenceImagePath}}" bindtap="previewReference" />
+    <view class="mode-row">
+      <button
+        wx:for="{{modes}}"
+        wx:key="value"
+        class="mode-chip {{item.value == capability ? 'active' : ''}}"
+        data-index="{{index}}"
+        bindtap="onModeChange"
+      >{{item.label}}</button>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">参考图</text>
+      <text class="section-hint">{{capability == 'text-to-image' ? '纯文生图不使用参考图' : '最多 3 张'}}</text>
+    </view>
+
+    <view wx:if="{{capability == 'text-to-image'}}" class="text-mode-card">
+      <text class="text-mode-title">当前不带参考图生成</text>
+      <text class="text-mode-desc">需要沿用某张图的结构或风格时，可以添加参考图并自动切回参考图生成。</text>
+      <button class="small-button lemon" bindtap="switchToReferenceAndChoose">添加参考图</button>
+    </view>
+
+    <view wx:elif="{{referenceImagePaths.length > 0}}" class="image-card">
+      <view class="reference-grid">
+        <view wx:for="{{referenceImagePaths}}" wx:key="*this" class="reference-item">
+          <image class="reference-image" mode="aspectFill" src="{{item}}" data-current="{{item}}" bindtap="previewReference" />
+          <button class="remove-chip" data-index="{{index}}" bindtap="removeReference">移除</button>
+        </view>
+      </view>
       <view class="image-actions">
-        <button class="small-button white" bindtap="chooseReference">更换</button>
-        <button class="small-button white" bindtap="removeReference">移除</button>
+        <button class="small-button white" bindtap="chooseReference">{{referenceImagePaths.length >= 3 ? '替换' : '继续添加'}}</button>
       </view>
     </view>
     <button wx:else class="upload-box" bindtap="chooseReference">
@@ -65,7 +92,7 @@
     <view class="control-row">
       <view class="control">
         <text class="control-label">模型</text>
-        <picker range="{{models}}" range-key="label" value="{{modelIndex}}" bindchange="onModelChange">
+        <picker range="{{availableModels}}" range-key="label" value="{{modelIndex}}" bindchange="onModelChange">
           <view class="picker-box">{{modelLabel}}</view>
         </picker>
       </view>
@@ -75,6 +102,10 @@
           <view class="picker-box">{{outputCountLabel}}</view>
         </picker>
       </view>
+    </view>
+
+    <view class="estimate-line {{estimateError ? 'error' : ''}}">
+      <text>{{estimateLoading ? '正在计算预计消耗...' : estimateText}}</text>
     </view>
 
     <button class="submit-button" loading="{{busy}}" bindtap="submitGeneration">提交生成</button>

@@ -133,6 +133,28 @@
   background: #fff;
 }
 
+.mode-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16rpx;
+}
+
+.mode-chip {
+  min-height: 76rpx;
+  padding: 0 18rpx;
+  border: 4rpx solid #0d0d0d;
+  border-radius: 8px;
+  background: #fff;
+  color: #0d0d0d;
+  font-size: 26rpx;
+  font-weight: 900;
+  box-shadow: 5rpx 5rpx 0 rgba(13, 13, 13, 0.12);
+}
+
+.mode-chip.active {
+  background: #e7db4c;
+}
+
 .section-head {
   display: flex;
   align-items: center;
@@ -211,17 +233,71 @@
   background: #f6e0db;
 }
 
+.reference-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12rpx;
+  padding: 16rpx;
+}
+
+.reference-item {
+  position: relative;
+  min-width: 0;
+}
+
 .reference-image {
   display: block;
   width: 100%;
-  height: 520rpx;
+  height: 260rpx;
+  border: 3rpx solid #0d0d0d;
+  border-radius: 8px;
   background: #ececec;
+}
+
+.remove-chip {
+  position: absolute;
+  left: 10rpx;
+  right: 10rpx;
+  bottom: 10rpx;
+  height: 54rpx;
+  padding: 0;
+  border: 3rpx solid #0d0d0d;
+  border-radius: 8px;
+  background: #fff;
+  color: #0d0d0d;
+  font-size: 21rpx;
+  font-weight: 900;
+  line-height: 54rpx;
 }
 
 .image-actions {
   display: flex;
   gap: 14rpx;
   padding: 18rpx;
+}
+
+.text-mode-card {
+  padding: 24rpx;
+  border: 4rpx dashed #0d0d0d;
+  border-radius: 8px;
+  background: #f6e0db;
+}
+
+.text-mode-title {
+  display: block;
+  margin-bottom: 10rpx;
+  color: #0d0d0d;
+  font-size: 30rpx;
+  font-weight: 900;
+}
+
+.text-mode-desc {
+  display: block;
+  margin-bottom: 20rpx;
+  color: rgba(13, 13, 13, 0.62);
+  font-size: 24rpx;
+  font-weight: 700;
+  line-height: 1.42;
 }
 
 .upload-box {
@@ -304,6 +380,23 @@
   align-items: flex-start;
   gap: 16rpx;
   margin-bottom: 26rpx;
+}
+
+.estimate-line {
+  margin-bottom: 22rpx;
+  padding: 18rpx 20rpx;
+  border: 4rpx solid #0d0d0d;
+  border-radius: 8px;
+  background: #e7db4c;
+  color: #0d0d0d;
+  font-size: 24rpx;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.estimate-line.error {
+  background: #fff;
+  color: #ef724f;
 }
 
 .control {
