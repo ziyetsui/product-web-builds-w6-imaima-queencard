@@ -2,6 +2,53 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
+function metricNumber(record, key) {
+  const metrics = record.metrics || {};
+  const value = Number(metrics[key] || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function heatScore(record) {
+  return metricNumber(record, "likes") + metricNumber(record, "saves");
+}
+
+function interactionScore(record) {
+  return metricNumber(record, "likes") + metricNumber(record, "saves") * 0.35 + metricNumber(record, "shares") * 0.45;
+}
+
+function potentialScore(record) {
+  const metrics = record.metrics || {};
+  if (Number.isFinite(Number(metrics.potentialScore))) return Number(metrics.potentialScore);
+  return interactionScore(record);
+}
+
+function potentialRank(record) {
+  const metrics = record.metrics || {};
+  const value = Number(metrics.potentialRank);
+  return Number.isFinite(value) && value > 0 ? value : Number.MAX_SAFE_INTEGER;
+}
+
+function isHotTemplate(record) {
+  return metricNumber(record, "likes") >= 20000 || metricNumber(record, "saves") >= 20000;
+}
+
+function sortTemplates(records, sort) {
+  const mode = sort || "heat";
+  return records.slice().sort((a, b) => {
+    if (mode === "potential") {
+      const scoreDelta = potentialScore(b) - potentialScore(a);
+      if (scoreDelta !== 0) return scoreDelta;
+      const rankDelta = potentialRank(a) - potentialRank(b);
+      if (rankDelta !== 0) return rankDelta;
+      return interactionScore(b) - interactionScore(a);
+    }
+    if (mode === "saves") return metricNumber(b, "saves") - metricNumber(a, "saves");
+    if (mode === "shares") return metricNumber(b, "shares") - metricNumber(a, "shares");
+    if (mode === "newest") return String(b.id || "").localeCompare(String(a.id || ""));
+    return heatScore(b) - heatScore(a);
+  });
+}
+
 function createMemoryStore(options = {}) {
   const initialCredits = Number(options.initialCredits || 10);
   const users = new Map();
@@ -114,9 +161,12 @@ function createMemoryStore(options = {}) {
     const q = String(query.get("q") || query.get("keyword") || "").trim().toLowerCase();
     const category = String(query.get("category") || "").trim();
     const scenarioCategory = String(query.get("scenario_category") || query.get("scenarioCategory") || "").trim();
+    const hotOnly = query.get("hot") === "1" || query.get("hotOnly") === "true";
+    const sort = String(query.get("sort") || "default").trim();
     let records = Array.from(templates.values());
     if (category) records = records.filter((record) => record.category === category);
     if (scenarioCategory) records = records.filter((record) => record.scenarioCategory === scenarioCategory);
+    if (hotOnly) records = records.filter(isHotTemplate);
     if (q) {
       records = records.filter((record) => [
         record.title,
@@ -126,6 +176,7 @@ function createMemoryStore(options = {}) {
         record.author,
       ].filter(Boolean).join("\n").toLowerCase().includes(q));
     }
+    records = sortTemplates(records, sort);
     const total = records.length;
     const start = (page - 1) * limit;
     return {
@@ -400,9 +451,10 @@ function createSqliteStore(options = {}) {
   function listTemplates(query = new URLSearchParams()) {
     const page = positiveInt(query.get("page"), 1);
     const limit = Math.min(positiveInt(query.get("limit"), 12), 100);
-    const offset = (page - 1) * limit;
     const filters = [];
     const values = [];
+    const sort = String(query.get("sort") || "default").trim();
+    const hotOnly = query.get("hot") === "1" || query.get("hotOnly") === "true";
 
     const category = String(query.get("category") || "").trim();
     if (category) {
@@ -414,6 +466,13 @@ function createSqliteStore(options = {}) {
     if (scenarioCategory) {
       filters.push("scenario_category = ?");
       values.push(scenarioCategory);
+    }
+
+    if (hotOnly) {
+      filters.push(`(
+        CAST(json_extract(metrics_json, '$.likes') AS INTEGER) >= 20000 OR
+        CAST(json_extract(metrics_json, '$.saves') AS INTEGER) >= 20000
+      )`);
     }
 
     const q = String(query.get("q") || query.get("keyword") || "").trim();
@@ -431,12 +490,13 @@ function createSqliteStore(options = {}) {
     const rows = db.prepare(`
       SELECT * FROM templates
       ${where}
-      ORDER BY updated_at DESC, id ASC
-      LIMIT ? OFFSET ?
-    `).all(...values, limit, offset);
+      ORDER BY id ASC
+    `).all(...values);
+    const records = sortTemplates(rows.map(rowToTemplate), sort);
+    const start = (page - 1) * limit;
 
     return {
-      records: rows.map(rowToTemplate),
+      records: records.slice(start, start + limit),
       pagination: {
         page,
         limit,

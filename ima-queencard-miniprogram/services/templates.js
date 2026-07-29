@@ -26,6 +26,7 @@ function normalizeQuery(query) {
   if (input.q) normalized.q = input.q;
   if (input.category) normalized.category = input.category;
   if (scenarioCategory) normalized.scenario_category = scenarioCategory;
+  if (input.hotOnly) normalized.hot = "1";
   if (input.sort) normalized.sort = input.sort;
   if (input.language) normalized.language = input.language;
   return normalized;

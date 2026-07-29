@@ -3,14 +3,22 @@ var api = require("../../services/api.js");
 var templatesService = require("../../services/templates.js");
 
 var TEMPLATE_CATEGORIES = [
-  { label: "全部", key: "all", value: "", scenarioCategory: "" },
-  { label: "社媒图", key: "social", value: "image", scenarioCategory: "" },
+  { label: "全部", key: "all", value: "image", scenarioCategory: "" },
+  { label: "热门高赞", key: "hot", value: "image", scenarioCategory: "", hotOnly: true },
+  { label: "养生", key: "wellness", value: "image", scenarioCategory: "养生内调" },
+  { label: "清单", key: "list", value: "image", scenarioCategory: "清单种草" },
+  { label: "图集", key: "gallery", value: "image", scenarioCategory: "美女图集" },
+  { label: "情绪", key: "mood", value: "image", scenarioCategory: "情绪疗愈" },
+  { label: "漫画", key: "comic", value: "image", scenarioCategory: "搞笑漫画" },
+  { label: "自律", key: "growth", value: "image", scenarioCategory: "成长自律" },
+  { label: "科普", key: "knowledge", value: "image", scenarioCategory: "知识科普" },
 ];
 
 var TEMPLATE_SORT_OPTIONS = [
-  { label: "默认", value: "default" },
-  { label: "最新", value: "newest" },
-  { label: "热门", value: "hot" },
+  { label: "综合热度", value: "heat" },
+  { label: "潜力优先", value: "potential" },
+  { label: "收藏优先", value: "saves" },
+  { label: "分享优先", value: "shares" },
 ];
 
 function appendTemplates(current, next) {
@@ -37,6 +45,7 @@ function markCategoryOptions(selectedKey) {
       key: item.key,
       value: item.value,
       scenarioCategory: item.scenarioCategory,
+      hotOnly: item.hotOnly || false,
       active: item.key === selectedKey,
     };
   });
@@ -62,12 +71,13 @@ Page({
     apiReady: api.isConfigured(),
     templateReady: api.isConfigured() || templatesService.isConfigured(),
     templateSearch: "",
-    templateCategoryKey: "social",
+    templateCategoryKey: "all",
     templateCategory: "image",
     templateScenarioCategory: "",
-    templateSort: "default",
-    templateCategories: markCategoryOptions("social"),
-    templateSortOptions: markSortOptions("default"),
+    templateHotOnly: false,
+    templateSort: "heat",
+    templateCategories: markCategoryOptions("all"),
+    templateSortOptions: markSortOptions("heat"),
     templates: [],
     templatePage: 1,
     templateLimit: 12,
@@ -204,11 +214,14 @@ Page({
     var key = event.currentTarget.dataset.key || "all";
     var category = event.currentTarget.dataset.value || "";
     var scenarioCategory = event.currentTarget.dataset.scenarioCategory || "";
+    var hotOnlyValue = event.currentTarget.dataset.hotOnly;
+    var hotOnly = hotOnlyValue === true || hotOnlyValue === "true" || hotOnlyValue === "1";
     if (key === this.data.templateCategoryKey) return;
     this.setData({
       templateCategoryKey: key,
       templateCategory: category,
       templateScenarioCategory: scenarioCategory,
+      templateHotOnly: hotOnly,
       templateCategories: markCategoryOptions(key),
       templatePage: 1,
       templateHasMore: true,
@@ -217,7 +230,7 @@ Page({
   },
 
   selectTemplateSort: function (event) {
-    var sort = event.currentTarget.dataset.value || "default";
+    var sort = event.currentTarget.dataset.value || "heat";
     if (sort === this.data.templateSort) return;
     this.setData({
       templateSort: sort,
@@ -252,6 +265,7 @@ Page({
       q: query,
       category: this.data.templateCategory,
       scenarioCategory: this.data.templateScenarioCategory,
+      hotOnly: this.data.templateHotOnly,
       sort: this.data.templateSort,
       language: "zh",
     }).then(function (result) {

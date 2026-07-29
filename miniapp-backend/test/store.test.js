@@ -81,6 +81,53 @@ test("sqlite store syncs and pages templates", () => {
   store.close();
 });
 
+test("sqlite store filters and sorts templates like the web prompt library", () => {
+  const dbPath = tempDbPath();
+  const store = createSqliteStore({ dbPath, initialCredits: 10 });
+  store.syncTemplates([
+    {
+      id: "case-low",
+      title: "低热度",
+      category: "image",
+      scenarioCategory: "清单种草",
+      source: "github",
+      metrics: { likes: 1000, saves: 900, shares: 600, potentialScore: 99, potentialRank: 1 },
+    },
+    {
+      id: "case-like",
+      title: "高赞",
+      category: "image",
+      scenarioCategory: "搞笑漫画",
+      source: "github",
+      metrics: { likes: 30000, saves: 1000, shares: 200, potentialScore: 60, potentialRank: 3 },
+    },
+    {
+      id: "case-save",
+      title: "高收藏",
+      category: "image",
+      scenarioCategory: "清单种草",
+      source: "github",
+      metrics: { likes: 8000, saves: 22000, shares: 30000, potentialScore: 80, potentialRank: 2 },
+    },
+  ]);
+
+  const hot = store.listTemplates(new URLSearchParams({ page: "1", limit: "10", hot: "1", sort: "heat" }));
+  assert.deepEqual(hot.records.map((record) => record.id), ["case-like", "case-save"]);
+
+  const category = store.listTemplates(new URLSearchParams({ page: "1", limit: "10", scenario_category: "清单种草", sort: "heat" }));
+  assert.deepEqual(category.records.map((record) => record.id), ["case-save", "case-low"]);
+
+  const saves = store.listTemplates(new URLSearchParams({ page: "1", limit: "10", sort: "saves" }));
+  assert.deepEqual(saves.records.map((record) => record.id), ["case-save", "case-like", "case-low"]);
+
+  const shares = store.listTemplates(new URLSearchParams({ page: "1", limit: "10", sort: "shares" }));
+  assert.deepEqual(shares.records.map((record) => record.id), ["case-save", "case-low", "case-like"]);
+
+  const potential = store.listTemplates(new URLSearchParams({ page: "1", limit: "10", sort: "potential" }));
+  assert.deepEqual(potential.records.map((record) => record.id), ["case-low", "case-save", "case-like"]);
+  store.close();
+});
+
 test("sqlite store persists and filters generation task history", () => {
   const dbPath = tempDbPath();
   const store = createSqliteStore({ dbPath, initialCredits: 10 });

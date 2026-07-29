@@ -69,6 +69,7 @@
             data-key="{{item.key}}"
             data-value="{{item.value}}"
             data-scenario-category="{{item.scenarioCategory}}"
+            data-hot-only="{{item.hotOnly}}"
             bindtap="selectTemplateCategory"
           >{{item.label}}</button>
         </view>

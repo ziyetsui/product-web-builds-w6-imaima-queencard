@@ -93,6 +93,42 @@ function extractCasesArray(sourceText) {
   throw new Error("xhsPromptCases array did not terminate");
 }
 
+function extractExportObject(sourceText, marker) {
+  const markerIndex = sourceText.indexOf(marker);
+  if (markerIndex < 0) throw new Error(marker + " export not found");
+  const equalsIndex = sourceText.indexOf("=", markerIndex);
+  if (equalsIndex < 0) throw new Error(marker + " assignment not found");
+  const start = sourceText.indexOf("{", equalsIndex);
+  if (start < 0) throw new Error(marker + " object not found");
+
+  let depth = 0;
+  let quote = "";
+  let escaped = false;
+  for (let index = start; index < sourceText.length; index += 1) {
+    const char = sourceText[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return sourceText.slice(start, index + 1);
+    }
+  }
+  throw new Error(marker + " object did not terminate");
+}
+
 function loadGithubCases(filePath) {
   const sourceText = fs.readFileSync(filePath, "utf8");
   const literal = extractCasesArray(sourceText);
@@ -101,12 +137,62 @@ function loadGithubCases(filePath) {
   });
 }
 
-function normalizeGithubCase(record, assetBaseUrl) {
+function loadGithubCaseMetrics(filePath) {
+  const sourceText = fs.readFileSync(filePath, "utf8");
+  const literal = extractExportObject(sourceText, "export const xhsCaseMetrics");
+  return vm.runInNewContext("(" + literal + ")", {}, {
+    timeout: 1000,
+  });
+}
+
+function noteIdFor(record) {
+  const match = String(record.noteUrl || "").match(/explore\/([^?]+)/);
+  return match ? match[1] : record.id;
+}
+
+function metricNumber(record, key) {
+  const metrics = record.metrics || {};
+  const value = Number(metrics[key] || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function interactionScore(record) {
+  return metricNumber(record, "likes") + metricNumber(record, "saves") * 0.35 + metricNumber(record, "shares") * 0.45;
+}
+
+function potentialScore(record) {
+  const value = Number(record.metrics && record.metrics.potentialScore);
+  return Number.isFinite(value) ? value : interactionScore(record);
+}
+
+function potentialRank(record) {
+  const value = Number(record.metrics && record.metrics.potentialRank);
+  return Number.isFinite(value) && value > 0 ? value : Number.MAX_SAFE_INTEGER;
+}
+
+function sortGithubCases(records, sort) {
+  const mode = sort || "heat";
+  return records.slice().sort((a, b) => {
+    if (mode === "potential") {
+      const scoreDelta = potentialScore(b) - potentialScore(a);
+      if (scoreDelta !== 0) return scoreDelta;
+      const rankDelta = potentialRank(a) - potentialRank(b);
+      if (rankDelta !== 0) return rankDelta;
+      return interactionScore(b) - interactionScore(a);
+    }
+    if (mode === "saves") return metricNumber(b, "saves") - metricNumber(a, "saves");
+    if (mode === "shares") return metricNumber(b, "shares") - metricNumber(a, "shares");
+    return metricNumber(b, "likes") + metricNumber(b, "saves") - (metricNumber(a, "likes") + metricNumber(a, "saves"));
+  });
+}
+
+function normalizeGithubCase(record, assetBaseUrl, caseMetrics) {
   const preview = assetUrl(record.image, assetBaseUrl);
   const referenceImages = Array.isArray(record.images)
     ? Array.from(record.images).map((image) => assetUrl(image, assetBaseUrl)).filter(Boolean)
     : [];
   const prompt = firstText(record.prompt, record.title);
+  const metric = (caseMetrics || {})[noteIdFor(record)] || null;
 
   return {
     id: record.id,
@@ -129,6 +215,11 @@ function normalizeGithubCase(record, assetBaseUrl) {
       likesText: record.likesText || "",
       savesText: record.savesText || "",
       sharesText: record.sharesText || "",
+      potentialScore: metric ? metric.potentialScore : null,
+      potentialRank: metric ? metric.potentialRank : null,
+      isPotentialHit: metric ? metric.isPotentialHit : false,
+      followers: metric ? metric.followers : null,
+      followersText: metric ? metric.followersText : "",
     },
     author: record.author || "",
     seed: {
@@ -149,6 +240,13 @@ function defaultGithubCasesFile() {
   );
 }
 
+function defaultGithubMetricsFile() {
+  return path.resolve(
+    __dirname,
+    "../../ima ima queencard/frontend/src/data/xhsCaseMetrics.ts"
+  );
+}
+
 function defaultAssetBaseUrl(options) {
   if (options.assetBaseUrl) return options.assetBaseUrl;
   const env = options.env || process.env;
@@ -160,10 +258,12 @@ function defaultAssetBaseUrl(options) {
 function filterGithubCases(records, query) {
   const category = query.get("category");
   const scenarioCategory = query.get("scenario_category") || query.get("scenarioCategory");
+  const hotOnly = query.get("hot") === "1" || query.get("hotOnly") === "true";
   const keyword = query.get("keyword") || query.get("q") || "";
   return records.filter((record) => {
     if (category && category !== "image" && record.category !== category) return false;
     if (scenarioCategory && record.scenarioCategory !== scenarioCategory) return false;
+    if (hotOnly && !((record.metrics && record.metrics.likes >= 20000) || (record.metrics && record.metrics.saves >= 20000))) return false;
     if (keyword) {
       const haystack = [record.title, record.subtitle, record.prompt, record.scenarioCategory, record.author]
         .join(" ")
@@ -177,8 +277,10 @@ function filterGithubCases(records, query) {
 async function fetchGithubTemplateList(options) {
   const query = options.query || new URLSearchParams();
   const casesFile = options.githubCasesFile || (options.env && options.env.MINIAPP_GITHUB_CASES_FILE) || defaultGithubCasesFile();
-  const records = loadGithubCases(casesFile).map((record) => normalizeGithubCase(record, defaultAssetBaseUrl(options)));
-  const filtered = filterGithubCases(records, query);
+  const metricsFile = options.githubMetricsFile || (options.env && options.env.MINIAPP_GITHUB_METRICS_FILE) || defaultGithubMetricsFile();
+  const metrics = fs.existsSync(metricsFile) ? loadGithubCaseMetrics(metricsFile) : {};
+  const records = loadGithubCases(casesFile).map((record) => normalizeGithubCase(record, defaultAssetBaseUrl(options), metrics));
+  const filtered = sortGithubCases(filterGithubCases(records, query), query.get("sort") || "heat");
   const page = Math.max(1, Number(query.get("page") || 1));
   const limit = Math.max(1, Number(query.get("limit") || filtered.length || 1));
   const start = (page - 1) * limit;
