@@ -1,59 +1,16 @@
 var env = require("../../config/env.js");
 var api = require("../../services/api.js");
-
-function normalizeImages(value) {
-  var result = [];
-  var source = value || [];
-  var i = 0;
-  for (i = 0; i < source.length; i += 1) {
-    if (typeof source[i] === "string") {
-      result.push(source[i]);
-    } else if (source[i] && source[i].url) {
-      result.push(source[i].url);
-    } else if (source[i] && source[i].imageUrl) {
-      result.push(source[i].imageUrl);
-    }
-  }
-  return result;
-}
-
-function normalizeTask(raw) {
-  var task = raw || {};
-  var nested = task.task || task.generationTask || null;
-  if (nested) task = nested;
-
-  var status = task.status || task.state || "running";
-  var images = normalizeImages(task.images || task.resultImages || task.outputImages || task.outputs || task.assets);
-  var error = task.error || task.errorMessage || task.message || "";
-
-  return {
-    id: task.id || task.taskId || "",
-    status: status,
-    title: statusTitle(status),
-    desc: statusDesc(status, error),
-    images: images,
-    error: error,
-  };
-}
+var generation = require("../../services/generation.js");
 
 function isDone(status) {
   return ["completed", "succeeded", "success", "failed", "error", "canceled", "cancelled"].indexOf(status) >= 0;
 }
 
-function statusTitle(status) {
-  if (status === "completed" || status === "succeeded" || status === "success") return "生成完成";
-  if (status === "failed" || status === "error") return "生成失败";
-  if (status === "canceled" || status === "cancelled") return "任务已取消";
-  if (status === "queued" || status === "pending") return "排队中";
-  return "生成中";
-}
-
-function statusDesc(status, error) {
-  if (status === "completed" || status === "succeeded" || status === "success") return "可以预览、保存或继续生成下一组。";
-  if (status === "failed" || status === "error") return error || "后端返回失败状态，请查看任务日志。";
-  if (status === "canceled" || status === "cancelled") return "任务已经取消，可以返回重新提交。";
-  if (status === "queued" || status === "pending") return "任务已经提交，正在等待生成队列处理。";
-  return "正在生成图文结果，页面会自动刷新。";
+function previousGeneratePage() {
+  var pages = typeof getCurrentPages === "function" ? getCurrentPages() : [];
+  var previous = pages.length > 1 ? pages[pages.length - 2] : null;
+  if (previous && previous.route === "pages/generate/index") return previous;
+  return null;
 }
 
 Page({
@@ -68,6 +25,7 @@ Page({
     statusDesc: "页面会自动刷新任务状态。",
     images: [],
     error: "",
+    regenerating: false,
   },
 
   onLoad: function (options) {
@@ -111,9 +69,9 @@ Page({
       error: "",
     });
 
-    api.getGenerationTask(this.data.taskId)
+    generation.getTask(this.data.taskId)
       .then(function (result) {
-        var task = normalizeTask(result);
+        var task = generation.normalizeTask(result);
         page.setData({
           loading: false,
           task: task,
@@ -132,6 +90,109 @@ Page({
           error: error.message || "拉取任务失败",
         });
         page.schedulePolling();
+      });
+  },
+
+  openHistory: function () {
+    wx.navigateTo({
+      url: "/pages/history/index",
+      fail: function () {
+        wx.showModal({
+          title: "我的作品未注册",
+          content: "历史页会在 Task 3 加入 app.json 后打开。本次只接入结果页入口和服务调用。",
+          showCancel: false,
+        });
+      },
+    });
+  },
+
+  reuseImage: function (event) {
+    var imageUrl = event.currentTarget.dataset.url || this.data.images[0] || "";
+    var task = this.data.task || {};
+    var url = "";
+    var previous = null;
+
+    if (!imageUrl) {
+      wx.showToast({
+        title: "还没有可复用图片",
+        icon: "none",
+      });
+      return;
+    }
+
+    this.stopPolling();
+    url = generation.buildGenerateUrlFromTask(task, {
+      referenceImage: imageUrl,
+    });
+    previous = previousGeneratePage();
+
+    if (previous && typeof previous.setData === "function") {
+      previous.setData({
+        referenceImagePath: imageUrl,
+        prompt: task.prompt || "",
+        topic: task.topic || "",
+        templateId: task.templateId || "",
+        sourceTaskId: task.id || this.data.taskId,
+      });
+      wx.navigateBack({
+        delta: 1,
+      });
+      return;
+    }
+
+    wx.navigateTo({
+      url: url,
+    });
+  },
+
+  regenerateTask: function () {
+    var page = this;
+    if (!this.data.apiReady || !this.data.taskId || this.data.regenerating) return;
+
+    this.stopPolling();
+    this.setData({
+      regenerating: true,
+      error: "",
+    });
+
+    generation.regenerateTask(this.data.taskId)
+      .then(function (result) {
+        var nextTaskId = result.taskId || (result.task && result.task.id) || "";
+        page.setData({
+          regenerating: false,
+        });
+        if (!nextTaskId) {
+          wx.showModal({
+            title: "同款任务已提交",
+            content: "后端没有返回新的 taskId，请检查 /api/miniapp/image-generations/:taskId/regenerate 响应格式。",
+            showCancel: false,
+          });
+          return;
+        }
+        wx.redirectTo({
+          url: "/pages/result/index?taskId=" + encodeURIComponent(nextTaskId),
+          fail: function () {
+            page.setData({
+              taskId: nextTaskId,
+              task: null,
+              images: [],
+              statusTitle: "正在读取任务",
+              statusDesc: "页面会自动刷新任务状态。",
+            });
+            page.fetchTask();
+          },
+        });
+      })
+      .catch(function (error) {
+        page.setData({
+          regenerating: false,
+          error: error.message || "重新生成失败",
+        });
+        wx.showModal({
+          title: "重新生成失败",
+          content: error.message || "请稍后再试",
+          showCancel: false,
+        });
       });
   },
 

@@ -119,6 +119,42 @@ function getGenerationTask(taskId) {
   });
 }
 
+function listGenerationTasks(query) {
+  return request({
+    path: "/image-generations",
+    query: query || {},
+  });
+}
+
+function estimateGeneration(input) {
+  return request({
+    path: "/image-generations/estimate",
+    method: "POST",
+    data: input || {},
+  });
+}
+
+function regenerateGenerationTask(taskId, input) {
+  return request({
+    path: "/image-generations/" + encodeURIComponent(taskId) + "/regenerate",
+    method: "POST",
+    data: input || {},
+  });
+}
+
+function getCreditBalance() {
+  return request({
+    path: "/credit/balance",
+  });
+}
+
+function getCreditHistory(query) {
+  return request({
+    path: "/credit/history",
+    query: query || {},
+  });
+}
+
 module.exports = {
   isConfigured: isConfigured,
   request: request,
@@ -127,4 +163,9 @@ module.exports = {
   uploadReferenceImage: uploadReferenceImage,
   createGenerationTask: createGenerationTask,
   getGenerationTask: getGenerationTask,
+  listGenerationTasks: listGenerationTasks,
+  estimateGeneration: estimateGeneration,
+  regenerateGenerationTask: regenerateGenerationTask,
+  getCreditBalance: getCreditBalance,
+  getCreditHistory: getCreditHistory,
 };

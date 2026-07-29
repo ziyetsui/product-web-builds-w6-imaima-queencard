@@ -24,13 +24,26 @@
       <text class="kicker">TASK {{taskId}}</text>
       <text class="status-title">{{statusTitle}}</text>
       <text class="status-desc">{{statusDesc}}</text>
+      <view wx:if="{{task.prompt || task.model || task.outputCount}}" class="task-meta">
+        <text wx:if="{{task.prompt}}" class="meta-line">{{task.prompt}}</text>
+        <text wx:if="{{task.model}}" class="meta-chip">{{task.model}}</text>
+        <text wx:if="{{task.outputCount}}" class="meta-chip">{{task.outputCount}} 张</text>
+      </view>
       <text wx:if="{{error}}" class="error">{{error}}</text>
+    </view>
+
+    <view class="action-row">
+      <button class="secondary-button seafoam" bindtap="openHistory">我的作品</button>
+      <button class="secondary-button pumpkin" loading="{{regenerating}}" bindtap="regenerateTask">重新生成同款</button>
     </view>
 
     <view wx:if="{{images.length > 0}}" class="result-grid">
       <view wx:for="{{images}}" wx:key="*this" class="image-card">
         <image class="result-image" mode="aspectFill" src="{{item}}" data-current="{{item}}" bindtap="previewImage" />
-        <button class="save-button" data-url="{{item}}" bindtap="saveImage">保存</button>
+        <view class="image-actions">
+          <button class="save-button" data-url="{{item}}" bindtap="saveImage">保存</button>
+          <button class="reuse-button" data-url="{{item}}" bindtap="reuseImage">用这张继续生成</button>
+        </view>
       </view>
     </view>
 
