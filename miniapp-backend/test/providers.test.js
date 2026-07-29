@@ -109,6 +109,124 @@ test("gptproto provider calls the OpenAI-compatible image endpoint with the requ
   assert.deepEqual(result.images, ["https://cdn.example.com/generated.png"]);
 });
 
+test("gptproto provider routes Doubao Seedream through the V3 image-edit endpoint", async () => {
+  let requestBody = null;
+  const provider = createImageProvider({
+    env: {
+      MINIAPP_IMAGE_PROVIDER: "gptproto",
+      GPTPROTO_API_KEY: "test-key",
+      GPTPROTO_IMAGE_SIZE: "1024x1536",
+      GPTPROTO_POLL_INTERVAL_MS: "1",
+      GPTPROTO_MAX_POLL_ATTEMPTS: "1",
+    },
+    fetch: async (url, options) => {
+      assert.equal(
+        String(url),
+        "https://gptproto.com/api/v3/doubao/doubao-seedream-5-0-260128/image-edit"
+      );
+      requestBody = JSON.parse(options.body);
+      return Response.json({
+        data: {
+          id: "pred-1",
+          status: "completed",
+          images: [{ url: "https://cdn.example.com/doubao.png" }],
+        },
+      });
+    },
+  });
+
+  const result = await provider.generate({
+    template,
+    prompt: "Use the reference image style",
+    referenceImages: ["https://cdn.example.com/ref.jpg"],
+    request: {
+      model: "doubao-seedream-5-edit",
+    },
+  });
+
+  assert.equal(requestBody.prompt, "Use the reference image style");
+  assert.deepEqual(requestBody.images, ["https://cdn.example.com/ref.jpg"]);
+  assert.equal(requestBody.size, "1024x1536");
+  assert.equal(requestBody.enable_sync_mode, false);
+  assert.deepEqual(result.images, ["https://cdn.example.com/doubao.png"]);
+  assert.equal(result.providerTaskId, "pred-1");
+});
+
+test("gptproto provider polls V3 prediction results when the task is pending", async () => {
+  const seenUrls = [];
+  const provider = createImageProvider({
+    env: {
+      MINIAPP_IMAGE_PROVIDER: "gptproto",
+      GPTPROTO_API_KEY: "test-key",
+      GPTPROTO_POLL_INTERVAL_MS: "1",
+      GPTPROTO_MAX_POLL_ATTEMPTS: "2",
+    },
+    fetch: async (url) => {
+      seenUrls.push(String(url));
+      if (String(url).endsWith("/image-edit")) {
+        return Response.json({
+          data: {
+            id: "pred-2",
+            status: "pending",
+            urls: {
+              get: "https://gptproto.com/api/v3/predictions/pred-2/result",
+            },
+          },
+        });
+      }
+      return Response.json({
+        data: {
+          id: "pred-2",
+          status: "completed",
+          images: [{ url: "https://cdn.example.com/polled.png" }],
+        },
+      });
+    },
+  });
+
+  const result = await provider.generate({
+    template,
+    prompt: "Use the reference image style",
+    request: {
+      model: "seedream-5-edit",
+    },
+  });
+
+  assert.deepEqual(seenUrls, [
+    "https://gptproto.com/api/v3/doubao/seedream-5-0-260128/image-edit",
+    "https://gptproto.com/api/v3/predictions/pred-2/result",
+  ]);
+  assert.deepEqual(result.images, ["https://cdn.example.com/polled.png"]);
+  assert.equal(result.providerTaskId, "pred-2");
+});
+
+test("gptproto provider reports object errors without [object Object]", async () => {
+  const provider = createImageProvider({
+    env: {
+      MINIAPP_IMAGE_PROVIDER: "gptproto",
+      GPTPROTO_API_KEY: "test-key",
+    },
+    fetch: async () => Response.json({
+      error: {
+        code: "bad_request",
+        message: "model is not supported on this endpoint",
+      },
+    }, {
+      status: 400,
+    }),
+  });
+
+  await assert.rejects(
+    () => provider.generate({ template, prompt: template.prompt }),
+    (error) => {
+      assert.match(error.message, /GPTProto image generation failed: 400/);
+      assert.match(error.message, /model is not supported/);
+      assert.doesNotMatch(error.message, /\[object Object\]/);
+      return true;
+    }
+  );
+});
+
 test("gptproto provider reports non-json upstream responses with endpoint context", async () => {
   const provider = createImageProvider({
     env: {

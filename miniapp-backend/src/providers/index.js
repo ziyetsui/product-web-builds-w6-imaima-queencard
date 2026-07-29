@@ -14,29 +14,47 @@ function templateImage(template) {
   return template.previewUrl || template.thumbnailUrl || (template.referenceImages || [])[0] || "";
 }
 
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function imageFromValue(value) {
+  if (!value) return "";
+  if (typeof value === "string") {
+    if (value.startsWith("data:image/") || /^https?:\/\//i.test(value)) return value;
+    return "";
+  }
+  if (!isRecord(value)) return "";
+  if (value.url) return value.url;
+  if (value.image) return value.image;
+  if (value.uri) return value.uri;
+  const b64Json = value.b64_json || value.b64Json;
+  if (b64Json) return "data:image/png;base64," + b64Json;
+  return "";
+}
+
 function normalizeImages(payload) {
   const result = [];
   const source = payload || {};
   const candidates = [];
 
   if (Array.isArray(source.data)) candidates.push(...source.data);
+  else if (isRecord(source.data)) {
+    candidates.push(
+      source.data.output,
+      source.data.outputs,
+      source.data.images,
+      source.data.result
+    );
+  }
   if (Array.isArray(source.images)) candidates.push(...source.images);
   if (source.output) candidates.push(source.output);
   if (Array.isArray(source.outputs)) candidates.push(...source.outputs);
   if (source.result) candidates.push(source.result);
 
   candidates.flatMap((item) => Array.isArray(item) ? item : [item]).forEach((item) => {
-    if (!item) return;
-    if (typeof item === "string") {
-      result.push(item);
-      return;
-    }
-    if (item.url) result.push(item.url);
-    else if (item.image) result.push(item.image);
-    else if (item.uri) result.push(item.uri);
-    else if (item.b64_json || item.b64Json) {
-      result.push("data:image/png;base64," + (item.b64_json || item.b64Json));
-    }
+    const image = imageFromValue(item);
+    if (image) result.push(image);
   });
 
   return result;
@@ -71,16 +89,104 @@ function providerModelFor(model) {
   }
 }
 
-function requestedModel(input, fallback) {
+function requestedModelKey(input, fallback) {
   const request = input.request || {};
   const model = request.model || (input.template.seed && input.template.seed.model);
+  return String(model || fallback || "").trim();
+}
+
+function requestedModel(input, fallback) {
+  const model = requestedModelKey(input, fallback);
   return providerModelFor(String(model || fallback || "").trim());
+}
+
+function gptProtoRouteFor(model) {
+  switch (model) {
+    case "seedream-5-edit":
+    case "seedream-5-0-260128":
+    case "seedream-5-0-260128-edit":
+      return {
+        mode: "v3",
+        providerModel: "seedream-5-0-260128",
+        endpoint: "/api/v3/doubao/seedream-5-0-260128/image-edit",
+      };
+    case "doubao-seedream-5-edit":
+    case "doubao-seedream-5-0-260128":
+    case "doubao-seedream-5-0-260128-edit":
+      return {
+        mode: "v3",
+        providerModel: "doubao-seedream-5-0-260128",
+        endpoint: "/api/v3/doubao/doubao-seedream-5-0-260128/image-edit",
+      };
+    default:
+      return {
+        mode: "openai-compatible",
+        providerModel: providerModelFor(model),
+      };
+  }
 }
 
 function gptProtoEndpoint(env) {
   const endpoint = String(env.GPTPROTO_IMAGE_ENDPOINT || "/v1/images/generations").trim() || "/v1/images/generations";
   if (endpoint === "/api/v1/images/generations") return "/v1/images/generations";
   return endpoint.startsWith("/") ? endpoint : "/" + endpoint;
+}
+
+function absoluteUrl(baseUrl, endpoint) {
+  if (/^https?:\/\//i.test(endpoint)) return endpoint;
+  return baseUrl + (endpoint.startsWith("/") ? endpoint : "/" + endpoint);
+}
+
+function stringifyFailureDetail(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (isRecord(value) && typeof value.message === "string") return value.message;
+  try {
+    return JSON.stringify(value).slice(0, 800);
+  } catch {
+    return String(value);
+  }
+}
+
+function upstreamErrorMessage(payload, text) {
+  if (!isRecord(payload)) return text;
+  return stringifyFailureDetail(
+    payload.error && payload.error.message ? payload.error.message :
+      payload.message || payload.error_message || payload.error || text
+  );
+}
+
+function taskIdFromPayload(payload) {
+  if (!isRecord(payload)) return "";
+  const data = isRecord(payload.data) ? payload.data : null;
+  return payload.id || payload.taskId || payload.task_id || (data && (data.id || data.taskId || data.task_id)) || "";
+}
+
+function taskStatus(payload) {
+  if (!isRecord(payload)) return "";
+  const data = isRecord(payload.data) ? payload.data : null;
+  return String((data && data.status) || payload.status || payload.state || "").toLowerCase();
+}
+
+function predictionResultEndpoint(payload) {
+  if (!isRecord(payload)) return "";
+  const data = isRecord(payload.data) ? payload.data : null;
+  const urls = data && data.urls;
+  const getUrl = Array.isArray(urls) ? urls[0] && urls[0].get : urls && urls.get;
+  if (getUrl) {
+    try {
+      const parsed = new URL(getUrl);
+      return parsed.pathname + parsed.search;
+    } catch {
+      return getUrl;
+    }
+  }
+  const taskId = taskIdFromPayload(payload);
+  return taskId ? `/api/v3/predictions/${taskId}/result` : "";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function createPreviewProvider() {
@@ -169,6 +275,84 @@ function createGptProtoProvider(env, fetchImpl) {
       if (!apiKey) throw serviceUnavailable("GPTPROTO_API_KEY is not configured");
 
       const baseUrl = String(env.GPTPROTO_BASE_URL || "https://gptproto.com").replace(/\/$/, "");
+      const route = gptProtoRouteFor(requestedModelKey(input, env.GPTPROTO_IMAGE_MODEL || env.OPENAI_IMAGE_MODEL || "gpt-image-2"));
+      if (route.mode === "v3") {
+        const referenceImages = input.referenceImages || input.template.referenceImages || [];
+        const responseFormat = input.request && input.request.responseFormat;
+        const size = env.GPTPROTO_IMAGE_SIZE || env.OPENAI_IMAGE_SIZE || "1024x1536";
+        const response = await fetchImpl(absoluteUrl(baseUrl, route.endpoint), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: apiKey,
+          },
+          body: JSON.stringify({
+            prompt: input.prompt || input.template.prompt,
+            images: referenceImages,
+            size,
+            enable_base64_output: responseFormat === "b64_json",
+            enable_sync_mode: false,
+          }),
+        });
+        const text = await response.text();
+        const payload = parseJsonResponse(text, {
+          provider: "GPTProto",
+          endpoint: route.endpoint,
+          status: response.status,
+          contentType: response.headers.get("content-type"),
+        });
+        if (!response.ok) {
+          throw new Error("GPTProto image generation failed: " + response.status + " " + upstreamErrorMessage(payload, text));
+        }
+
+        let resultPayload = payload;
+        const completedStatuses = ["succeeded", "success", "completed", "done"];
+        if (!completedStatuses.includes(taskStatus(payload)) && normalizeImages(payload).length === 0) {
+          const resultEndpoint = predictionResultEndpoint(payload);
+          if (!resultEndpoint) throw new Error("GPTProto prediction result endpoint is missing");
+          const pollIntervalMs = Number(env.GPTPROTO_POLL_INTERVAL_MS || 2000);
+          const maxPollAttempts = Number(env.GPTPROTO_MAX_POLL_ATTEMPTS || 120);
+          for (let attempt = 1; attempt <= maxPollAttempts; attempt += 1) {
+            const pollResponse = await fetchImpl(absoluteUrl(baseUrl, resultEndpoint), {
+              method: "GET",
+              headers: {
+                authorization: apiKey,
+              },
+            });
+            const pollText = await pollResponse.text();
+            const pollPayload = parseJsonResponse(pollText, {
+              provider: "GPTProto",
+              endpoint: resultEndpoint,
+              status: pollResponse.status,
+              contentType: pollResponse.headers.get("content-type"),
+            });
+            if (!pollResponse.ok) {
+              throw new Error("GPTProto image generation failed: " + pollResponse.status + " " + upstreamErrorMessage(pollPayload, pollText));
+            }
+            const status = taskStatus(pollPayload);
+            if (completedStatuses.includes(status) || normalizeImages(pollPayload).length > 0) {
+              resultPayload = pollPayload;
+              break;
+            }
+            if (["failed", "error", "cancelled", "canceled"].includes(status)) {
+              throw new Error("GPTProto task failed with status: " + status + " " + upstreamErrorMessage(pollPayload, pollText));
+            }
+            if (attempt === maxPollAttempts) {
+              throw new Error("GPTProto task polling timed out: " + taskIdFromPayload(payload));
+            }
+            await sleep(pollIntervalMs);
+          }
+        }
+
+        return {
+          provider: "gptproto",
+          status: "completed",
+          images: normalizeImages(resultPayload),
+          raw: resultPayload,
+          providerTaskId: taskIdFromPayload(payload),
+        };
+      }
+
       const endpoint = gptProtoEndpoint(env);
       const response = await fetchImpl(baseUrl + endpoint, {
         method: "POST",
@@ -177,7 +361,7 @@ function createGptProtoProvider(env, fetchImpl) {
           authorization: apiKey,
         },
         body: JSON.stringify({
-          model: requestedModel(input, env.GPTPROTO_IMAGE_MODEL || env.OPENAI_IMAGE_MODEL || "gpt-image-2"),
+          model: route.providerModel,
           prompt: input.prompt || input.template.prompt,
           size: env.GPTPROTO_IMAGE_SIZE || env.OPENAI_IMAGE_SIZE || "1024x1536",
           referenceImages: input.referenceImages || input.template.referenceImages || [],
@@ -193,7 +377,7 @@ function createGptProtoProvider(env, fetchImpl) {
         contentType: response.headers.get("content-type"),
       });
       if (!response.ok) {
-        const message = payload.error || payload.message || text;
+        const message = upstreamErrorMessage(payload, text);
         throw new Error("GPTProto image generation failed: " + response.status + " " + message);
       }
       return {
