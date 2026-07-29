@@ -141,12 +141,14 @@ test("gptproto provider routes Doubao Seedream through the V3 image-edit endpoin
     referenceImages: ["https://cdn.example.com/ref.jpg"],
     request: {
       model: "doubao-seedream-5-edit",
+      aspectRatio: "3:4",
+      resolution: "1k",
     },
   });
 
   assert.equal(requestBody.prompt, "Use the reference image style");
   assert.deepEqual(requestBody.images, ["https://cdn.example.com/ref.jpg"]);
-  assert.equal(requestBody.size, "1024x1536");
+  assert.equal(requestBody.size, "1664x2224");
   assert.equal(requestBody.enable_sync_mode, false);
   assert.deepEqual(result.images, ["https://cdn.example.com/doubao.png"]);
   assert.equal(result.providerTaskId, "pred-1");

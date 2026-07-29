@@ -132,6 +132,90 @@ function gptProtoEndpoint(env) {
   return endpoint.startsWith("/") ? endpoint : "/" + endpoint;
 }
 
+function normalizeResolution(resolution) {
+  const value = String(resolution || "").toLowerCase();
+  return value === "2k" ? "2k" : "1k";
+}
+
+function roundToImageMultiple(value) {
+  return Math.max(16, Math.round(value / 16) * 16);
+}
+
+function sizeFromAspectRatio(aspectRatio, resolution) {
+  const base = normalizeResolution(resolution) === "2k" ? 2048 : 1024;
+  switch (aspectRatio) {
+    case "3:4":
+      return `${base}x${roundToImageMultiple((base * 4) / 3)}`;
+    case "4:3":
+      return `${roundToImageMultiple((base * 4) / 3)}x${base}`;
+    case "16:9":
+      return `${base * 2}x${roundToImageMultiple((base * 2 * 9) / 16)}`;
+    case "9:16":
+      return `${roundToImageMultiple((base * 2 * 9) / 16)}x${base * 2}`;
+    case "2:3":
+      return `${base}x${roundToImageMultiple((base * 3) / 2)}`;
+    case "3:2":
+      return `${roundToImageMultiple((base * 3) / 2)}x${base}`;
+    case "21:9":
+      return `${base * 2}x${roundToImageMultiple((base * 2 * 9) / 21)}`;
+    case "1:1":
+    default:
+      return `${base}x${base}`;
+  }
+}
+
+function parseSize(size) {
+  const match = String(size || "").match(/^(\d+)x(\d+)$/);
+  if (!match) return null;
+  return {
+    width: Number(match[1]),
+    height: Number(match[2]),
+  };
+}
+
+function aspectRatioParts(aspectRatio, fallbackSize) {
+  const match = String(aspectRatio || "").match(/^(\d+):(\d+)$/);
+  if (match) {
+    return {
+      width: Number(match[1]),
+      height: Number(match[2]),
+    };
+  }
+  if (fallbackSize) return fallbackSize;
+  return {
+    width: 1,
+    height: 1,
+  };
+}
+
+function ensureMinimumPixels(size, aspectRatio, minimumPixels) {
+  const parsed = parseSize(size);
+  if (parsed && parsed.width * parsed.height >= minimumPixels) return size;
+
+  const ratio = aspectRatioParts(aspectRatio, parsed);
+  let width = roundToImageMultiple(Math.sqrt((minimumPixels * ratio.width) / ratio.height));
+  let height = roundToImageMultiple((width * ratio.height) / ratio.width);
+  while (width * height < minimumPixels) {
+    height += 16;
+  }
+  return `${width}x${height}`;
+}
+
+function seedreamV3Size(input, env) {
+  const request = input.request || {};
+  const seed = input.template.seed || {};
+  const aspectRatio = request.aspectRatio || seed.aspectRatio || "1:1";
+  const candidate =
+    env.GPTPROTO_SEEDREAM_IMAGE_SIZE ||
+    request.size ||
+    sizeFromAspectRatio(aspectRatio, request.resolution || seed.resolution) ||
+    env.GPTPROTO_IMAGE_SIZE ||
+    env.OPENAI_IMAGE_SIZE ||
+    "1024x1024";
+
+  return ensureMinimumPixels(candidate, aspectRatio, 3686400);
+}
+
 function absoluteUrl(baseUrl, endpoint) {
   if (/^https?:\/\//i.test(endpoint)) return endpoint;
   return baseUrl + (endpoint.startsWith("/") ? endpoint : "/" + endpoint);
@@ -279,7 +363,7 @@ function createGptProtoProvider(env, fetchImpl) {
       if (route.mode === "v3") {
         const referenceImages = input.referenceImages || input.template.referenceImages || [];
         const responseFormat = input.request && input.request.responseFormat;
-        const size = env.GPTPROTO_IMAGE_SIZE || env.OPENAI_IMAGE_SIZE || "1024x1536";
+        const size = seedreamV3Size(input, env);
         const response = await fetchImpl(absoluteUrl(baseUrl, route.endpoint), {
           method: "POST",
           headers: {
