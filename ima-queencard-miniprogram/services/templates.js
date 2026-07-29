@@ -17,6 +17,20 @@ function isConfigured() {
   return Boolean(env.TEMPLATE_API_BASE_URL && env.TEMPLATE_API_BASE_URL.indexOf("http") === 0);
 }
 
+function normalizeQuery(query) {
+  var input = query || {};
+  var normalized = {};
+  var scenarioCategory = input.scenario_category || input.scenarioCategory || "";
+  if (input.page) normalized.page = input.page;
+  if (input.limit) normalized.limit = input.limit;
+  if (input.q) normalized.q = input.q;
+  if (input.category) normalized.category = input.category;
+  if (scenarioCategory) normalized.scenario_category = scenarioCategory;
+  if (input.sort) normalized.sort = input.sort;
+  if (input.language) normalized.language = input.language;
+  return normalized;
+}
+
 function normalizeRecord(record) {
   var response = record.response_payload || {};
   var request = record.request_payload || {};
@@ -98,14 +112,15 @@ function requestPublicTemplates(query) {
 }
 
 function listTemplates(query) {
+  var normalizedQuery = normalizeQuery(query);
   if (api.isConfigured()) {
     return api.request({
       path: "/templates",
       method: "GET",
-      query: query || {},
+      query: normalizedQuery,
     });
   }
-  return requestPublicTemplates(query || {});
+  return requestPublicTemplates(normalizedQuery);
 }
 
 function getTemplate(id) {

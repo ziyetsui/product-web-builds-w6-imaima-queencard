@@ -44,7 +44,42 @@
         <text class="section-kicker">TEMPLATES</text>
         <text class="section-title">下拉模板，直接生成同款</text>
       </view>
-      <button class="feed-refresh" loading="{{templateLoading}}" bindtap="loadTemplates" data-reset="{{true}}">刷新</button>
+      <button class="feed-refresh" loading="{{templateLoading}}" bindtap="refreshTemplates">刷新</button>
+    </view>
+
+    <view class="template-controls">
+      <view class="template-search">
+        <input
+          value="{{templateSearch}}"
+          placeholder="搜索模板关键词"
+          confirm-type="search"
+          bindinput="onTemplateSearchInput"
+          bindconfirm="onTemplateSearchConfirm"
+        />
+      </view>
+
+      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="filter-scroll">
+        <view class="filter-row">
+          <button
+            wx:for="{{templateCategories}}"
+            wx:key="label"
+            class="filter-chip {{item.active ? 'active' : ''}}"
+            data-value="{{item.value}}"
+            data-scenario-category="{{item.scenarioCategory}}"
+            bindtap="selectTemplateCategory"
+          >{{item.label}}</button>
+        </view>
+      </scroll-view>
+
+      <view class="sort-row">
+        <button
+          wx:for="{{templateSortOptions}}"
+          wx:key="value"
+          class="sort-chip {{item.active ? 'active' : ''}}"
+          data-value="{{item.value}}"
+          bindtap="selectTemplateSort"
+        >{{item.label}}</button>
+      </view>
     </view>
 
     <view wx:if="{{!templateReady}}" class="feed-empty">
@@ -55,7 +90,7 @@
     <view wx:elif="{{templateError}}" class="feed-empty">
       <text class="feed-empty-title">模板暂时没加载出来</text>
       <text class="feed-empty-copy">{{templateError}}</text>
-      <button class="small-feed-button" bindtap="loadTemplates" data-reset="{{true}}">重试</button>
+      <button class="small-feed-button" bindtap="refreshTemplates">重试</button>
     </view>
 
     <view wx:else class="template-list">

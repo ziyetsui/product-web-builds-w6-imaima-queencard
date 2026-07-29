@@ -2,6 +2,18 @@ var landing = require("../../data/landing.js");
 var api = require("../../services/api.js");
 var templatesService = require("../../services/templates.js");
 
+var TEMPLATE_CATEGORIES = [
+  { label: "全部图片", value: "image", scenarioCategory: "" },
+  { label: "社媒图", value: "image", scenarioCategory: "Social Graphics" },
+  { label: "全部类型", value: "", scenarioCategory: "" },
+];
+
+var TEMPLATE_SORT_OPTIONS = [
+  { label: "默认", value: "default" },
+  { label: "最新", value: "newest" },
+  { label: "热门", value: "hot" },
+];
+
 function appendTemplates(current, next) {
   var seen = {};
   var result = [];
@@ -19,11 +31,42 @@ function appendTemplates(current, next) {
   return result;
 }
 
+function markCategoryOptions(selectedCategory, selectedScenarioCategory) {
+  return TEMPLATE_CATEGORIES.map(function (item) {
+    return {
+      label: item.label,
+      value: item.value,
+      scenarioCategory: item.scenarioCategory,
+      active: item.value === selectedCategory && item.scenarioCategory === selectedScenarioCategory,
+    };
+  });
+}
+
+function markSortOptions(selectedSort) {
+  return TEMPLATE_SORT_OPTIONS.map(function (item) {
+    return {
+      label: item.label,
+      value: item.value,
+      active: item.value === selectedSort,
+    };
+  });
+}
+
+function cleanText(value) {
+  return String(value || "").replace(/^\s+|\s+$/g, "");
+}
+
 Page({
   data: {
     landing: landing,
     apiReady: api.isConfigured(),
     templateReady: api.isConfigured() || templatesService.isConfigured(),
+    templateSearch: "",
+    templateCategory: "image",
+    templateScenarioCategory: "",
+    templateSort: "default",
+    templateCategories: markCategoryOptions("image", ""),
+    templateSortOptions: markSortOptions("default"),
     templates: [],
     templatePage: 1,
     templateLimit: 12,
@@ -35,6 +78,13 @@ Page({
   onLoad: function () {
     if (this.data.templateReady) {
       this.loadTemplates(true);
+    }
+  },
+
+  onUnload: function () {
+    if (this.templateSearchTimer) {
+      clearTimeout(this.templateSearchTimer);
+      this.templateSearchTimer = null;
     }
   },
 
@@ -109,9 +159,64 @@ Page({
     });
   },
 
+  refreshTemplates: function () {
+    return this.loadTemplates(true);
+  },
+
+  onTemplateSearchInput: function (event) {
+    var page = this;
+    var value = event && event.detail ? event.detail.value : "";
+    this.setData({
+      templateSearch: value,
+      templatePage: 1,
+      templateHasMore: true,
+    });
+    if (this.templateSearchTimer) {
+      clearTimeout(this.templateSearchTimer);
+    }
+    this.templateSearchTimer = setTimeout(function () {
+      page.loadTemplates(true);
+    }, 280);
+  },
+
+  onTemplateSearchConfirm: function () {
+    if (this.templateSearchTimer) {
+      clearTimeout(this.templateSearchTimer);
+      this.templateSearchTimer = null;
+    }
+    this.loadTemplates(true);
+  },
+
+  selectTemplateCategory: function (event) {
+    var category = event.currentTarget.dataset.value || "";
+    var scenarioCategory = event.currentTarget.dataset.scenarioCategory || "";
+    if (category === this.data.templateCategory && scenarioCategory === this.data.templateScenarioCategory) return;
+    this.setData({
+      templateCategory: category,
+      templateScenarioCategory: scenarioCategory,
+      templateCategories: markCategoryOptions(category, scenarioCategory),
+      templatePage: 1,
+      templateHasMore: true,
+    });
+    this.loadTemplates(true);
+  },
+
+  selectTemplateSort: function (event) {
+    var sort = event.currentTarget.dataset.value || "default";
+    if (sort === this.data.templateSort) return;
+    this.setData({
+      templateSort: sort,
+      templateSortOptions: markSortOptions(sort),
+      templatePage: 1,
+      templateHasMore: true,
+    });
+    this.loadTemplates(true);
+  },
+
   loadTemplates: function (reset) {
     var page = this;
     var nextPage = reset ? 1 : this.data.templatePage;
+    var query = cleanText(this.data.templateSearch);
     if (!this.data.templateReady) {
       this.setData({
         templateError: "模板 API 未配置，暂时显示 landing 静态内容。",
@@ -129,7 +234,10 @@ Page({
     return templatesService.listTemplates({
       page: nextPage,
       limit: this.data.templateLimit,
-      category: "image",
+      q: query,
+      category: this.data.templateCategory,
+      scenarioCategory: this.data.templateScenarioCategory,
+      sort: this.data.templateSort,
       language: "zh",
     }).then(function (result) {
       var records = result.records || [];

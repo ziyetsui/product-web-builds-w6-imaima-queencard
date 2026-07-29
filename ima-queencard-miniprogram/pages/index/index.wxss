@@ -319,6 +319,74 @@
   line-height: 1.45;
 }
 
+.template-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+  margin: 28rpx 0 24rpx;
+}
+
+.template-search {
+  height: 78rpx;
+  padding: 0 22rpx;
+  border: 4rpx solid #0d0d0d;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 6rpx 6rpx 0 rgba(13, 13, 13, 0.12);
+}
+
+.template-search input {
+  width: 100%;
+  height: 78rpx;
+  color: #0d0d0d;
+  font-size: 26rpx;
+  font-weight: 800;
+}
+
+.filter-scroll {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.filter-row,
+.sort-row {
+  display: flex;
+  gap: 12rpx;
+}
+
+.filter-row {
+  width: max-content;
+  padding-right: 4rpx;
+}
+
+.filter-chip,
+.sort-chip {
+  flex: none;
+  height: 62rpx;
+  min-width: 118rpx;
+  padding: 0 18rpx;
+  border: 4rpx solid #0d0d0d;
+  border-radius: 8px;
+  background: #fff;
+  color: #0d0d0d;
+  font-size: 23rpx;
+  font-weight: 900;
+}
+
+.filter-chip.active,
+.sort-chip.active {
+  background: #ef724f;
+  box-shadow: 5rpx 5rpx 0 rgba(13, 13, 13, 0.14);
+}
+
+.sort-chip {
+  background: #f6e0db;
+}
+
+.sort-chip.active {
+  background: #e7db4c;
+}
+
 .template-list {
   display: flex;
   flex-direction: column;
