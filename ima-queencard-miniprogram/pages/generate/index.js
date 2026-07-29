@@ -1,9 +1,22 @@
 var landing = require("../../data/landing.js");
 var api = require("../../services/api.js");
 var auth = require("../../services/auth.js");
+var templatesService = require("../../services/templates.js");
 
 function trim(value) {
   return String(value || "").replace(/^\s+|\s+$/g, "");
+}
+
+function isRemoteUrl(value) {
+  return /^https:\/\//.test(String(value || ""));
+}
+
+function firstReferenceImage(template) {
+  if (!template) return "";
+  if (template.previewUrl) return template.previewUrl;
+  if (template.thumbnailUrl) return template.thumbnailUrl;
+  if (template.referenceImages && template.referenceImages[0]) return template.referenceImages[0];
+  return "";
 }
 
 function chooseOneImage() {
@@ -70,6 +83,15 @@ function userDesc(user) {
   return "后端会把该微信身份映射到独立小程序账号";
 }
 
+function modelIndexFor(models, value) {
+  var i = 0;
+  if (!value) return 0;
+  for (i = 0; i < models.length; i += 1) {
+    if (models[i].value === value) return i;
+  }
+  return 0;
+}
+
 Page({
   data: {
     apiReady: api.isConfigured(),
@@ -77,6 +99,8 @@ Page({
     userLabel: "未登录",
     userDesc: "使用 wx.login 获取 code，服务端换 openid 并绑定账号",
     referenceImagePath: "",
+    templateId: "",
+    templateTitle: "",
     topic: "",
     prompt: landing.hero.samplePrompt,
     models: [
@@ -91,6 +115,14 @@ Page({
     countIndex: 0,
     outputCountLabel: "1 张",
     busy: false,
+    templateLoading: false,
+  },
+
+  onLoad: function (options) {
+    var templateId = options && options.templateId ? decodeURIComponent(options.templateId) : "";
+    if (templateId) {
+      this.loadTemplateSeed(templateId);
+    }
   },
 
   onShow: function () {
@@ -101,6 +133,40 @@ Page({
       userLabel: userLabel(user),
       userDesc: userDesc(user),
     });
+  },
+
+  loadTemplateSeed: function (templateId) {
+    var page = this;
+    if (!this.data.apiReady) {
+      this.showBackendNotice();
+      return;
+    }
+    this.setData({
+      templateId: templateId,
+      templateLoading: true,
+    });
+
+    templatesService.getTemplate(templateId)
+      .then(function (template) {
+        var seed = template.seed || {};
+        var modelIndex = modelIndexFor(page.data.models, seed.model);
+        page.setData({
+          templateTitle: template.title || "",
+          referenceImagePath: firstReferenceImage(template),
+          prompt: template.prompt || seed.prompt || page.data.prompt,
+          modelIndex: modelIndex,
+          modelLabel: page.data.models[modelIndex].label,
+          templateLoading: false,
+        });
+      })
+      .catch(function (error) {
+        page.setData({ templateLoading: false });
+        wx.showModal({
+          title: "模板加载失败",
+          content: error.message || "请返回重试",
+          showCancel: false,
+        });
+      });
   },
 
   goHome: function () {
@@ -273,6 +339,9 @@ Page({
           userLabel: userLabel(currentUser),
           userDesc: userDesc(currentUser),
         });
+        if (isRemoteUrl(referenceImagePath)) {
+          return Promise.resolve({ url: referenceImagePath });
+        }
         return api.uploadReferenceImage(referenceImagePath);
       })
       .then(function (upload) {
@@ -286,6 +355,7 @@ Page({
           capability: "image-edit",
           prompt: topic ? prompt + "\n\n我的主题：" + topic : prompt,
           topic: topic,
+          templateId: page.data.templateId,
           referenceImages: [referenceUrl],
           outputCount: outputCount,
           aspectRatio: "3:4",

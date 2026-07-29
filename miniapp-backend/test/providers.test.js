@@ -73,3 +73,32 @@ test("gptproto provider requires GPTPROTO_API_KEY before it can run", async () =
     }
   );
 });
+
+test("gptproto provider forwards the requested model when present", async () => {
+  let requestBody = null;
+  const provider = createImageProvider({
+    env: {
+      MINIAPP_IMAGE_PROVIDER: "gptproto",
+      GPTPROTO_API_KEY: "test-key",
+      GPTPROTO_IMAGE_MODEL: "fallback-model",
+    },
+    fetch: async (url, options) => {
+      assert.equal(String(url), "https://gptproto.com/api/v1/images/generations");
+      requestBody = JSON.parse(options.body);
+      return Response.json({
+        images: ["https://cdn.example.com/generated.png"],
+      });
+    },
+  });
+
+  const result = await provider.generate({
+    template,
+    prompt: template.prompt,
+    request: {
+      model: "doubao-seedream-5-edit",
+    },
+  });
+
+  assert.equal(requestBody.model, "doubao-seedream-5-edit");
+  assert.deepEqual(result.images, ["https://cdn.example.com/generated.png"]);
+});

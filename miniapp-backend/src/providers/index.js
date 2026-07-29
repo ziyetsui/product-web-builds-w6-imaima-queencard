@@ -42,6 +42,12 @@ function normalizeImages(payload) {
   return result;
 }
 
+function requestedModel(input, fallback) {
+  const request = input.request || {};
+  const model = request.model || (input.template.seed && input.template.seed.model);
+  return String(model || fallback || "").trim();
+}
+
 function createPreviewProvider() {
   return {
     name: "preview",
@@ -93,7 +99,7 @@ function createOpenAiProvider(env, fetchImpl) {
           authorization: "Bearer " + apiKey,
         },
         body: JSON.stringify({
-          model: env.OPENAI_IMAGE_MODEL || "gpt-image-1",
+          model: requestedModel(input, env.OPENAI_IMAGE_MODEL || "gpt-image-1"),
           prompt: input.prompt || input.template.prompt,
           size: env.OPENAI_IMAGE_SIZE || "1024x1536",
           n: Number(env.OPENAI_IMAGE_COUNT || input.outputNumber || 1),
@@ -131,7 +137,7 @@ function createGptProtoProvider(env, fetchImpl) {
           authorization: "Bearer " + apiKey,
         },
         body: JSON.stringify({
-          model: env.GPTPROTO_IMAGE_MODEL || env.OPENAI_IMAGE_MODEL || "gpt-image-2",
+          model: requestedModel(input, env.GPTPROTO_IMAGE_MODEL || env.OPENAI_IMAGE_MODEL || "gpt-image-2"),
           prompt: input.prompt || input.template.prompt,
           referenceImages: input.referenceImages || input.template.referenceImages || [],
           templateId: input.template.id,

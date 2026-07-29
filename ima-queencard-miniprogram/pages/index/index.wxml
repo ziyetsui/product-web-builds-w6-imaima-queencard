@@ -71,7 +71,7 @@
           </view>
           <text class="template-title">{{template.title}}</text>
           <text class="template-desc">{{template.useCase}}</text>
-          <button class="template-button" loading="{{templateGeneratingId === template.id}}" data-id="{{template.id}}" bindtap="generateTemplate">生成同款</button>
+          <button class="template-button" data-id="{{template.id}}" bindtap="generateTemplate">生成同款</button>
         </view>
       </view>
       <view wx:if="{{templateLoading}}" class="feed-loading">模板加载中...</view>

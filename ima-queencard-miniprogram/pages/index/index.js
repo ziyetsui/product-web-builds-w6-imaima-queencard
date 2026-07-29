@@ -1,6 +1,5 @@
 var landing = require("../../data/landing.js");
 var api = require("../../services/api.js");
-var auth = require("../../services/auth.js");
 var templatesService = require("../../services/templates.js");
 
 function appendTemplates(current, next) {
@@ -20,15 +19,6 @@ function appendTemplates(current, next) {
   return result;
 }
 
-function taskIdFrom(result) {
-  if (!result) return "";
-  if (result.taskId) return result.taskId;
-  if (result.task_id) return result.task_id;
-  if (result.id) return result.id;
-  if (result.upstream && result.upstream.task_id) return result.upstream.task_id;
-  return "";
-}
-
 Page({
   data: {
     landing: landing,
@@ -39,7 +29,6 @@ Page({
     templateLimit: 12,
     templateHasMore: true,
     templateLoading: false,
-    templateGeneratingId: "",
     templateError: "",
   },
 
@@ -162,7 +151,6 @@ Page({
   },
 
   generateTemplate: function (event) {
-    var page = this;
     var id = event.currentTarget.dataset.id;
     if (!id) return;
     if (!this.data.apiReady) {
@@ -174,38 +162,9 @@ Page({
       });
       return;
     }
-    if (this.data.templateGeneratingId) return;
-
-    this.setData({ templateGeneratingId: id });
-    (auth.getCurrentUser()
-      ? Promise.resolve(auth.getCurrentUser())
-      : auth.loginWithWechatProfile({ source: "miniapp-template" }))
-      .then(function () {
-        return templatesService.generateFromTemplate(id, {});
-      })
-      .then(function (result) {
-        var taskId = taskIdFrom(result);
-        page.setData({ templateGeneratingId: "" });
-        if (!taskId) {
-          wx.showModal({
-            title: "任务已提交",
-            content: "后端没有返回 taskId，请检查 /api/miniapp/templates/:id/generate 响应。",
-            showCancel: false,
-          });
-          return;
-        }
-        wx.navigateTo({
-          url: "/pages/result/index?taskId=" + encodeURIComponent(taskId),
-        });
-      })
-      .catch(function (error) {
-        page.setData({ templateGeneratingId: "" });
-        wx.showModal({
-          title: "生成失败",
-          content: error.message || "请稍后再试",
-          showCancel: false,
-        });
-      });
+    wx.navigateTo({
+      url: "/pages/generate/index?templateId=" + encodeURIComponent(id),
+    });
   },
 
   previewCase: function (event) {
