@@ -5,13 +5,24 @@
       <text class="brand-main">ima ima</text>
       <text class="brand-accent">购买积分</text>
     </view>
-    <view class="top-spacer"></view>
+    <button class="text-button" bindtap="goBilling">订单</button>
   </view>
 
   <view class="hero-panel">
     <text class="kicker">CREDIT PACKS</text>
     <text class="title">按生成量补充积分</text>
-    <text class="subtitle">套餐先保持小程序展示态，支付按钮统一显示微信支付接入中。</text>
+    <text class="subtitle">当前余额 {{balance}} 积分。套餐来自 /api/miniapp/pricing，支付成功后自动刷新余额。</text>
+  </view>
+
+  <view wx:if="{{error}}" class="notice-card warning">
+    <text class="notice-title">提示</text>
+    <text class="notice-copy">{{error}}</text>
+    <button class="pay-button slim" bindtap="loadPage">重试</button>
+  </view>
+
+  <view wx:if="{{notice}}" class="notice-card">
+    <text class="notice-title">订单状态</text>
+    <text class="notice-copy">{{notice}}</text>
   </view>
 
   <view class="pack-list">
@@ -22,12 +33,15 @@
       </view>
       <text class="pack-credits">{{item.credits}} 积分</text>
       <text class="pack-desc">{{item.desc}}</text>
-      <button class="pay-button" disabled bindtap="choosePack">微信支付接入中</button>
+      <button
+        class="pay-button"
+        loading="{{payingProductId === item.id}}"
+        disabled="{{loading || payingProductId}}"
+        data-id="{{item.id}}"
+        bindtap="choosePack"
+      >{{payingProductId === item.id ? '处理中' : '购买'}}</button>
     </view>
   </view>
 
-  <view class="notice-card">
-    <text class="notice-title">支付占位</text>
-    <text class="notice-copy">正式版本需要后端创建微信支付订单，完成支付回调后再写入积分流水。</text>
-  </view>
+  <view wx:if="{{loading}}" class="load-row">正在读取套餐...</view>
 </view>

@@ -1,0 +1,83 @@
+<view class="page">
+  <view class="topbar">
+    <button class="icon-button" bindtap="loadAdmin">↻</button>
+    <view class="brand">
+      <text class="brand-main">ima ima</text>
+      <text class="brand-accent">管理</text>
+    </view>
+    <button class="text-button" bindtap="goAccount">账号</button>
+  </view>
+
+  <view class="summary-panel">
+    <text class="kicker">ADMIN</text>
+    <text class="title">{{users.length}} 用户 · {{orders.length}} 订单</text>
+    <text class="subtitle">只调用小程序管理接口，非管理员会由后端返回 403。</text>
+  </view>
+
+  <view wx:if="{{error}}" class="notice-card warning">
+    <text class="notice-title">管理提示</text>
+    <text class="notice-copy">{{error}}</text>
+  </view>
+  <view wx:if="{{notice}}" class="notice-card">
+    <text class="notice-title">已提交</text>
+    <text class="notice-copy">{{notice}}</text>
+  </view>
+
+  <view class="form-card">
+    <text class="section-title">加积分</text>
+    <input class="input" value="{{targetUserId}}" placeholder="userId / openid" bindinput="onTargetInput" />
+    <input class="input" value="{{amount}}" type="number" placeholder="积分数量" bindinput="onAmountInput" />
+    <input class="input" value="{{reason}}" placeholder="原因" bindinput="onReasonInput" />
+    <button class="submit-button" loading="{{adding}}" bindtap="addCredits">提交</button>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">用户</text>
+      <text class="section-hint">{{users.length}}</text>
+    </view>
+    <view wx:for="{{users}}" wx:key="id" class="row-card {{targetUserId === item.id ? 'active' : ''}}" data-id="{{item.id}}" bindtap="selectUser">
+      <view class="row-copy">
+        <text class="row-title">{{item.label}}</text>
+        <text class="row-desc">{{item.id}}</text>
+      </view>
+      <view class="row-side">
+        <text class="amount">{{item.credits}}</text>
+        <text class="status">{{item.role}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">订单</text>
+      <text class="section-hint">{{orders.length}}</text>
+    </view>
+    <view wx:for="{{orders}}" wx:key="id" class="row-card">
+      <view class="row-copy">
+        <text class="row-title">{{item.title}}</text>
+        <text class="row-desc">{{item.userId}}</text>
+      </view>
+      <view class="row-side">
+        <text class="amount">{{item.amount}}</text>
+        <text class="status">{{item.status}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">支付审计</text>
+      <text class="section-hint">{{audit.length}}</text>
+    </view>
+    <view wx:for="{{audit}}" wx:key="id" class="row-card audit">
+      <view class="row-copy">
+        <text class="row-title">{{item.action}}</text>
+        <text class="row-desc">{{item.actor}} → {{item.target}}</text>
+      </view>
+      <text class="status">{{item.createdAt}}</text>
+    </view>
+  </view>
+
+  <view wx:if="{{loading}}" class="load-row">正在读取管理数据...</view>
+</view>

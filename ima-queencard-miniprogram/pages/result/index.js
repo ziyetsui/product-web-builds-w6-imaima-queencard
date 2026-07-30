@@ -13,6 +13,49 @@ function previousGeneratePage() {
   return null;
 }
 
+function safeAssetFromImage(image) {
+  var item = image || {};
+  var url = typeof item === "string" ? item : item.url;
+  var assetId = typeof item === "string" ? "" : item.assetId;
+  if (assetId) {
+    return {
+      assetId: assetId,
+      encoded: false,
+      url: url || "",
+    };
+  }
+  if (!url || url.indexOf("http") !== 0) {
+    return {
+      assetId: "",
+      encoded: false,
+      url: url || "",
+    };
+  }
+  return {
+    assetId: encodeURIComponent(url),
+    encoded: true,
+    url: url,
+  };
+}
+
+function saveDownloadedFile(filePath) {
+  wx.saveImageToPhotosAlbum({
+    filePath: filePath,
+    success: function () {
+      wx.showToast({
+        title: "已保存",
+        icon: "success",
+      });
+    },
+    fail: function () {
+      wx.showToast({
+        title: "保存失败",
+        icon: "none",
+      });
+    },
+  });
+}
+
 Page({
   pollTimer: null,
 
@@ -24,6 +67,7 @@ Page({
     statusTitle: "正在读取任务",
     statusDesc: "页面会自动刷新任务状态。",
     images: [],
+    imageItems: [],
     error: "",
     regenerating: false,
   },
@@ -78,6 +122,7 @@ Page({
           statusTitle: task.title,
           statusDesc: task.desc,
           images: task.images,
+          imageItems: task.imageItems,
           error: "",
         });
         if (!isDone(task.status)) {
@@ -209,42 +254,64 @@ Page({
     });
   },
 
-  saveImage: function (event) {
-    var url = event.currentTarget.dataset.url;
+  downloadAndSave: function (url, useAuth, fallbackUrl) {
+    var page = this;
     if (!url) return;
     wx.downloadFile({
       url: url,
+      header: useAuth ? api.authHeader() : {},
       success: function (res) {
         if (res.statusCode !== 200) {
+          if (fallbackUrl && fallbackUrl !== url) {
+            page.downloadAndSave(fallbackUrl, false, "");
+            return;
+          }
           wx.showToast({
             title: "下载失败",
             icon: "none",
           });
           return;
         }
-        wx.saveImageToPhotosAlbum({
-          filePath: res.tempFilePath,
-          success: function () {
-            wx.showToast({
-              title: "已保存",
-              icon: "success",
-            });
-          },
-          fail: function () {
-            wx.showToast({
-              title: "保存失败",
-              icon: "none",
-            });
-          },
-        });
+        saveDownloadedFile(res.tempFilePath);
       },
       fail: function () {
+        if (fallbackUrl && fallbackUrl !== url) {
+          page.downloadAndSave(fallbackUrl, false, "");
+          return;
+        }
         wx.showToast({
           title: "下载失败",
           icon: "none",
         });
       },
     });
+  },
+
+  saveImage: function (event) {
+    var index = Number(event.currentTarget.dataset.index || 0);
+    var url = event.currentTarget.dataset.url || "";
+    var item = this.data.imageItems[index] || { url: url };
+    var safeAsset = safeAssetFromImage(item);
+    var safeEndpoint = "";
+    var page = this;
+
+    if (!url && safeAsset.url) url = safeAsset.url;
+    if (!safeAsset.assetId) {
+      this.downloadAndSave(url, false, "");
+      return;
+    }
+
+    safeEndpoint = api.buildImageAssetDownloadEndpoint(safeAsset.assetId, {
+      encoded: safeAsset.encoded,
+    });
+
+    api.getImageAssetDownloadUrl(safeAsset.assetId, { encoded: safeAsset.encoded })
+      .then(function (downloadUrl) {
+        page.downloadAndSave(downloadUrl || safeEndpoint, !downloadUrl, url);
+      })
+      .catch(function () {
+        page.downloadAndSave(safeEndpoint, true, url);
+      });
   },
 
   createAnother: function () {

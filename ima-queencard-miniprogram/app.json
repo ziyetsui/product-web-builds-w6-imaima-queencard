@@ -5,7 +5,10 @@
     "pages/result/index",
     "pages/history/index",
     "pages/credits/index",
-    "pages/pricing/index"
+    "pages/pricing/index",
+    "pages/account/index",
+    "pages/billing/index",
+    "pages/admin/index"
   ],
   "window": {
     "navigationBarTitleText": "ima ima queencard",

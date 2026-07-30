@@ -74,5 +74,7 @@ old-generated-apps/
 # Runtime files
 *.log
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.db
 *.tsbuildinfo

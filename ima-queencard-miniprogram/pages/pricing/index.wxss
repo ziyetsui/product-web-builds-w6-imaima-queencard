@@ -12,6 +12,7 @@
 }
 
 .icon-button,
+.text-button,
 .pay-button {
   border: 4rpx solid #0d0d0d;
   border-radius: 8px;
@@ -34,6 +35,14 @@
 .top-spacer {
   width: 68rpx;
   height: 68rpx;
+}
+
+.text-button {
+  min-width: 92rpx;
+  height: 66rpx;
+  padding: 0 20rpx;
+  background: #fff;
+  font-size: 24rpx;
 }
 
 .brand {
@@ -155,8 +164,15 @@
   height: 82rpx;
   margin-top: 24rpx;
   background: #fff;
-  color: rgba(13, 13, 13, 0.48);
+  color: #0d0d0d;
   font-size: 28rpx;
+}
+
+.pay-button.slim {
+  width: 180rpx;
+  height: 66rpx;
+  margin-top: 18rpx;
+  font-size: 24rpx;
 }
 
 .notice-card {
@@ -164,7 +180,23 @@
   background: #fff;
 }
 
+.notice-card.warning {
+  background: #e7db4c;
+}
+
 .notice-title {
   margin-bottom: 10rpx;
   font-size: 30rpx;
+}
+
+.load-row {
+  padding: 24rpx 0;
+  color: rgba(13, 13, 13, 0.55);
+  font-size: 24rpx;
+  font-weight: 900;
+  text-align: center;
+}
+
+button[disabled] {
+  opacity: 0.56;
 }

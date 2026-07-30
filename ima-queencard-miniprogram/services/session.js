@@ -15,6 +15,10 @@ function clearSession() {
   wx.removeStorageSync(USER_KEY);
 }
 
+function updateUser(user) {
+  wx.setStorageSync(USER_KEY, user || null);
+}
+
 function getUser() {
   return wx.getStorageSync(USER_KEY) || null;
 }
@@ -23,5 +27,6 @@ module.exports = {
   getToken: getToken,
   setSession: setSession,
   clearSession: clearSession,
+  updateUser: updateUser,
   getUser: getUser,
 };

@@ -30,6 +30,7 @@
       <button class="button secondary" bindtap="scrollToGallery">看生成对比</button>
       <button class="button secondary" bindtap="openHistory">历史</button>
       <button class="button secondary" bindtap="openCredits">额度</button>
+      <button class="button secondary" bindtap="openAccount">账号</button>
     </view>
 
     <view class="stat-grid">

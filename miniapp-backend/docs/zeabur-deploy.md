@@ -34,6 +34,8 @@ MINIAPP_DB_PATH=/data/miniapp.sqlite
 MINIAPP_UPLOAD_ROOT=/data/uploads
 MINIAPP_TEMPLATE_SOURCE=github
 MINIAPP_PUBLIC_ASSET_BASE_URL=https://replace-with-your-zeabur-domain
+MINIAPP_PAYMENT_MODE=mock
+MINIAPP_ADMIN_OPENIDS=dev_openid
 MINIAPP_IMAGE_PROVIDER=preview
 ```
 
@@ -62,6 +64,19 @@ or:
 MINIAPP_IMAGE_PROVIDER=gptproto
 GPTPROTO_API_KEY=your-gptproto-key
 ```
+
+For a production payment flow, keep miniapp order creation in this backend and
+switch the payment adapter only after the WeChat merchant prepay service is
+ready:
+
+```bash
+MINIAPP_PAYMENT_MODE=wechat
+MINIAPP_ADMIN_OPENIDS=real-admin-openid-1,real-admin-openid-2
+```
+
+`MINIAPP_WECHAT_PAYMENT_PARAMS_JSON` is only a development bridge for fixed
+`wx.requestPayment` params. Real deployments should generate those params per
+order server-side and then fulfill credits from the payment notify callback.
 
 ## After Deployment
 

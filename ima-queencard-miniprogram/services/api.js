@@ -52,6 +52,13 @@ function request(options) {
   });
 }
 
+function authHeader() {
+  var token = session.getToken();
+  return {
+    authorization: token ? "Bearer " + token : "",
+  };
+}
+
 function uploadReferenceImage(filePath) {
   if (!isConfigured()) {
     return Promise.reject(new Error("后端 API 未配置，请先设置 config/env.js 里的 API_BASE_URL"));
@@ -102,6 +109,107 @@ function loginWithWechat(code, profile) {
 function getMe() {
   return request({
     path: "/auth/me",
+  });
+}
+
+function listPricingProducts() {
+  return request({
+    path: "/pricing",
+  });
+}
+
+function createOrder(productId, channel) {
+  return request({
+    path: "/orders",
+    method: "POST",
+    data: {
+      productId: productId,
+      channel: channel || "wechat",
+    },
+  });
+}
+
+function listOrders(query) {
+  return request({
+    path: "/orders",
+    query: query || {},
+  });
+}
+
+function getBilling(query) {
+  return request({
+    path: "/billing",
+    query: query || {},
+  });
+}
+
+function mockPayOrder(orderId) {
+  return request({
+    path: "/orders/" + encodeURIComponent(orderId) + "/mock-pay",
+    method: "POST",
+  });
+}
+
+function getAccountMe() {
+  return request({
+    path: "/account/me",
+  });
+}
+
+function patchAccountMe(input) {
+  return request({
+    path: "/account/me",
+    method: "PATCH",
+    data: input || {},
+  });
+}
+
+function listAdminUsers(query) {
+  return request({
+    path: "/admin/users",
+    query: query || {},
+  });
+}
+
+function listAdminOrders(query) {
+  return request({
+    path: "/admin/orders",
+    query: query || {},
+  });
+}
+
+function listAdminPaymentAudit(query) {
+  return request({
+    path: "/admin/payment-audit",
+    query: query || {},
+  });
+}
+
+function adminAddCredits(input) {
+  var userId = input && (input.userId || input.targetUserId || input.id);
+  return request({
+    path: "/admin/users/" + encodeURIComponent(userId || "") + "/credits",
+    method: "POST",
+    data: input || {},
+  });
+}
+
+function imageAssetDownloadPath(assetId, options) {
+  var value = String(assetId || "");
+  var encoded = options && options.encoded ? value : encodeURIComponent(value);
+  return "/image-assets/" + encoded + "/download";
+}
+
+function buildImageAssetDownloadEndpoint(assetId, options) {
+  return endpoint(imageAssetDownloadPath(assetId, options));
+}
+
+function getImageAssetDownloadUrl(assetId, options) {
+  return request({
+    path: imageAssetDownloadPath(assetId, options),
+  }).then(function (payload) {
+    if (typeof payload === "string") return payload;
+    return payload && (payload.url || payload.downloadUrl || payload.redirectUrl || payload.href);
   });
 }
 
@@ -158,8 +266,22 @@ function getCreditHistory(query) {
 module.exports = {
   isConfigured: isConfigured,
   request: request,
+  authHeader: authHeader,
   loginWithWechat: loginWithWechat,
   getMe: getMe,
+  listPricingProducts: listPricingProducts,
+  createOrder: createOrder,
+  listOrders: listOrders,
+  getBilling: getBilling,
+  mockPayOrder: mockPayOrder,
+  getAccountMe: getAccountMe,
+  patchAccountMe: patchAccountMe,
+  listAdminUsers: listAdminUsers,
+  listAdminOrders: listAdminOrders,
+  listAdminPaymentAudit: listAdminPaymentAudit,
+  adminAddCredits: adminAddCredits,
+  getImageAssetDownloadUrl: getImageAssetDownloadUrl,
+  buildImageAssetDownloadEndpoint: buildImageAssetDownloadEndpoint,
   uploadReferenceImage: uploadReferenceImage,
   createGenerationTask: createGenerationTask,
   getGenerationTask: getGenerationTask,

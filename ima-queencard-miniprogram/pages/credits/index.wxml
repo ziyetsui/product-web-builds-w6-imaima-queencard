@@ -14,7 +14,11 @@
     <text class="balance-label">可用积分</text>
     <view class="account-row">
       <text>{{userLabel}}</text>
-      <button class="small-button pumpkin" bindtap="goPricing">购买积分</button>
+      <view class="account-actions">
+        <button class="small-button white" bindtap="goAccount">账号</button>
+        <button class="small-button lemon" bindtap="goBilling">订单</button>
+        <button class="small-button pumpkin" bindtap="goPricing">购买</button>
+      </view>
     </view>
   </view>
 

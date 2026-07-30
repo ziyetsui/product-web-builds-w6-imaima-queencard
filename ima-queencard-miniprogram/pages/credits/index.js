@@ -160,4 +160,16 @@ Page({
       url: "/pages/pricing/index",
     });
   },
+
+  goAccount: function () {
+    wx.navigateTo({
+      url: "/pages/account/index",
+    });
+  },
+
+  goBilling: function () {
+    wx.navigateTo({
+      url: "/pages/billing/index",
+    });
+  },
 });

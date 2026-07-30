@@ -37,12 +37,12 @@
       <button class="secondary-button pumpkin" loading="{{regenerating}}" bindtap="regenerateTask">重新生成同款</button>
     </view>
 
-    <view wx:if="{{images.length > 0}}" class="result-grid">
-      <view wx:for="{{images}}" wx:key="*this" class="image-card">
-        <image class="result-image" mode="aspectFill" src="{{item}}" data-current="{{item}}" bindtap="previewImage" />
+    <view wx:if="{{imageItems.length > 0}}" class="result-grid">
+      <view wx:for="{{imageItems}}" wx:key="url" class="image-card">
+        <image class="result-image" mode="aspectFill" src="{{item.url}}" data-current="{{item.url}}" bindtap="previewImage" />
         <view class="image-actions">
-          <button class="save-button" data-url="{{item}}" bindtap="saveImage">保存</button>
-          <button class="reuse-button" data-url="{{item}}" bindtap="reuseImage">用这张继续生成</button>
+          <button class="save-button" data-url="{{item.url}}" data-index="{{index}}" bindtap="saveImage">保存</button>
+          <button class="reuse-button" data-url="{{item.url}}" bindtap="reuseImage">用这张继续生成</button>
         </view>
       </view>
     </view>

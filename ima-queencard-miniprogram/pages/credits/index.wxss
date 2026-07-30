@@ -118,10 +118,24 @@
   font-weight: 900;
 }
 
+.account-row > text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10rpx;
+}
+
 .small-button {
-  min-width: 144rpx;
+  min-width: 104rpx;
   height: 66rpx;
-  padding: 0 22rpx;
+  padding: 0 16rpx;
   background: #fff;
   font-size: 24rpx;
 }
@@ -132,6 +146,10 @@
 
 .pumpkin {
   background: #ef724f;
+}
+
+.white {
+  background: #fff;
 }
 
 .notice-card {

@@ -32,9 +32,24 @@ const requiredFiles = [
   "pages/pricing/index.js",
   "pages/pricing/index.wxml",
   "pages/pricing/index.wxss",
+  "pages/account/index.json",
+  "pages/account/index.js",
+  "pages/account/index.wxml",
+  "pages/account/index.wxss",
+  "pages/billing/index.json",
+  "pages/billing/index.js",
+  "pages/billing/index.wxml",
+  "pages/billing/index.wxss",
+  "pages/admin/index.json",
+  "pages/admin/index.js",
+  "pages/admin/index.wxml",
+  "pages/admin/index.wxss",
   "config/env.js",
   "services/api.js",
   "services/auth.js",
+  "services/account.js",
+  "services/admin.js",
+  "services/billing.js",
   "services/credits.js",
   "services/generation.js",
   "services/session.js",
@@ -83,7 +98,7 @@ if (!Array.isArray(appJson.pages) || !appJson.pages.includes("pages/index/index"
   fail("app.json must include pages/index/index");
 }
 
-["pages/generate/index", "pages/result/index", "pages/history/index", "pages/credits/index", "pages/pricing/index"].forEach((page) => {
+["pages/generate/index", "pages/result/index", "pages/history/index", "pages/credits/index", "pages/pricing/index", "pages/account/index", "pages/billing/index", "pages/admin/index"].forEach((page) => {
   if (!Array.isArray(appJson.pages) || !appJson.pages.includes(page)) {
     fail(`app.json must include ${page}`);
   }
@@ -133,8 +148,58 @@ if (wxml.includes("href=") || wxml.includes("<a ")) {
 }
 
 const resultPageSource = fs.readFileSync(path.join(root, "pages/result/index.js"), "utf8");
+const apiSource = fs.readFileSync(path.join(root, "services/api.js"), "utf8");
+const pricingPageSource = fs.readFileSync(path.join(root, "pages/pricing/index.js"), "utf8");
+const accountPageSource = fs.readFileSync(path.join(root, "pages/account/index.js"), "utf8");
+const billingPageSource = fs.readFileSync(path.join(root, "pages/billing/index.js"), "utf8");
+const adminPageSource = fs.readFileSync(path.join(root, "pages/admin/index.js"), "utf8");
 if (/wx\.redirectTo\(\s*{\s*url:\s*["']\/pages\/generate\/index["']/.test(resultPageSource)) {
   fail("result page must navigateBack to the previous generate page instead of redirecting to a blank generate page");
+}
+
+[
+  "listPricingProducts",
+  "createOrder",
+  "listOrders",
+  "getBilling",
+  "mockPayOrder",
+  "getAccountMe",
+  "patchAccountMe",
+  "listAdminUsers",
+  "listAdminOrders",
+  "listAdminPaymentAudit",
+  "adminAddCredits",
+  "getImageAssetDownloadUrl",
+].forEach((pattern) => {
+  if (!apiSource.includes(pattern)) {
+    fail(`services/api.js must expose ${pattern}`);
+  }
+});
+
+if (!/wx\.requestPayment/.test(pricingPageSource) || !/mockPayOrder/.test(pricingPageSource)) {
+  fail("pricing page must create orders, use wx.requestPayment when available, and support mock payment fallback");
+}
+
+["patchAccountMe", "logout", "goBilling", "goAdmin"].forEach((pattern) => {
+  if (!accountPageSource.includes(pattern)) {
+    fail(`account page must support ${pattern}`);
+  }
+});
+
+["listOrders", "getBilling"].forEach((pattern) => {
+  if (!billingPageSource.includes(pattern)) {
+    fail(`billing page must support ${pattern}`);
+  }
+});
+
+["listAdminUsers", "listAdminOrders", "listAdminPaymentAudit", "adminAddCredits"].forEach((pattern) => {
+  if (!adminPageSource.includes(pattern)) {
+    fail(`admin page must support ${pattern}`);
+  }
+});
+
+if (!/getImageAssetDownloadUrl/.test(resultPageSource) || !/assetId/.test(resultPageSource)) {
+  fail("result page must prefer safe asset download endpoint before direct image URL fallback");
 }
 
 const generatePageSource = fs.readFileSync(path.join(root, "pages/generate/index.js"), "utf8");

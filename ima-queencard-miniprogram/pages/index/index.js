@@ -127,6 +127,12 @@ Page({
     });
   },
 
+  openAccount: function () {
+    wx.navigateTo({
+      url: "/pages/account/index",
+    });
+  },
+
   copyPrompt: function () {
     wx.setClipboardData({
       data: this.data.landing.hero.samplePrompt,

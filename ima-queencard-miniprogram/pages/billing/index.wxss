@@ -1,0 +1,190 @@
+.page {
+  min-height: 100vh;
+  padding: 28rpx 32rpx 64rpx;
+  background: #f6e0db;
+}
+
+.topbar,
+.tab-row,
+.row-card {
+  display: flex;
+  align-items: center;
+}
+
+.topbar {
+  justify-content: space-between;
+  margin-bottom: 30rpx;
+}
+
+.icon-button,
+.text-button,
+.tab-button {
+  border: 4rpx solid #0d0d0d;
+  border-radius: 8px;
+  box-shadow: 6rpx 6rpx 0 rgba(13, 13, 13, 0.13);
+  color: #0d0d0d;
+  font-weight: 900;
+}
+
+.icon-button {
+  width: 68rpx;
+  height: 68rpx;
+  background: #fff;
+  font-size: 34rpx;
+  line-height: 1;
+}
+
+.text-button {
+  min-width: 92rpx;
+  height: 66rpx;
+  padding: 0 20rpx;
+  background: #fff;
+  font-size: 24rpx;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.brand-main,
+.brand-accent {
+  font-size: 30rpx;
+}
+
+.brand-accent {
+  color: #ef724f;
+}
+
+.summary-panel,
+.notice-card,
+.empty-card,
+.row-card {
+  margin-bottom: 24rpx;
+  border: 4rpx solid #0d0d0d;
+  border-radius: 8px;
+  box-shadow: 8rpx 8rpx 0 rgba(13, 13, 13, 0.13);
+}
+
+.summary-panel {
+  padding: 32rpx 28rpx;
+  background: #ace2df;
+}
+
+.kicker {
+  display: block;
+  margin-bottom: 14rpx;
+  color: rgba(13, 13, 13, 0.55);
+  font-size: 21rpx;
+  font-weight: 900;
+}
+
+.title {
+  display: block;
+  margin-bottom: 12rpx;
+  font-size: 56rpx;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.subtitle,
+.notice-copy,
+.empty-desc,
+.row-desc,
+.row-time,
+.status {
+  display: block;
+  color: rgba(13, 13, 13, 0.64);
+  font-size: 24rpx;
+  font-weight: 800;
+  line-height: 1.42;
+}
+
+.notice-card,
+.empty-card {
+  padding: 26rpx;
+  background: #fff;
+}
+
+.notice-card {
+  background: #e7db4c;
+}
+
+.notice-title,
+.empty-title,
+.row-title,
+.amount {
+  display: block;
+  color: #0d0d0d;
+  font-weight: 900;
+}
+
+.notice-title,
+.empty-title {
+  margin-bottom: 10rpx;
+  font-size: 30rpx;
+}
+
+.tab-row {
+  gap: 14rpx;
+  margin-bottom: 24rpx;
+}
+
+.tab-button {
+  flex: 1;
+  height: 70rpx;
+  background: #fff;
+  font-size: 24rpx;
+}
+
+.tab-button.active {
+  background: #ace2df;
+}
+
+.tab-button.buy {
+  background: #ef724f;
+}
+
+.row-card {
+  justify-content: space-between;
+  gap: 16rpx;
+  padding: 22rpx;
+  background: #fff;
+}
+
+.row-card.highlight {
+  background: #e7db4c;
+}
+
+.row-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-title {
+  margin-bottom: 8rpx;
+  font-size: 29rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-side {
+  min-width: 150rpx;
+  text-align: right;
+}
+
+.amount {
+  font-size: 28rpx;
+}
+
+.load-row {
+  padding: 24rpx 0;
+  color: rgba(13, 13, 13, 0.55);
+  font-size: 24rpx;
+  font-weight: 900;
+  text-align: center;
+}

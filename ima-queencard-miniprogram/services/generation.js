@@ -10,6 +10,12 @@ function parseMaybeJson(value, fallback) {
 }
 
 function normalizeImages(value) {
+  return normalizeImageItems(value).map(function (item) {
+    return item.url;
+  });
+}
+
+function normalizeImageItems(value) {
   var result = [];
   var source = value || [];
   var parsed = null;
@@ -26,13 +32,29 @@ function normalizeImages(value) {
   for (i = 0; i < source.length; i += 1) {
     image = source[i];
     if (typeof image === "string") {
-      result.push(image);
+      result.push({
+        url: image,
+        assetId: "",
+        raw: image,
+      });
     } else if (image && image.url) {
-      result.push(image.url);
+      result.push({
+        url: image.url,
+        assetId: image.assetId || image.asset_id || image.id || "",
+        raw: image,
+      });
     } else if (image && image.imageUrl) {
-      result.push(image.imageUrl);
+      result.push({
+        url: image.imageUrl,
+        assetId: image.assetId || image.asset_id || image.id || "",
+        raw: image,
+      });
     } else if (image && image.path) {
-      result.push(image.path);
+      result.push({
+        url: image.path,
+        assetId: image.assetId || image.asset_id || image.id || "",
+        raw: image,
+      });
     }
   }
   return result;
@@ -80,6 +102,7 @@ function normalizeTask(raw) {
   var status = "";
   var error = "";
   var images = [];
+  var imageItems = [];
   var referenceImages = [];
 
   if (nested) task = nested;
@@ -87,7 +110,10 @@ function normalizeTask(raw) {
   request = requestPayload(task);
   status = task.status || task.state || "running";
   error = task.error || task.errorMessage || task.message || "";
-  images = normalizeImages(task.images || task.resultImages || task.outputImages || task.outputs || task.assets);
+  imageItems = normalizeImageItems(task.images || task.resultImages || task.outputImages || task.outputs || task.assets);
+  images = imageItems.map(function (item) {
+    return item.url;
+  });
   referenceImages = normalizeImages(
     task.referenceImages ||
       task.reference_images ||
@@ -102,6 +128,7 @@ function normalizeTask(raw) {
     title: statusTitle(status),
     desc: statusDesc(status, error),
     images: images,
+    imageItems: imageItems,
     referenceImages: referenceImages,
     error: error,
     prompt: task.prompt || request.prompt || "",
@@ -196,4 +223,5 @@ module.exports = {
   buildGenerateUrlFromTask: buildGenerateUrlFromTask,
   normalizeTask: normalizeTask,
   normalizeImages: normalizeImages,
+  normalizeImageItems: normalizeImageItems,
 };

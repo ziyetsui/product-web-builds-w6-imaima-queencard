@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 
 function metricNumber(record, key) {
@@ -55,6 +56,8 @@ function createMemoryStore(options = {}) {
   const tasks = new Map();
   const creditTransactions = [];
   const templates = new Map();
+  const orders = new Map();
+  const paymentAudit = [];
 
   function ensureUser(identity) {
     const id = identity.sub;
@@ -68,6 +71,7 @@ function createMemoryStore(options = {}) {
         name: "微信用户",
         balance: initialCredits,
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       });
     }
     return users.get(id);
@@ -75,6 +79,56 @@ function createMemoryStore(options = {}) {
 
   function getUser(id) {
     return users.get(id) || null;
+  }
+
+  function updateUserProfile(userId, updates = {}) {
+    const user = users.get(userId);
+    if (!user) throw new Error("User not found");
+    if (typeof updates.name === "string") user.name = updates.name.slice(0, 40);
+    user.updatedAt = new Date().toISOString();
+    return user;
+  }
+
+  function listUsers(options = new URLSearchParams()) {
+    const q = String(options.get("q") || "").trim().toLowerCase();
+    let records = Array.from(users.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+    if (q) {
+      records = records.filter((user) => [
+        user.id,
+        user.openid,
+        user.unionid,
+        user.name,
+      ].filter(Boolean).join("\n").toLowerCase().includes(q));
+    }
+    return paginateRecords(records, options);
+  }
+
+  function addCredits(userId, amount, reason) {
+    const user = users.get(userId);
+    if (!user) throw new Error("User not found");
+    const value = Number.parseInt(amount, 10);
+    if (!Number.isFinite(value) || value === 0) {
+      const error = new Error("Credit amount must be non-zero");
+      error.status = 400;
+      throw error;
+    }
+    if (value < 0 && user.balance < Math.abs(value)) {
+      const error = new Error("Insufficient credits to revoke");
+      error.status = 402;
+      throw error;
+    }
+    const createdAt = new Date().toISOString();
+    user.balance += value;
+    user.updatedAt = createdAt;
+    creditTransactions.push({
+      id: transactionId(),
+      userId,
+      amount: value,
+      reason: reason || "admin:adjust",
+      balanceAfter: user.balance,
+      createdAt,
+    });
+    return user;
   }
 
   function charge(userId, amount, reason) {
@@ -100,6 +154,174 @@ function createMemoryStore(options = {}) {
       createdAt: user.lastCharge.chargedAt,
     });
     return user.balance;
+  }
+
+  function createOrder(order) {
+    const createdAt = order.createdAt || new Date().toISOString();
+    const saved = {
+      id: order.id || orderId(),
+      userId: order.userId,
+      productId: order.productId,
+      channel: order.channel || "wechat",
+      status: order.status || "pending",
+      paymentStatus: order.paymentStatus || "created",
+      paymentMode: order.paymentMode || "manual",
+      amountCents: Number(order.amountCents || 0),
+      currency: order.currency || "CNY",
+      credits: Number(order.credits || 0),
+      productSnapshot: order.productSnapshot || null,
+      paymentParams: order.paymentParams || null,
+      externalPaymentId: order.externalPaymentId || "",
+      creditsGranted: 0,
+      creditsRevoked: 0,
+      createdAt,
+      updatedAt: createdAt,
+      paidAt: null,
+      fulfilledAt: null,
+      refundedAt: null,
+      canceledAt: null,
+      adminNote: "",
+    };
+    orders.set(saved.id, saved);
+    return saved;
+  }
+
+  function getOrder(id) {
+    return orders.get(id) || null;
+  }
+
+  function listOrders(userId, options = new URLSearchParams()) {
+    return listOrderRecords(Array.from(orders.values()).filter((order) => order.userId === userId), options);
+  }
+
+  function listAllOrders(options = new URLSearchParams()) {
+    return listOrderRecords(Array.from(orders.values()), options);
+  }
+
+  function fulfillOrder(id, input = {}) {
+    const order = orders.get(id);
+    if (!order) return null;
+    if (order.fulfilledAt) return { order, fulfilled: false };
+    if (order.status === "canceled" || order.status === "refunded") {
+      const error = new Error("Order cannot be fulfilled");
+      error.status = 409;
+      throw error;
+    }
+    const user = users.get(order.userId);
+    if (!user) throw new Error("User not found");
+    const now = new Date().toISOString();
+    const credits = positiveInt(input.credits || order.credits, 0);
+    user.balance += credits;
+    user.updatedAt = now;
+    if (credits > 0) {
+      creditTransactions.push({
+        id: transactionId(),
+        userId: user.id,
+        amount: credits,
+        reason: input.reason || `order:${order.id}`,
+        balanceAfter: user.balance,
+        createdAt: now,
+      });
+    }
+    order.status = "paid";
+    order.paymentStatus = "fulfilled";
+    order.paidAt = order.paidAt || input.paidAt || now;
+    order.fulfilledAt = now;
+    order.creditsGranted = credits;
+    order.updatedAt = now;
+    return { order, fulfilled: true };
+  }
+
+  function cancelOrder(id, input = {}) {
+    const order = orders.get(id);
+    if (!order) return null;
+    if (order.fulfilledAt || order.status === "paid") {
+      const error = new Error("Paid orders must be refunded instead of canceled");
+      error.status = 409;
+      throw error;
+    }
+    if (order.canceledAt) return { order, canceled: false };
+    const now = new Date().toISOString();
+    order.status = "canceled";
+    order.paymentStatus = "canceled";
+    order.canceledAt = now;
+    order.adminNote = input.reason || order.adminNote || "";
+    order.updatedAt = now;
+    return { order, canceled: true };
+  }
+
+  function refundOrder(id, input = {}) {
+    const order = orders.get(id);
+    if (!order) return null;
+    if (order.refundedAt) return { order, refunded: false, revokedCredits: 0 };
+    const user = users.get(order.userId);
+    if (!user) throw new Error("User not found");
+    const now = new Date().toISOString();
+    let revokedCredits = 0;
+    const grantRemainder = Math.max(0, Number(order.creditsGranted || 0) - Number(order.creditsRevoked || 0));
+    if (input.revokeCredits !== false && grantRemainder > 0) {
+      revokedCredits = Math.min(user.balance, grantRemainder);
+      if (revokedCredits > 0) {
+        user.balance -= revokedCredits;
+        user.updatedAt = now;
+        creditTransactions.push({
+          id: transactionId(),
+          userId: user.id,
+          amount: -revokedCredits,
+          reason: input.reason || `refund:${order.id}`,
+          balanceAfter: user.balance,
+          createdAt: now,
+        });
+      }
+    }
+    order.status = "refunded";
+    order.paymentStatus = "refunded";
+    order.refundedAt = now;
+    order.creditsRevoked = Number(order.creditsRevoked || 0) + revokedCredits;
+    order.adminNote = input.reason || order.adminNote || "";
+    order.updatedAt = now;
+    return { order, refunded: true, revokedCredits };
+  }
+
+  function recordPaymentEvent(event) {
+    const createdAt = event.createdAt || new Date().toISOString();
+    const saved = {
+      id: event.id || auditId(),
+      orderId: event.orderId || "",
+      userId: event.userId || "",
+      type: event.type,
+      actorId: event.actorId || "",
+      message: event.message || "",
+      metadata: event.metadata || null,
+      createdAt,
+    };
+    paymentAudit.push(saved);
+    return saved;
+  }
+
+  function listPaymentAudit(options = new URLSearchParams()) {
+    const userId = String(options.get("userId") || "").trim();
+    const orderIdValue = String(options.get("orderId") || "").trim();
+    const type = String(options.get("type") || "").trim();
+    let records = paymentAudit.slice();
+    if (userId) records = records.filter((event) => event.userId === userId);
+    if (orderIdValue) records = records.filter((event) => event.orderId === orderIdValue);
+    if (type) records = records.filter((event) => event.type === type);
+    records.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    return paginateRecords(records, options);
+  }
+
+  function findOwnedImageAsset(userId, assetId) {
+    for (const task of tasks.values()) {
+      if (task.ownerId !== userId) continue;
+      for (const image of task.images || []) {
+        const url = imageUrl(image);
+        if (url && matchesAssetId(url, assetId)) {
+          return { taskId: task.id, assetId: assetIdForUrl(url), url };
+        }
+      }
+    }
+    return null;
   }
 
   function listCreditTransactions(userId, options = new URLSearchParams()) {
@@ -197,8 +419,21 @@ function createMemoryStore(options = {}) {
   return {
     ensureUser,
     getUser,
+    updateUserProfile,
+    listUsers,
+    addCredits,
     charge,
     listCreditTransactions,
+    createOrder,
+    getOrder,
+    listOrders,
+    listAllOrders,
+    fulfillOrder,
+    cancelOrder,
+    refundOrder,
+    recordPaymentEvent,
+    listPaymentAudit,
+    findOwnedImageAsset,
     createTask,
     getTask,
     listTasks,
@@ -242,6 +477,76 @@ function createSqliteStore(options = {}) {
   function getUser(id) {
     const row = db.prepare("SELECT * FROM users WHERE id = ?").get(id);
     return row ? rowToUser(row) : null;
+  }
+
+  function updateUserProfile(userId, updates = {}) {
+    const user = getUser(userId);
+    if (!user) throw new Error("User not found");
+    const name = typeof updates.name === "string" ? updates.name.slice(0, 40) : user.name;
+    const updatedAt = new Date().toISOString();
+    db.prepare("UPDATE users SET name = ?, updated_at = ? WHERE id = ?").run(name, updatedAt, userId);
+    return getUser(userId);
+  }
+
+  function listUsers(options = new URLSearchParams()) {
+    const page = positiveInt(options.get("page"), 1);
+    const limit = Math.min(positiveInt(options.get("limit"), 20), 100);
+    const offset = (page - 1) * limit;
+    const q = String(options.get("q") || "").trim();
+    const values = [];
+    const where = q ? "(id LIKE ? OR openid LIKE ? OR unionid LIKE ? OR name LIKE ?)" : "";
+    if (q) {
+      const like = `%${q}%`;
+      values.push(like, like, like, like);
+    }
+    const whereSql = where ? `WHERE ${where}` : "";
+    const total = db.prepare(`SELECT COUNT(*) AS total FROM users ${whereSql}`).get(...values).total;
+    const rows = db.prepare(`
+      SELECT * FROM users
+      ${whereSql}
+      ORDER BY created_at DESC, id ASC
+      LIMIT ? OFFSET ?
+    `).all(...values, limit, offset);
+    return {
+      records: rows.map(rowToUser),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
+  }
+
+  function addCredits(userId, amount, reason) {
+    const user = getUser(userId);
+    if (!user) throw new Error("User not found");
+    const value = Number.parseInt(amount, 10);
+    if (!Number.isFinite(value) || value === 0) {
+      const error = new Error("Credit amount must be non-zero");
+      error.status = 400;
+      throw error;
+    }
+    if (value < 0 && user.balance < Math.abs(value)) {
+      const error = new Error("Insufficient credits to revoke");
+      error.status = 402;
+      throw error;
+    }
+    const createdAt = new Date().toISOString();
+    const balanceAfter = user.balance + value;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare("UPDATE users SET balance = ?, updated_at = ? WHERE id = ?").run(balanceAfter, createdAt, userId);
+      db.prepare(`
+        INSERT INTO credit_transactions (id, user_id, amount, reason, balance_after, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(transactionId(), userId, value, reason || "admin:adjust", balanceAfter, createdAt);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    return getUser(userId);
   }
 
   function charge(userId, amount, reason) {
@@ -293,6 +598,233 @@ function createSqliteStore(options = {}) {
         totalPages: Math.max(1, Math.ceil(total / limit)),
       },
     };
+  }
+
+  function createOrder(order) {
+    const id = order.id || orderId();
+    const createdAt = order.createdAt || new Date().toISOString();
+    db.prepare(`
+      INSERT INTO orders (
+        id, user_id, product_id, channel, status, payment_status, payment_mode,
+        amount_cents, currency, credits, product_json, payment_params_json,
+        external_payment_id, credits_granted, credits_revoked, created_at,
+        updated_at, paid_at, fulfilled_at, refunded_at, canceled_at, admin_note
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      order.userId,
+      order.productId,
+      order.channel || "wechat",
+      order.status || "pending",
+      order.paymentStatus || "created",
+      order.paymentMode || "manual",
+      Number(order.amountCents || 0),
+      order.currency || "CNY",
+      Number(order.credits || 0),
+      stringify(order.productSnapshot || null),
+      stringify(order.paymentParams || null),
+      order.externalPaymentId || "",
+      0,
+      0,
+      createdAt,
+      createdAt,
+      null,
+      null,
+      null,
+      null,
+      "",
+    );
+    return getOrder(id);
+  }
+
+  function getOrder(id) {
+    const row = db.prepare("SELECT * FROM orders WHERE id = ?").get(id);
+    return row ? rowToOrder(row) : null;
+  }
+
+  function listOrders(userId, options = new URLSearchParams()) {
+    return queryOrders("WHERE user_id = ?", [userId], options);
+  }
+
+  function listAllOrders(options = new URLSearchParams()) {
+    const userId = String(options.get("userId") || "").trim();
+    const status = String(options.get("status") || "").trim();
+    const filters = [];
+    const values = [];
+    if (userId) {
+      filters.push("user_id = ?");
+      values.push(userId);
+    }
+    if (status) {
+      filters.push("status = ?");
+      values.push(status);
+    }
+    return queryOrders(filters.length ? `WHERE ${filters.join(" AND ")}` : "", values, options);
+  }
+
+  function fulfillOrder(id, input = {}) {
+    const order = getOrder(id);
+    if (!order) return null;
+    if (order.fulfilledAt) return { order, fulfilled: false };
+    if (order.status === "canceled" || order.status === "refunded") {
+      const error = new Error("Order cannot be fulfilled");
+      error.status = 409;
+      throw error;
+    }
+    const user = getUser(order.userId);
+    if (!user) throw new Error("User not found");
+    const now = new Date().toISOString();
+    const credits = positiveInt(input.credits || order.credits, 0);
+    const balanceAfter = user.balance + credits;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare("UPDATE users SET balance = ?, updated_at = ? WHERE id = ?").run(balanceAfter, now, user.id);
+      if (credits > 0) {
+        db.prepare(`
+          INSERT INTO credit_transactions (id, user_id, amount, reason, balance_after, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(transactionId(), user.id, credits, input.reason || `order:${order.id}`, balanceAfter, now);
+      }
+      db.prepare(`
+        UPDATE orders
+        SET status = ?, payment_status = ?, paid_at = COALESCE(paid_at, ?),
+            fulfilled_at = ?, credits_granted = ?, updated_at = ?
+        WHERE id = ?
+      `).run("paid", "fulfilled", input.paidAt || now, now, credits, now, order.id);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    return { order: getOrder(id), fulfilled: true };
+  }
+
+  function cancelOrder(id, input = {}) {
+    const order = getOrder(id);
+    if (!order) return null;
+    if (order.fulfilledAt || order.status === "paid") {
+      const error = new Error("Paid orders must be refunded instead of canceled");
+      error.status = 409;
+      throw error;
+    }
+    if (order.canceledAt) return { order, canceled: false };
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE orders
+      SET status = ?, payment_status = ?, canceled_at = ?, admin_note = ?, updated_at = ?
+      WHERE id = ?
+    `).run("canceled", "canceled", now, input.reason || order.adminNote || "", now, order.id);
+    return { order: getOrder(id), canceled: true };
+  }
+
+  function refundOrder(id, input = {}) {
+    const order = getOrder(id);
+    if (!order) return null;
+    if (order.refundedAt) return { order, refunded: false, revokedCredits: 0 };
+    const user = getUser(order.userId);
+    if (!user) throw new Error("User not found");
+    const now = new Date().toISOString();
+    const grantRemainder = Math.max(0, Number(order.creditsGranted || 0) - Number(order.creditsRevoked || 0));
+    const revokedCredits = input.revokeCredits === false ? 0 : Math.min(user.balance, grantRemainder);
+    const balanceAfter = user.balance - revokedCredits;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (revokedCredits > 0) {
+        db.prepare("UPDATE users SET balance = ?, updated_at = ? WHERE id = ?").run(balanceAfter, now, user.id);
+        db.prepare(`
+          INSERT INTO credit_transactions (id, user_id, amount, reason, balance_after, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(transactionId(), user.id, -revokedCredits, input.reason || `refund:${order.id}`, balanceAfter, now);
+      }
+      db.prepare(`
+        UPDATE orders
+        SET status = ?, payment_status = ?, refunded_at = ?,
+            credits_revoked = credits_revoked + ?, admin_note = ?, updated_at = ?
+        WHERE id = ?
+      `).run("refunded", "refunded", now, revokedCredits, input.reason || order.adminNote || "", now, order.id);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    return { order: getOrder(id), refunded: true, revokedCredits };
+  }
+
+  function recordPaymentEvent(event) {
+    const id = event.id || auditId();
+    const createdAt = event.createdAt || new Date().toISOString();
+    db.prepare(`
+      INSERT INTO payment_audit (id, order_id, user_id, type, actor_id, message, metadata_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      event.orderId || "",
+      event.userId || "",
+      event.type,
+      event.actorId || "",
+      event.message || "",
+      stringify(event.metadata || null),
+      createdAt,
+    );
+    return rowToPaymentEvent(db.prepare("SELECT * FROM payment_audit WHERE id = ?").get(id));
+  }
+
+  function listPaymentAudit(options = new URLSearchParams()) {
+    const page = positiveInt(options.get("page"), 1);
+    const limit = Math.min(positiveInt(options.get("limit"), 20), 100);
+    const offset = (page - 1) * limit;
+    const filters = [];
+    const values = [];
+    const userId = String(options.get("userId") || "").trim();
+    const orderIdValue = String(options.get("orderId") || "").trim();
+    const type = String(options.get("type") || "").trim();
+    if (userId) {
+      filters.push("user_id = ?");
+      values.push(userId);
+    }
+    if (orderIdValue) {
+      filters.push("order_id = ?");
+      values.push(orderIdValue);
+    }
+    if (type) {
+      filters.push("type = ?");
+      values.push(type);
+    }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const total = db.prepare(`SELECT COUNT(*) AS total FROM payment_audit ${where}`).get(...values).total;
+    const rows = db.prepare(`
+      SELECT * FROM payment_audit
+      ${where}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all(...values, limit, offset);
+    return {
+      records: rows.map(rowToPaymentEvent),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
+  }
+
+  function findOwnedImageAsset(userId, assetId) {
+    const rows = db.prepare(`
+      SELECT id, images_json FROM generation_tasks
+      WHERE owner_id = ? AND status = 'completed'
+      ORDER BY created_at DESC
+    `).all(userId);
+    for (const row of rows) {
+      for (const image of parseJson(row.images_json, [])) {
+        const url = imageUrl(image);
+        if (url && matchesAssetId(url, assetId)) {
+          return { taskId: row.id, assetId: assetIdForUrl(url), url };
+        }
+      }
+    }
+    return null;
   }
 
   function createTask(task) {
@@ -511,11 +1043,46 @@ function createSqliteStore(options = {}) {
     return row ? rowToTemplate(row) : null;
   }
 
+  function queryOrders(whereSql, values, options = new URLSearchParams()) {
+    const page = positiveInt(options.get("page"), 1);
+    const limit = Math.min(positiveInt(options.get("limit"), 20), 100);
+    const offset = (page - 1) * limit;
+    const total = db.prepare(`SELECT COUNT(*) AS total FROM orders ${whereSql}`).get(...values).total;
+    const rows = db.prepare(`
+      SELECT * FROM orders
+      ${whereSql}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all(...values, limit, offset);
+    return {
+      records: rows.map(rowToOrder),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    };
+  }
+
   return {
     ensureUser,
     getUser,
+    updateUserProfile,
+    listUsers,
+    addCredits,
     charge,
     listCreditTransactions,
+    createOrder,
+    getOrder,
+    listOrders,
+    listAllOrders,
+    fulfillOrder,
+    cancelOrder,
+    refundOrder,
+    recordPaymentEvent,
+    listPaymentAudit,
+    findOwnedImageAsset,
     createTask,
     getTask,
     listTasks,
@@ -589,6 +1156,40 @@ function migrate(db) {
       seed_json TEXT,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS orders (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      status TEXT NOT NULL,
+      payment_status TEXT NOT NULL,
+      payment_mode TEXT,
+      amount_cents INTEGER NOT NULL,
+      currency TEXT NOT NULL,
+      credits INTEGER NOT NULL,
+      product_json TEXT NOT NULL,
+      payment_params_json TEXT,
+      external_payment_id TEXT,
+      credits_granted INTEGER NOT NULL DEFAULT 0,
+      credits_revoked INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      paid_at TEXT,
+      fulfilled_at TEXT,
+      refunded_at TEXT,
+      canceled_at TEXT,
+      admin_note TEXT
+    );
+    CREATE TABLE IF NOT EXISTS payment_audit (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      actor_id TEXT,
+      message TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL
+    );
   `);
   ensureColumn(db, "generation_tasks", "prompt", "TEXT");
   ensureColumn(db, "generation_tasks", "topic", "TEXT");
@@ -597,6 +1198,16 @@ function migrate(db) {
   ensureColumn(db, "generation_tasks", "output_count", "INTEGER");
   ensureColumn(db, "generation_tasks", "aspect_ratio", "TEXT");
   ensureColumn(db, "generation_tasks", "resolution", "TEXT");
+  ensureColumn(db, "orders", "payment_mode", "TEXT");
+  ensureColumn(db, "orders", "payment_params_json", "TEXT");
+  ensureColumn(db, "orders", "external_payment_id", "TEXT");
+  ensureColumn(db, "orders", "credits_granted", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "orders", "credits_revoked", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "orders", "paid_at", "TEXT");
+  ensureColumn(db, "orders", "fulfilled_at", "TEXT");
+  ensureColumn(db, "orders", "refunded_at", "TEXT");
+  ensureColumn(db, "orders", "canceled_at", "TEXT");
+  ensureColumn(db, "orders", "admin_note", "TEXT");
 }
 
 function ensureColumn(db, table, column, definition) {
@@ -611,6 +1222,14 @@ function positiveInt(value, fallback) {
 
 function transactionId() {
   return `txn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function orderId() {
+  return `ord_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function auditId() {
+  return `audit_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function stringify(value) {
@@ -639,6 +1258,43 @@ function paginateRecords(records, options = new URLSearchParams()) {
       totalPages: Math.max(1, Math.ceil(records.length / limit)),
     },
   };
+}
+
+function listOrderRecords(records, options = new URLSearchParams()) {
+  const status = String(options.get("status") || "").trim();
+  const productId = String(options.get("productId") || "").trim();
+  let filtered = records.slice();
+  if (status) filtered = filtered.filter((order) => order.status === status);
+  if (productId) filtered = filtered.filter((order) => order.productId === productId);
+  filtered.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+  return paginateRecords(filtered, options);
+}
+
+function imageUrl(image) {
+  if (typeof image === "string") return image;
+  if (image && typeof image.url === "string") return image.url;
+  return "";
+}
+
+function assetIdForUrl(url) {
+  return crypto.createHash("sha256").update(url).digest("hex");
+}
+
+function assetIdForUrlBase64(url) {
+  return crypto.createHash("sha256").update(url).digest("base64url");
+}
+
+function matchesAssetId(url, assetId) {
+  if (!assetId || !url) return false;
+  const decodedPathId = decodeURIComponent(assetId);
+  if (url === decodedPathId) return true;
+  if (assetIdForUrl(url) === decodedPathId || assetIdForUrlBase64(url) === decodedPathId) return true;
+  try {
+    if (Buffer.from(decodedPathId, "base64url").toString("utf8") === url) return true;
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 function rowToUser(row) {
@@ -687,6 +1343,46 @@ function rowToTask(row) {
     rawProviderResult: parseJson(row.raw_provider_result_json, null),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function rowToOrder(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    productId: row.product_id,
+    channel: row.channel,
+    status: row.status,
+    paymentStatus: row.payment_status,
+    paymentMode: row.payment_mode || "",
+    amountCents: row.amount_cents,
+    currency: row.currency,
+    credits: row.credits,
+    productSnapshot: parseJson(row.product_json, null),
+    paymentParams: parseJson(row.payment_params_json, null),
+    externalPaymentId: row.external_payment_id || "",
+    creditsGranted: row.credits_granted || 0,
+    creditsRevoked: row.credits_revoked || 0,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    paidAt: row.paid_at || null,
+    fulfilledAt: row.fulfilled_at || null,
+    refundedAt: row.refunded_at || null,
+    canceledAt: row.canceled_at || null,
+    adminNote: row.admin_note || "",
+  };
+}
+
+function rowToPaymentEvent(row) {
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    userId: row.user_id,
+    type: row.type,
+    actorId: row.actor_id || "",
+    message: row.message || "",
+    metadata: parseJson(row.metadata_json, null),
+    createdAt: row.created_at,
   };
 }
 

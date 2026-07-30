@@ -1,5 +1,6 @@
 const fs = require("node:fs/promises");
 const pathModule = require("node:path");
+const crypto = require("node:crypto");
 
 const { createMiniappToken, verifyMiniappToken } = require("./auth");
 const { serveAsset } = require("./assets");
@@ -13,7 +14,7 @@ function json(data, status = 200) {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "content-type, authorization",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
     },
   });
 }
@@ -39,6 +40,43 @@ function getAuthPayload(request, env) {
     secret: getEnv(env, "MINIAPP_AUTH_TOKEN_SECRET"),
     expectedAppid: getEnv(env, "WECHAT_MINIAPP_APP_ID", "wx-dev"),
   });
+}
+
+function getCurrentUser(request, env, store) {
+  const payload = getAuthPayload(request, env);
+  return {
+    payload,
+    user: store.ensureUser(payload),
+  };
+}
+
+function envList(value) {
+  return String(value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function requireAdmin(request, env, store) {
+  const { payload, user } = getCurrentUser(request, env, store);
+  const adminOpenids = envList(getEnv(env, "MINIAPP_ADMIN_OPENIDS"));
+  const adminUserIds = envList(getEnv(env, "MINIAPP_ADMIN_USER_IDS"));
+  if (!adminOpenids.includes(payload.openid) && !adminUserIds.includes(user.id)) {
+    const error = new Error("Admin access required");
+    error.status = 403;
+    throw error;
+  }
+  return { payload, user };
+}
+
+function isDevLoginAdmin(request, env) {
+  if (env.MINIAPP_DEV_LOGIN !== "1") return false;
+  try {
+    getAuthPayload(request, env);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function loginWithWechatCode(input) {
@@ -76,6 +114,10 @@ async function loginWithWechatCode(input) {
 
 function taskId() {
   return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function appOrderId() {
+  return `ord_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
 function positiveInt(value, fallback) {
@@ -214,6 +256,116 @@ function publicTemplateListAssets(data, env, request) {
   return {
     ...data,
     records: (data.records || []).map((template) => publicTemplateAssets(template, env, request)),
+  };
+}
+
+function parseEnvJson(env, key, fallback) {
+  const value = getEnv(env, key);
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function pricingProducts(env) {
+  const configured = parseEnvJson(env, "MINIAPP_PRICING_JSON", null);
+  if (configured && Array.isArray(configured.packs) && Array.isArray(configured.subscriptions)) return configured;
+  return {
+    currency: "CNY",
+    packs: [
+      {
+        id: "credits_20",
+        type: "pack",
+        title: "20 次创作包",
+        subtitle: "适合轻量体验",
+        credits: 20,
+        amountCents: 1900,
+        currency: "CNY",
+        badge: "",
+      },
+      {
+        id: "credits_60",
+        type: "pack",
+        title: "60 次创作包",
+        subtitle: "热门选择",
+        credits: 60,
+        amountCents: 4900,
+        currency: "CNY",
+        badge: "hot",
+      },
+      {
+        id: "credits_160",
+        type: "pack",
+        title: "160 次创作包",
+        subtitle: "高频创作者",
+        credits: 160,
+        amountCents: 9900,
+        currency: "CNY",
+        badge: "best_value",
+      },
+    ],
+    subscriptions: [
+      {
+        id: "sub_monthly_200",
+        type: "subscription",
+        title: "月度 Pro",
+        subtitle: "每月 200 次创作额度",
+        credits: 200,
+        amountCents: 12900,
+        currency: "CNY",
+        interval: "month",
+        badge: "pro",
+      },
+    ],
+  };
+}
+
+function findProduct(env, productId) {
+  const pricing = pricingProducts(env);
+  return [...pricing.packs, ...pricing.subscriptions].find((product) => product.id === productId) || null;
+}
+
+function paymentMode(env) {
+  return getEnv(env, "MINIAPP_PAYMENT_MODE", env.MINIAPP_DEV_LOGIN === "1" ? "mock" : "manual");
+}
+
+function wxPaymentParams(env, order, product) {
+  const configured = parseEnvJson(env, "MINIAPP_WECHAT_PAYMENT_PARAMS_JSON", null);
+  if (!configured) return null;
+  return {
+    ...configured,
+    package: configured.package || configured.packageValue || `prepay_id=${order.id}`,
+    nonceStr: configured.nonceStr || crypto.randomBytes(12).toString("hex"),
+    timeStamp: configured.timeStamp || Math.floor(Date.now() / 1000).toString(),
+    productId: product.id,
+    orderId: order.id,
+  };
+}
+
+function paymentCreatePayload(env, order, product) {
+  const mode = paymentMode(env);
+  if (mode === "wechat") {
+    const params = wxPaymentParams(env, order, product);
+    if (params) return { paymentStatus: "created", paymentParams: params, paymentMode: "wechat" };
+  }
+  if (mode === "mock") return { paymentStatus: "mock_pending", paymentParams: null, paymentMode: "mock" };
+  return { paymentStatus: "manual_pending", paymentParams: null, paymentMode: "manual" };
+}
+
+function paymentInstructions(order) {
+  if (order.paymentMode === "mock") {
+    return {
+      mode: "mock",
+      status: "mock_pending",
+      message: "Local testing can complete this order with POST /api/miniapp/orders/:id/mock-pay.",
+    };
+  }
+  return {
+    mode: "manual",
+    status: "manual_pending",
+    message: "Payment is pending manual confirmation.",
   };
 }
 
@@ -418,10 +570,213 @@ function createApp(options = {}) {
         return json({ success: true, data: null });
       }
 
+      if (path === "/api/miniapp/pricing" && request.method === "GET") {
+        return json({ success: true, data: pricingProducts(env) });
+      }
+
+      if (path === "/api/miniapp/account/me" && request.method === "GET") {
+        const { user } = getCurrentUser(request, env, store);
+        return json({ success: true, data: { user } });
+      }
+
+      if (path === "/api/miniapp/account/me" && request.method === "PATCH") {
+        const { user } = getCurrentUser(request, env, store);
+        const body = await readJson(request);
+        const name = String(body.name || "").trim();
+        if (!name || name.length > 40) return json({ success: false, error: "Name must be 1 to 40 characters" }, 400);
+        return json({ success: true, data: { user: store.updateUserProfile(user.id, { name }) } });
+      }
+
       if (path === "/api/miniapp/credit/balance" && request.method === "GET") {
         const payload = getAuthPayload(request, env);
         const user = store.ensureUser(payload);
         return json({ success: true, data: { balance: user.balance, currency: "credits" } });
+      }
+
+      if (path === "/api/miniapp/billing" && request.method === "GET") {
+        const { user } = getCurrentUser(request, env, store);
+        const orderParams = new URLSearchParams(url.searchParams);
+        const transactionParams = new URLSearchParams(url.searchParams);
+        const auditParams = new URLSearchParams(url.searchParams);
+        auditParams.set("userId", user.id);
+        return json({
+          success: true,
+          data: {
+            user,
+            balance: user.balance,
+            currency: "credits",
+            orders: store.listOrders(user.id, orderParams),
+            creditTransactions: store.listCreditTransactions(user.id, transactionParams),
+            paymentEvents: store.listPaymentAudit(auditParams),
+          },
+        });
+      }
+
+      if (path === "/api/miniapp/orders" && request.method === "POST") {
+        const { user } = getCurrentUser(request, env, store);
+        const body = await readJson(request);
+        const productId = String(body.productId || "").trim();
+        const product = findProduct(env, productId);
+        if (!product) return json({ success: false, error: "Unknown productId" }, 400);
+        const channel = String(body.channel || "wechat").trim() || "wechat";
+        const draft = {
+          id: body.orderId || appOrderId(),
+          userId: user.id,
+          productId: product.id,
+          channel,
+          status: "pending",
+          amountCents: product.amountCents,
+          currency: product.currency || "CNY",
+          credits: product.credits,
+          productSnapshot: product,
+        };
+        const payment = paymentCreatePayload(env, draft, product);
+        const order = store.createOrder({
+          ...draft,
+          paymentStatus: payment.paymentStatus,
+          paymentMode: payment.paymentMode,
+          paymentParams: payment.paymentParams,
+        });
+        store.recordPaymentEvent({
+          orderId: order.id,
+          userId: user.id,
+          type: "create",
+          actorId: user.id,
+          message: "Order created",
+          metadata: { productId: product.id, channel },
+        });
+        return json({
+          success: true,
+          data: {
+            order,
+            paymentParams: order.paymentParams || null,
+            payment: order.paymentParams ? { mode: order.paymentMode, status: order.paymentStatus } : paymentInstructions(order),
+          },
+        }, 201);
+      }
+
+      if (path === "/api/miniapp/orders" && request.method === "GET") {
+        const { user } = getCurrentUser(request, env, store);
+        const data = store.listOrders(user.id, url.searchParams);
+        return json({ success: true, data });
+      }
+
+      const mockPayMatch = path.match(/^\/api\/miniapp\/orders\/([^/]+)\/mock-pay$/);
+      if (mockPayMatch && request.method === "POST") {
+        const { user } = getCurrentUser(request, env, store);
+        const order = store.getOrder(decodeURIComponent(mockPayMatch[1]));
+        if (!order || order.userId !== user.id) return json({ success: false, error: "Order not found" }, 404);
+        if (paymentMode(env) !== "mock" && !isDevLoginAdmin(request, env)) {
+          return json({ success: false, error: "Mock payment is disabled" }, 403);
+        }
+        const result = store.fulfillOrder(order.id, {
+          paidAt: new Date().toISOString(),
+          reason: `order:${order.id}`,
+        });
+        if (result && result.fulfilled) {
+          store.recordPaymentEvent({
+            orderId: order.id,
+            userId: user.id,
+            type: "pay",
+            actorId: user.id,
+            message: "Mock payment completed",
+            metadata: { mode: "mock" },
+          });
+          store.recordPaymentEvent({
+            orderId: order.id,
+            userId: user.id,
+            type: "fulfill",
+            actorId: user.id,
+            message: "Credits granted",
+            metadata: { credits: result.order.creditsGranted },
+          });
+        }
+        return json({ success: true, data: { order: result ? result.order : store.getOrder(order.id), idempotent: !(result && result.fulfilled) } });
+      }
+
+      const orderMatch = path.match(/^\/api\/miniapp\/orders\/([^/]+)$/);
+      if (orderMatch && request.method === "GET") {
+        const { user } = getCurrentUser(request, env, store);
+        const order = store.getOrder(decodeURIComponent(orderMatch[1]));
+        if (!order || order.userId !== user.id) return json({ success: false, error: "Order not found" }, 404);
+        return json({ success: true, data: { order } });
+      }
+
+      if (path === "/api/miniapp/admin/payment-audit" && request.method === "GET") {
+        requireAdmin(request, env, store);
+        return json({ success: true, data: store.listPaymentAudit(url.searchParams) });
+      }
+
+      if (path === "/api/miniapp/admin/users" && request.method === "GET") {
+        requireAdmin(request, env, store);
+        return json({ success: true, data: store.listUsers(url.searchParams) });
+      }
+
+      if (path === "/api/miniapp/admin/credits/add" && request.method === "POST") {
+        const admin = requireAdmin(request, env, store);
+        const body = await readJson(request);
+        const userId = String(body.userId || body.targetUserId || "").trim();
+        const amount = Number.parseInt(body.amount, 10);
+        if (!userId) return json({ success: false, error: "Missing userId" }, 400);
+        if (!Number.isFinite(amount) || amount <= 0) return json({ success: false, error: "Amount must be a positive integer" }, 400);
+        const user = store.addCredits(userId, amount, body.reason || `admin:${admin.user.id}`);
+        return json({ success: true, data: { user } });
+      }
+
+      const adminUserCreditsMatch = path.match(/^\/api\/miniapp\/admin\/users\/([^/]+)\/credits$/);
+      if (adminUserCreditsMatch && request.method === "POST") {
+        const admin = requireAdmin(request, env, store);
+        const userId = decodeURIComponent(adminUserCreditsMatch[1]);
+        const body = await readJson(request);
+        const amount = Number.parseInt(body.amount, 10);
+        if (!Number.isFinite(amount) || amount <= 0) return json({ success: false, error: "Amount must be a positive integer" }, 400);
+        const user = store.addCredits(userId, amount, body.reason || `admin:${admin.user.id}`);
+        return json({ success: true, data: { user } });
+      }
+
+      const adminUserMatch = path.match(/^\/api\/miniapp\/admin\/users\/([^/]+)$/);
+      if (adminUserMatch && request.method === "GET") {
+        requireAdmin(request, env, store);
+        const userId = decodeURIComponent(adminUserMatch[1]);
+        const user = store.getUser(userId);
+        if (!user) return json({ success: false, error: "User not found" }, 404);
+        return json({
+          success: true,
+          data: {
+            user,
+            orders: store.listOrders(user.id, new URLSearchParams({ page: "1", limit: "20" })),
+            creditTransactions: store.listCreditTransactions(user.id, new URLSearchParams({ page: "1", limit: "20" })),
+          },
+        });
+      }
+
+      if (path === "/api/miniapp/admin/orders" && request.method === "GET") {
+        requireAdmin(request, env, store);
+        return json({ success: true, data: store.listAllOrders(url.searchParams) });
+      }
+
+      const adminOrderActionMatch = path.match(/^\/api\/miniapp\/admin\/orders\/([^/]+)\/(refund|cancel)$/);
+      if (adminOrderActionMatch && request.method === "POST") {
+        const admin = requireAdmin(request, env, store);
+        const orderId = decodeURIComponent(adminOrderActionMatch[1]);
+        const action = adminOrderActionMatch[2];
+        const body = await readJson(request);
+        const reason = body.reason || `admin:${action}`;
+        const result = action === "refund"
+          ? store.refundOrder(orderId, { reason, revokeCredits: body.revokeCredits !== false })
+          : store.cancelOrder(orderId, { reason });
+        if (!result) return json({ success: false, error: "Order not found" }, 404);
+        if ((action === "refund" && result.refunded) || (action === "cancel" && result.canceled)) {
+          store.recordPaymentEvent({
+            orderId,
+            userId: result.order.userId,
+            type: action === "refund" ? "refund" : "fail",
+            actorId: admin.user.id,
+            message: reason,
+            metadata: action === "refund" ? { revokedCredits: result.revokedCredits } : { action: "cancel" },
+          });
+        }
+        return json({ success: true, data: result });
       }
 
       if (path === "/api/miniapp/uploads/reference-image" && request.method === "POST") {
@@ -517,6 +872,24 @@ function createApp(options = {}) {
           data: {
             records: data.records,
             pagination: data.pagination,
+          },
+        });
+      }
+
+      const imageAssetDownloadMatch = path.match(/^\/api\/miniapp\/image-assets\/([^/]+)\/download$/);
+      if (imageAssetDownloadMatch && request.method === "GET") {
+        const { user } = getCurrentUser(request, env, store);
+        const assetId = decodeURIComponent(imageAssetDownloadMatch[1]);
+        const asset = store.findOwnedImageAsset(user.id, assetId);
+        if (!asset) return json({ success: false, error: "Image asset not found" }, 404);
+        return new Response(null, {
+          status: 302,
+          headers: {
+            Location: asset.url,
+            "Cache-Control": "private, max-age=60",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "content-type, authorization",
+            "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
           },
         });
       }
