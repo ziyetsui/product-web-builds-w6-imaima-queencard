@@ -27,11 +27,15 @@ import { BrandedCarouselControls } from "@/components/common/branded-carousel-co
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { potentialHitTopCount, xhsCaseMetrics } from "@/data/xhsCaseMetrics";
+import { boLandingPromptCases } from "@/data/boLandingPromptCases";
 import { xhsPromptCases, type XhsPromptCase } from "@/data/xhsPromptCases";
 
+const boLandingCategories = ["爆款图文", "梗图", "公众号配图"];
+const promptCases = [...xhsPromptCases, ...boLandingPromptCases];
 const categories = [
   "全部",
   "热门高赞",
+  ...boLandingCategories,
   "养生内调",
   "清单种草",
   "美女图集",
@@ -44,6 +48,9 @@ const categories = [
 const categoryAccents: Record<string, string> = {
   全部: "bg-pumpkin",
   热门高赞: "bg-lemon",
+  爆款图文: "bg-pumpkin",
+  梗图: "bg-sky",
+  公众号配图: "bg-seafoam",
   养生内调: "bg-seafoam",
   清单种草: "bg-lavender",
   美女图集: "bg-spring",
@@ -54,7 +61,7 @@ const categoryAccents: Record<string, string> = {
 };
 
 const sortModes = ["综合热度", "潜力优先", "收藏优先", "分享优先"];
-const defaultCase = xhsPromptCases[0];
+const defaultCase = promptCases[0];
 
 const IMAGE_FALLBACK =
   "data:image/svg+xml;utf8," +
@@ -267,6 +274,10 @@ function promptTargetFor(item: XhsPromptCase): PromptTarget {
 }
 
 function promptForCase(item: XhsPromptCase) {
+  if (boLandingCategories.includes(item.category) && item.prompt) {
+    return item.prompt;
+  }
+
   const target = promptTargetFor(item);
 
   return `生成一组新的${target.theme}主题：标题《${target.title}》，副标题《${target.subtitle}》。`;
@@ -285,10 +296,10 @@ function formatShortDate(date: string) {
   return date.slice(5).replace("-", ".");
 }
 
-const latestCaseTime = Math.max(...xhsPromptCases.map(caseDateTimeFor));
+const latestCaseTime = Math.max(...promptCases.map(caseDateTimeFor));
 const moneyBoardWindowStartTime = latestCaseTime - 13 * 24 * 60 * 60 * 1000;
 const moneyBoardWindowLabel = `${formatShortDate(dateStringFromTime(moneyBoardWindowStartTime))} - ${formatShortDate(dateStringFromTime(latestCaseTime))}`;
-const moneyBoardRecentCases = xhsPromptCases.filter((item) => {
+const moneyBoardRecentCases = promptCases.filter((item) => {
   const time = caseDateTimeFor(item);
   return time >= moneyBoardWindowStartTime && time <= latestCaseTime;
 });
@@ -339,7 +350,7 @@ function compactRatio(value: number) {
 
 function fallbackHeatScore(item: XhsPromptCase) {
   const heat = item.likes + item.saves * 0.35 + item.shares * 0.45;
-  const maxHeat = Math.max(...xhsPromptCases.map((entry) => entry.likes + entry.saves * 0.35 + entry.shares * 0.45));
+  const maxHeat = Math.max(...promptCases.map((entry) => entry.likes + entry.saves * 0.35 + entry.shares * 0.45));
   return Math.max(40, Math.round((heat / Math.max(maxHeat, 1)) * 60 + 40));
 }
 
@@ -379,7 +390,7 @@ function useFilteredCases(activeCategory: string, query: string, sortMode: strin
   return useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
-    const filtered = xhsPromptCases.filter((item) => {
+    const filtered = promptCases.filter((item) => {
       const matchesCategory =
         activeCategory === "全部" ||
         (activeCategory === "热门高赞" ? item.likes >= 20000 || item.saves >= 20000 : item.category === activeCategory);
@@ -1339,7 +1350,7 @@ export default function Prompts() {
                 className="w-full bg-transparent font-manrope text-[15px] font-semibold text-charcoal placeholder:font-medium placeholder:text-charcoal/40 focus:outline-none"
               />
               <span className="shrink-0 whitespace-nowrap font-manrope text-[12px] font-bold tabular-nums text-charcoal/45">
-                共 {xhsPromptCases.length}
+                共 {promptCases.length}
               </span>
             </label>
 

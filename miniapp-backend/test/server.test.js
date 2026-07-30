@@ -464,6 +464,26 @@ test("serves GitHub public image assets for local miniapp templates", async () =
   app.close();
 });
 
+test("serves synced BO landing case assets for local miniapp templates", async () => {
+  const assetRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ima-assets-"));
+  fs.mkdirSync(path.join(assetRoot, "landing", "wechat-covers"), { recursive: true });
+  fs.writeFileSync(path.join(assetRoot, "landing", "wechat-covers", "cover.jpg"), Buffer.from("landing-image"));
+  const app = createApp({
+    env: {
+      MINIAPP_ASSET_ROOT: assetRoot,
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+  });
+
+  const response = await app.fetch(new Request("http://local/landing/wechat-covers/cover.jpg"));
+  const body = Buffer.from(await response.arrayBuffer()).toString("utf8");
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "image/jpeg");
+  assert.equal(body, "landing-image");
+  app.close();
+});
+
 test("serves miniapp landing assets from backend public assets", async () => {
   const assetRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ima-miniapp-assets-"));
   fs.mkdirSync(path.join(assetRoot, "miniapp-assets", "cases"), { recursive: true });

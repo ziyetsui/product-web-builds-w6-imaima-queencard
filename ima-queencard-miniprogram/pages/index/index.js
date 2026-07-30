@@ -5,6 +5,9 @@ var templatesService = require("../../services/templates.js");
 var TEMPLATE_CATEGORIES = [
   { label: "全部", key: "all", value: "image", scenarioCategory: "" },
   { label: "热门高赞", key: "hot", value: "image", scenarioCategory: "", hotOnly: true },
+  { label: "爆款图文", key: "viral", value: "image", scenarioCategory: "爆款图文" },
+  { label: "梗图", key: "meme", value: "image", scenarioCategory: "梗图" },
+  { label: "公众号配图", key: "wechat", value: "image", scenarioCategory: "公众号配图" },
   { label: "养生", key: "wellness", value: "image", scenarioCategory: "养生内调" },
   { label: "清单", key: "list", value: "image", scenarioCategory: "清单种草" },
   { label: "图集", key: "gallery", value: "image", scenarioCategory: "美女图集" },

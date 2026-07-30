@@ -20,6 +20,7 @@ function contentType(filePath) {
 
 function isAllowedAssetPath(pathname) {
   return pathname.startsWith("/xhs-cases/")
+    || pathname.startsWith("/landing/")
     || pathname.startsWith("/model-logos/")
     || pathname.startsWith("/miniapp-assets/")
     || pathname.startsWith("/uploads/reference/");

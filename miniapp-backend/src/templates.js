@@ -56,14 +56,14 @@ function normalizeTemplate(record) {
   };
 }
 
-function extractCasesArray(sourceText) {
-  const marker = "export const xhsPromptCases";
+function extractCasesArray(sourceText, exportName) {
+  const marker = `export const ${exportName}`;
   const markerIndex = sourceText.indexOf(marker);
-  if (markerIndex < 0) throw new Error("xhsPromptCases export not found");
+  if (markerIndex < 0) throw new Error(`${exportName} export not found`);
   const equalsIndex = sourceText.indexOf("=", markerIndex);
-  if (equalsIndex < 0) throw new Error("xhsPromptCases assignment not found");
+  if (equalsIndex < 0) throw new Error(`${exportName} assignment not found`);
   const start = sourceText.indexOf("[", equalsIndex);
-  if (start < 0) throw new Error("xhsPromptCases array not found");
+  if (start < 0) throw new Error(`${exportName} array not found`);
 
   let depth = 0;
   let quote = "";
@@ -90,7 +90,7 @@ function extractCasesArray(sourceText) {
       if (depth === 0) return sourceText.slice(start, index + 1);
     }
   }
-  throw new Error("xhsPromptCases array did not terminate");
+  throw new Error(`${exportName} array did not terminate`);
 }
 
 function extractExportObject(sourceText, marker) {
@@ -129,9 +129,15 @@ function extractExportObject(sourceText, marker) {
   throw new Error(marker + " object did not terminate");
 }
 
+function exportedCaseArrayName(filePath) {
+  const baseName = path.basename(filePath);
+  if (baseName === "boLandingPromptCases.ts") return "boLandingPromptCases";
+  return "xhsPromptCases";
+}
+
 function loadGithubCases(filePath) {
   const sourceText = fs.readFileSync(filePath, "utf8");
-  const literal = extractCasesArray(sourceText);
+  const literal = extractCasesArray(sourceText, exportedCaseArrayName(filePath));
   return vm.runInNewContext("(" + literal + ")", {}, {
     timeout: 1000,
   });
@@ -240,11 +246,36 @@ function defaultGithubCasesFile() {
   );
 }
 
+function defaultGithubExtraCasesFile() {
+  return path.resolve(
+    __dirname,
+    "../../ima ima queencard/frontend/src/data/boLandingPromptCases.ts"
+  );
+}
+
 function defaultGithubMetricsFile() {
   return path.resolve(
     __dirname,
     "../../ima ima queencard/frontend/src/data/xhsCaseMetrics.ts"
   );
+}
+
+function splitCaseFiles(value) {
+  return String(value || "")
+    .split(",")
+    .map((file) => file.trim())
+    .filter(Boolean);
+}
+
+function githubCaseFiles(options) {
+  const env = options.env || process.env;
+  const explicitFiles = [
+    ...splitCaseFiles(options.githubCasesFile || env.MINIAPP_GITHUB_CASES_FILE),
+    ...splitCaseFiles(options.githubExtraCasesFile || env.MINIAPP_GITHUB_EXTRA_CASES_FILE),
+  ];
+  if (explicitFiles.length) return explicitFiles;
+
+  return [defaultGithubCasesFile(), defaultGithubExtraCasesFile()].filter((file) => fs.existsSync(file));
 }
 
 function defaultAssetBaseUrl(options) {
@@ -276,10 +307,11 @@ function filterGithubCases(records, query) {
 
 async function fetchGithubTemplateList(options) {
   const query = options.query || new URLSearchParams();
-  const casesFile = options.githubCasesFile || (options.env && options.env.MINIAPP_GITHUB_CASES_FILE) || defaultGithubCasesFile();
   const metricsFile = options.githubMetricsFile || (options.env && options.env.MINIAPP_GITHUB_METRICS_FILE) || defaultGithubMetricsFile();
   const metrics = fs.existsSync(metricsFile) ? loadGithubCaseMetrics(metricsFile) : {};
-  const records = loadGithubCases(casesFile).map((record) => normalizeGithubCase(record, defaultAssetBaseUrl(options), metrics));
+  const records = githubCaseFiles(options)
+    .flatMap((casesFile) => loadGithubCases(casesFile))
+    .map((record) => normalizeGithubCase(record, defaultAssetBaseUrl(options), metrics));
   const filtered = sortGithubCases(filterGithubCases(records, query), query.get("sort") || "heat");
   const page = Math.max(1, Number(query.get("page") || 1));
   const limit = Math.max(1, Number(query.get("limit") || filtered.length || 1));
