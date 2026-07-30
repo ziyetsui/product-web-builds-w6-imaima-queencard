@@ -41,3 +41,21 @@ test("rejects expired standalone WeChat miniapp token", () => {
     /expired/,
   );
 });
+
+test("rejects standalone WeChat miniapp token for another appid", () => {
+  const token = createMiniappToken({
+    appid: "wx-dev",
+    openid: "openid-1",
+    secret: "test-secret",
+    now: new Date("2026-07-28T00:00:00.000Z"),
+  });
+
+  assert.throws(
+    () => verifyMiniappToken(token, {
+      secret: "test-secret",
+      expectedAppid: "wx-real",
+      now: new Date("2026-07-28T00:01:00.000Z"),
+    }),
+    /appid/,
+  );
+});

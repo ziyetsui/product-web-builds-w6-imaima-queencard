@@ -37,13 +37,17 @@ MINIAPP_PUBLIC_ASSET_BASE_URL=https://replace-with-your-zeabur-domain
 MINIAPP_IMAGE_PROVIDER=preview
 ```
 
-For a real mini program deployment, change:
+For this real mini program deployment, use:
 
 ```bash
 MINIAPP_DEV_LOGIN=0
-WECHAT_MINIAPP_APP_ID=your-wechat-miniapp-appid
+WECHAT_MINIAPP_APP_ID=wx5949306a2777910c
 WECHAT_MINIAPP_APP_SECRET=your-wechat-miniapp-secret
 ```
+
+After switching to `MINIAPP_DEV_LOGIN=0`, old local `wx-dev` tokens are rejected
+by the backend. Users must log in again through the mini program so the backend
+can exchange the current `wx.login` code for the real WeChat `openid`.
 
 For real image generation, change one provider:
 

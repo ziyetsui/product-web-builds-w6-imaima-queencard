@@ -45,6 +45,41 @@ async function login(app) {
   return `Bearer ${response.data.token}`;
 }
 
+test("exchanges wx.login code for real WeChat openid when dev login is disabled", async () => {
+  let requestedUrl = "";
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "0",
+      WECHAT_MINIAPP_APP_ID: "wx-real",
+      WECHAT_MINIAPP_APP_SECRET: "secret-real",
+      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+    fetch: async (url) => {
+      requestedUrl = String(url);
+      return Response.json({
+        openid: "real-openid-1",
+        unionid: "real-unionid-1",
+        session_key: "session-key",
+      });
+    },
+  });
+
+  const response = await readJson(await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
+    method: "POST",
+    body: JSON.stringify({ code: "wx-code-1" }),
+  })));
+
+  assert.equal(response.success, true);
+  assert.match(requestedUrl, /api\.weixin\.qq\.com\/sns\/jscode2session/);
+  assert.match(requestedUrl, /appid=wx-real/);
+  assert.match(requestedUrl, /js_code=wx-code-1/);
+  assert.equal(response.data.user.id, "wechat:wx-real:real-openid-1");
+  assert.equal(response.data.user.openid, "real-openid-1");
+  assert.equal(response.data.user.unionid, "real-unionid-1");
+  app.close();
+});
+
 test("supports standalone login, balance, templates, generation task and result", async () => {
   const app = createApp({
     env: {

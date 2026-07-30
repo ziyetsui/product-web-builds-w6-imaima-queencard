@@ -65,6 +65,9 @@ function verifyMiniappToken(token, options) {
   if (payload.exp <= nowSeconds) {
     throw new Error("Miniapp token expired");
   }
+  if (options.expectedAppid && payload.appid !== options.expectedAppid) {
+    throw new Error("Invalid miniapp token appid");
+  }
   return payload;
 }
 

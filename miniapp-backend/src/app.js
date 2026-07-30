@@ -37,6 +37,7 @@ function getAuthPayload(request, env) {
   }
   return verifyMiniappToken(match[1], {
     secret: getEnv(env, "MINIAPP_AUTH_TOKEN_SECRET"),
+    expectedAppid: getEnv(env, "WECHAT_MINIAPP_APP_ID", "wx-dev"),
   });
 }
 
@@ -401,6 +402,7 @@ function createApp(options = {}) {
         });
         const payload = verifyMiniappToken(token, {
           secret: getEnv(env, "MINIAPP_AUTH_TOKEN_SECRET"),
+          expectedAppid: appid,
         });
         const user = store.ensureUser(payload);
         return json({ success: true, data: { token, user } });
