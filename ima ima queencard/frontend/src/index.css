@@ -927,6 +927,22 @@ html {
   will-change: transform;
 }
 
+.case-image-trigger img.case-image-contained-center {
+  object-position: center center;
+}
+
+.case-image-trigger img.case-image-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  object-fit: cover;
+  object-position: center center;
+  pointer-events: none;
+  opacity: 0.32;
+  filter: blur(18px) saturate(1.1);
+  transform: scale(1.1);
+}
+
 .case-image-download-button {
   position: absolute;
   z-index: 6;

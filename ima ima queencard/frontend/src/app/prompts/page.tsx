@@ -711,6 +711,7 @@ function CaseImageCarousel({
   onUseImage: (item: XhsPromptCase, imageIndex: number) => void;
 }) {
   const images = imagesFor(item);
+  const usesImageBackdrop = item.category === "公众号配图";
   const [selectedIndex, setSelectedIndex] = useState(0);
   const previousIndexRef = useRef(0);
   const slideRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -751,7 +752,7 @@ function CaseImageCarousel({
 
     const direction = selectedIndex >= previousIndexRef.current ? 1 : -1;
     const activeSlide = slideRefs.current[selectedIndex];
-    const activeImage = activeSlide?.querySelector("img");
+    const activeImage = activeSlide?.querySelector("img:not(.case-image-backdrop)");
     const frame = frameRef.current;
 
     if (activeSlide && activeImage && frame) {
@@ -791,7 +792,7 @@ function CaseImageCarousel({
 
   const playImageClickMotion = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
     const trigger = event.currentTarget;
-    const activeImage = trigger.querySelector("img");
+    const activeImage = trigger.querySelector("img:not(.case-image-backdrop)");
 
     gsap.killTweensOf([trigger, activeImage]);
 
@@ -843,9 +844,20 @@ function CaseImageCarousel({
                       alt={`${item.title} 第 ${index + 1} 张参考图`}
                       loading="lazy"
                       onError={handleImageError}
-                      className="select-none transition-transform duration-700 ease-out"
+                      className={`${usesImageBackdrop ? "case-image-contained-center" : ""} select-none transition-transform duration-700 ease-out`}
                       draggable={false}
                     />
+                    {usesImageBackdrop ? (
+                      <img
+                        src={src}
+                        alt=""
+                        aria-hidden="true"
+                        loading="lazy"
+                        onError={handleImageError}
+                        className="case-image-backdrop select-none"
+                        draggable={false}
+                      />
+                    ) : null}
                   </button>
                   <a
                     href={src}
