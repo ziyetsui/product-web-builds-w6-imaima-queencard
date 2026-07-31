@@ -3,6 +3,8 @@ node_modules
 .next
 dist
 dist-ssr
+public/xhs-cases
+public/landing
 *.tsbuildinfo
 .env
 .env.*
