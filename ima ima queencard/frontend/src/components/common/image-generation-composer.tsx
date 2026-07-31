@@ -85,6 +85,15 @@ type FillPrompt = {
   subtitle: string;
 };
 
+type CasePromptParts = {
+  sourceTitle: string;
+  structure: string;
+  theme: string;
+  title: string;
+  subtitle: string;
+  output: string;
+};
+
 function defaultModelFor(referenceImages: string[]) {
   return defaultImageGenerationModel(referenceImages);
 }
@@ -168,6 +177,36 @@ function parseFillPrompt(value: string): FillPrompt | null {
 
 function buildFillPrompt(prompt: FillPrompt) {
   return `生成一组新的${prompt.theme}主题：标题《${prompt.title}》，副标题《${prompt.subtitle}》。`;
+}
+
+function parseCasePrompt(value: string): CasePromptParts | null {
+  const match = value.match(
+    /^参考图文《([^》]+)》的(.+?)，生成一组新的(?:小红书)?(.+?)主题：标题《([^》]*)》，副标题(?:《([^》]*)》|[“"]([^”"]*)[”"])。(.+)$/
+  );
+  if (!match) return null;
+
+  return {
+    sourceTitle: match[1] ?? "",
+    structure: match[2] ?? "",
+    theme: match[3] ?? "",
+    title: match[4] ?? "",
+    subtitle: match[5] ?? match[6] ?? "",
+    output: match[7] ?? "",
+  };
+}
+
+function formatSeedPrompt(value: string | undefined) {
+  if (!value) return "";
+  const prompt = value.trim();
+  const parsed = parseCasePrompt(prompt);
+
+  if (!parsed) return prompt;
+
+  return buildFillPrompt({
+    theme: parsed.theme,
+    title: parsed.title,
+    subtitle: parsed.subtitle,
+  });
 }
 
 function setOptionalParam(params: URLSearchParams, key: string, value: string | undefined) {
@@ -464,7 +503,7 @@ export function ImageGenerationComposer({
   const onDraftChangeRef = useRef(onDraftChange);
   const seedKey = JSON.stringify(seed ?? {});
   const seedSnapshot = useMemo(() => JSON.parse(seedKey) as ImageGenerationSeed, [seedKey]);
-  const [prompt, setPrompt] = useState(seed?.prompt ?? "");
+  const [prompt, setPrompt] = useState(() => formatSeedPrompt(seed?.prompt));
   const [referenceImages, setReferenceImages] = useState(() =>
     uniqueFirstThree(seed?.referenceImages)
   );
@@ -488,7 +527,7 @@ export function ImageGenerationComposer({
   useEffect(() => {
     const nextReferences = uniqueFirstThree(seedSnapshot.referenceImages);
     const seedDraft: ComposerDraft = {
-      prompt: seedSnapshot.prompt ?? "",
+      prompt: formatSeedPrompt(seedSnapshot.prompt),
       referenceImages: nextReferences,
       model: modelForSeed(seedSnapshot, nextReferences),
       aspectRatio: aspectRatioForSeed(seedSnapshot, nextReferences),
