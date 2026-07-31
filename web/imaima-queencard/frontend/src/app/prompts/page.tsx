@@ -351,7 +351,7 @@ function promptForCase(item: XhsPromptCase) {
     subtitle: sourceAwareSubtitleFor(item),
   };
 
-  return `生成一组新的${target.theme}主题：标题《${target.title}》，副标题“${target.subtitle}”`;
+  return `生成一组新的${target.theme}主题：标题《${target.title}》，复刻参数“${target.subtitle}”`;
 }
 
 function caseDateTimeFor(item: XhsPromptCase) {
@@ -481,7 +481,7 @@ function useFilteredCases(activeCategory: string, query: string, sortMode: strin
 
 function PromptTemplatePreview({ prompt, className = "" }: { prompt: string; className?: string }) {
   const titleMatch = /标题《([^》]+)》/.exec(prompt);
-  const subtitleMatch = /副标题(?:《([^》]+)》|[“"]([^”"]+)[”"])/.exec(prompt);
+  const subtitleMatch = /(?:复刻参数|副标题)(?:《([^》]+)》|[“"]([^”"]+)[”"])/.exec(prompt);
   const ranges = [
     titleMatch
       ? {
@@ -492,9 +492,9 @@ function PromptTemplatePreview({ prompt, className = "" }: { prompt: string; cla
       : null,
     subtitleMatch
       ? {
-          start: subtitleMatch.index + "副标题".length,
+          start: subtitleMatch.index + (subtitleMatch[0].startsWith("复刻参数") ? "复刻参数" : "副标题").length,
           end: subtitleMatch.index + subtitleMatch[0].length,
-          text: subtitleMatch[0].replace(/^副标题/, ""),
+          text: subtitleMatch[0].replace(/^(?:复刻参数|副标题)/, ""),
         }
       : null,
   ]

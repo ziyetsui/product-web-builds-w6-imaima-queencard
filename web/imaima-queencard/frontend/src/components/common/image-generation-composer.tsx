@@ -82,7 +82,7 @@ const ASPECT_MARK_CLASS: Record<string, string> = {
 type FillPrompt = {
   theme: string;
   title: string;
-  subtitle: string;
+  replicationParameters: string;
 };
 
 function defaultModelFor(referenceImages: string[]) {
@@ -156,18 +156,18 @@ function optionDisplayLabel(option: string) {
 
 function parseFillPrompt(value: string): FillPrompt | null {
   const match = value.match(
-    /^生成一组新的(.+?)主题：标题《([^》]*)》，副标题(?:《([^》]*)》|[“"]([^”"]*)[”"])。?$/
+    /^生成一组新的(.+?)主题：标题《([^》]*)》，(?:复刻参数|副标题)(?:《([^》]*)》|[“"]([^”"]*)[”"])。?$/
   );
   if (!match) return null;
   return {
     theme: match[1] ?? "",
     title: match[2] ?? "",
-    subtitle: match[3] ?? match[4] ?? "",
+    replicationParameters: match[3] ?? match[4] ?? "",
   };
 }
 
 function buildFillPrompt(prompt: FillPrompt) {
-  return `生成一组新的${prompt.theme}主题：标题《${prompt.title}》，副标题《${prompt.subtitle}》。`;
+  return `生成一组新的${prompt.theme}主题：标题《${prompt.title}》，复刻参数“${prompt.replicationParameters}”`;
 }
 
 function setOptionalParam(params: URLSearchParams, key: string, value: string | undefined) {
@@ -394,7 +394,7 @@ function FillPromptEditor({
         </div>
 
         <label className="grid items-center gap-2 md:grid-cols-[72px_minmax(0,1fr)]">
-          <span className="font-black">标题《</span>
+          <span className="font-black">标题</span>
           <div className="flex min-w-0 items-center gap-2">
             <FillSlotInput
               label="标题"
@@ -405,24 +405,22 @@ function FillPromptEditor({
               fullWidth
               align="left"
             />
-            <span className="shrink-0 font-black">》</span>
           </div>
         </label>
 
         <label className="grid items-center gap-2 md:grid-cols-[72px_minmax(0,1fr)]">
-          <span className="font-black">副标题《</span>
+          <span className="font-black">复刻参数</span>
           <div className="flex min-w-0 items-center gap-2">
             <FillSlotInput
-              label="副标题"
-              value={parsed.subtitle}
-              onChange={(nextValue) => updateSlot("subtitle", nextValue)}
+              label="复刻参数"
+              value={parsed.replicationParameters}
+              onChange={(nextValue) => updateSlot("replicationParameters", nextValue)}
               minWidth={18}
               maxWidth={60}
               tone="sky"
               fullWidth
               align="left"
             />
-            <span className="shrink-0 font-black">》</span>
           </div>
         </label>
       </div>

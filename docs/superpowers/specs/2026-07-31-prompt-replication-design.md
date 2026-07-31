@@ -58,30 +58,34 @@ tone mechanism: cold joke, conversational, absurd
 Default rewrite:
 
 ```text
-生成一组新的搞笑漫画主题：标题《8个把冷笑话画成段子的离谱瞬间》，副标题“保留原图文的节奏、反差包袱、分镜密度和标题语气，换成新的主题”
+生成一组新的搞笑漫画主题：标题《8个把冷笑话画成段子的离谱瞬间》，复刻参数“保留原图文的节奏、反差包袱、分镜密度和标题语气，换成新的主题”
 ```
 
 The exact title is a suggested fill value. The user can edit the yellow title
-slot and blue subtitle slot without losing the structured editor format.
+slot and blue replication-parameter slot without losing the structured editor format.
 
 ## Prompt Contract
 
 Every default prompt must match this parseable shape:
 
 ```text
-生成一组新的{type}主题：标题《{title}》，副标题“{replicationSubtitle}”
+生成一组新的{type}主题：标题《{title}》，复刻参数“{replicationParameters}”
 ```
 
-`replicationSubtitle` must describe source-preservation parameters, not generic
+`replicationParameters` must describe source-preservation parameters, not generic
 marketing copy. It should mention at least two concrete mechanisms when the
 source data provides them, for example `节奏、反差包袱、分镜密度和标题语气`.
+
+The UI label is `复刻参数`, not `副标题`. It is a constraint field for the
+image model, not a second piece of publishable post copy. The visible editor
+renders `标题` and `复刻参数` directly without book-title brackets.
 
 ## Acceptance Criteria
 
 - Every category in `/prompts` produces the structured editor instead of a raw textarea.
 - The generated type equals the source card type or its explicit source subtype.
 - The generated title uses a source-derived topic variable and a source-compatible title pattern.
-- The subtitle begins with `保留原图文的` and names source replication parameters.
+- The replication parameters begin with `保留原图文的` and name source replication parameters.
 - No generic fallback title such as `看完这组图就懂了` is used unless the source title mechanism itself is a comprehension/explanation hook.
 - Editing either colored slot preserves the prompt contract and updates the generated prompt.
 - All prompt-generation tests pass and the Web production build succeeds.
