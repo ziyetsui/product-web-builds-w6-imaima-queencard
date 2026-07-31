@@ -1,0 +1,20 @@
+.git
+.DS_Store
+node_modules
+**/node_modules
+**/.next
+**/.pnpm-store
+**/dist
+**/dist-ssr
+**/*.tsbuildinfo
+ima ima queencard/frontend/public/xhs-cases
+ima ima queencard/frontend/public/landing
+**/.env
+**/.env.*
+!miniapp-backend/.env.example
+!miniapp-backend/.env.zeabur.example
+miniapp-backend/data/*.sqlite
+miniapp-backend/data/*.sqlite-shm
+miniapp-backend/data/*.sqlite-wal
+miniapp-backend/data/uploads
+*.log
