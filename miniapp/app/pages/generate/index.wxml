@@ -1,0 +1,113 @@
+<view class="page">
+  <view class="topbar">
+    <button class="icon-button" bindtap="goHome">‹</button>
+    <view class="brand">
+      <text class="brand-main">ima ima</text>
+      <text class="brand-accent">queencard</text>
+    </view>
+    <view class="status-dot {{apiReady ? 'ready' : 'offline'}}"></view>
+  </view>
+
+  <view class="hero-panel">
+    <text class="kicker">REFERENCE TO POST</text>
+    <text class="title">上传参考图，生成自己的爆款图文</text>
+    <text class="subtitle">小程序用微信 openid 作为入口，后端负责独立账号、额度和生成记录。</text>
+  </view>
+
+  <view wx:if="{{!apiReady}}" class="notice-card">
+    <text class="notice-title">当前是前端联调态</text>
+    <text class="notice-copy">真实生成需要独立后端提供 /api/miniapp/*，再把 config/env.js 的 API_BASE_URL 指到部署地址。</text>
+    <button class="small-button" bindtap="showBackendNotice">查看说明</button>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">账号</text>
+      <text class="section-hint">{{user ? '已连接生成额度' : '先登录或绑定微信'}}</text>
+    </view>
+    <view class="account-card">
+      <view class="account-copy">
+        <text class="account-name">{{userLabel}}</text>
+        <text class="account-desc">{{userDesc}}</text>
+      </view>
+      <button wx:if="{{!user}}" class="small-button lemon" loading="{{busy}}" bindtap="handleLogin">微信登录</button>
+      <button wx:else class="small-button white" bindtap="handleLogout">退出</button>
+    </view>
+  </view>
+
+  <view class="section mode-reference-section">
+    <view class="section-head">
+      <text class="section-title">生成配置</text>
+      <text class="section-hint">{{modeLabel}}</text>
+    </view>
+    <view class="mode-row">
+      <button
+        wx:for="{{modes}}"
+        wx:key="value"
+        class="mode-chip {{item.value == capability ? 'active' : ''}}"
+        data-index="{{index}}"
+        bindtap="onModeChange"
+      >{{item.label}}</button>
+    </view>
+
+    <view class="section-head compact-head">
+      <text class="section-title">参考图</text>
+      <text class="section-hint">{{capability == 'text-to-image' ? '纯文生图不使用参考图' : '最多 3 张'}}</text>
+    </view>
+
+    <view wx:if="{{capability == 'text-to-image'}}" class="text-mode-card">
+      <text class="text-mode-title">当前不带参考图生成</text>
+      <text class="text-mode-desc">需要沿用某张图的结构或风格时，可以添加参考图并自动切回参考图生成。</text>
+      <button class="small-button lemon" bindtap="switchToReferenceAndChoose">添加参考图</button>
+    </view>
+
+    <view wx:elif="{{referenceImagePaths.length > 0}}" class="image-card">
+      <scroll-view scroll-x enhanced show-scrollbar="{{false}}" class="reference-scroll">
+        <view class="reference-row">
+          <view wx:for="{{referenceImagePaths}}" wx:key="*this" class="reference-item">
+            <image class="reference-image" mode="aspectFill" src="{{item}}" data-current="{{item}}" bindtap="previewReference" />
+            <button class="remove-chip" data-index="{{index}}" bindtap="removeReference">移除</button>
+          </view>
+        </view>
+      </scroll-view>
+      <view class="image-actions">
+        <button class="small-button white" bindtap="chooseReference">{{referenceImagePaths.length >= 3 ? '替换' : '继续添加'}}</button>
+      </view>
+    </view>
+    <button wx:else class="upload-box" bindtap="chooseReference">
+      <text class="upload-plus">+</text>
+      <text class="upload-title">上传参考图</text>
+      <text class="upload-desc">相册或拍照，建议竖版小红书截图</text>
+    </button>
+  </view>
+
+  <view class="section form-section">
+    <view class="section-head">
+      <text class="section-title">生成要求</text>
+      <button class="text-button" bindtap="resetPrompt">恢复示例</button>
+    </view>
+    <input class="input" value="{{topic}}" placeholder="你的主题，比如：女性成长、门店活动、知识拆解" bindinput="onTopicInput" />
+    <textarea class="textarea" value="{{prompt}}" maxlength="900" bindinput="onPromptInput" />
+
+    <view class="control-row">
+      <view class="control">
+        <text class="control-label">模型</text>
+        <picker range="{{availableModels}}" range-key="label" value="{{modelIndex}}" bindchange="onModelChange">
+          <view class="picker-box">{{modelLabel}}</view>
+        </picker>
+      </view>
+      <view class="control compact">
+        <text class="control-label">张数</text>
+        <picker range="{{outputCounts}}" value="{{countIndex}}" bindchange="onCountChange">
+          <view class="picker-box">{{outputCountLabel}}</view>
+        </picker>
+      </view>
+    </view>
+
+    <view class="estimate-line {{estimateError ? 'error' : ''}}">
+      <text>{{estimateLoading ? '正在计算预计消耗...' : estimateText}}</text>
+    </view>
+
+    <button class="submit-button" loading="{{busy}}" bindtap="submitGeneration">提交生成</button>
+  </view>
+</view>

@@ -1,0 +1,50 @@
+<view class="page">
+  <view class="topbar">
+    <button class="icon-button" bindtap="loadAccount">↻</button>
+    <view class="brand">
+      <text class="brand-main">ima ima</text>
+      <text class="brand-accent">账号</text>
+    </view>
+    <view class="status-dot {{apiReady ? 'ready' : 'offline'}}"></view>
+  </view>
+
+  <view class="profile-panel">
+    <image wx:if="{{user.avatarUrl}}" class="avatar" src="{{user.avatarUrl}}" mode="aspectFill" />
+    <view wx:else class="avatar avatar-empty">ima</view>
+    <view class="profile-copy">
+      <text class="kicker">ACCOUNT</text>
+      <text class="profile-name">{{userName}}</text>
+      <text class="profile-meta">{{userRole}}</text>
+    </view>
+  </view>
+
+  <view class="balance-card">
+    <text class="balance-number">{{balance}}</text>
+    <text class="balance-label">可用积分</text>
+  </view>
+
+  <view wx:if="{{error}}" class="notice-card">
+    <text class="notice-title">提示</text>
+    <text class="notice-copy">{{error}}</text>
+  </view>
+
+  <view class="form-card">
+    <text class="section-title">资料</text>
+    <input class="nickname-input" value="{{nickname}}" placeholder="昵称" bindinput="onNicknameInput" />
+    <view class="button-grid">
+      <button class="small-button seafoam" loading="{{loggingIn}}" bindtap="loginWithWechat">微信资料</button>
+      <button class="small-button lemon" loading="{{saving}}" bindtap="saveNickname">保存昵称</button>
+      <button class="small-button white" bindtap="logout">退出</button>
+    </view>
+  </view>
+
+  <view class="nav-grid">
+    <button class="nav-button seafoam" bindtap="goCredits">积分</button>
+    <button class="nav-button white" bindtap="goHistory">历史</button>
+    <button class="nav-button lemon" bindtap="goBilling">订单账单</button>
+    <button class="nav-button pumpkin" bindtap="goPricing">购买</button>
+    <button class="nav-button lavender" bindtap="goAdmin">管理入口</button>
+  </view>
+
+  <view wx:if="{{loading}}" class="load-row">正在读取账号...</view>
+</view>
