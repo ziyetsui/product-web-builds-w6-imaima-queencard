@@ -2,7 +2,7 @@
 
 ## Project Shape
 
-This directory is the project root for `w6/ima ima queencard`.
+This directory is the project root for `web/imaima-queencard`.
 
 The runnable app lives in:
 
@@ -15,7 +15,7 @@ Run Next.js commands from `frontend/`, not from the project root.
 The root directory exists to keep project-level context clean:
 
 ```text
-w6/ima ima queencard/
+web/imaima-queencard/
   README.md
   AGENTS.md
   CodeGuideline.md

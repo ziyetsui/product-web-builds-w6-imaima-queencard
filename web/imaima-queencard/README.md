@@ -1,6 +1,6 @@
 # imaima queencard
 
-`w6/ima ima queencard/` is the project root for imaima queencard.
+`web/imaima-queencard/` is the project root for imaima queencard Web.
 
 The runnable Next.js product lives in `frontend/`. The project root stays clean
 and only carries project-level docs, rules, future backend boundary, and vendor
@@ -19,7 +19,7 @@ acceptance specs there.
 ## Structure
 
 ```text
-w6/ima ima queencard/
+web/imaima-queencard/
   README.md
   AGENTS.md
   CodeGuideline.md

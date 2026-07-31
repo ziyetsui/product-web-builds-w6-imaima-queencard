@@ -12,7 +12,7 @@
 
 ## Project Structure Overview
 
-`w6/ima ima queencard/` is the project root. `frontend/` is the active Next.js app root.
+`web/imaima-queencard/` is the project root. `frontend/` is the active Next.js app root.
 
 ```text
 project-root/

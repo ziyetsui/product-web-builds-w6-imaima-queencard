@@ -9,11 +9,11 @@ const repoRoot = path.resolve(__dirname, "..");
 const defaultAncherDir = "/Users/a2/Desktop/ancherexplainfrontend";
 const ancherDir = process.env.ANCHER_FRONTEND_DIR || defaultAncherDir;
 const gitRef = process.env.ANCHER_GIT_REF || "origin/master";
-const outputFile = path.join(repoRoot, "ima ima queencard/frontend/src/data/boLandingPromptCases.ts");
+const outputFile = path.join(repoRoot, "web/imaima-queencard/frontend/src/data/boLandingPromptCases.ts");
 
 function requireTypeScript() {
   const candidates = [
-    path.join(repoRoot, "ima ima queencard/frontend/node_modules/typescript"),
+    path.join(repoRoot, "web/imaima-queencard/frontend/node_modules/typescript"),
     path.join(ancherDir, "node_modules/typescript"),
   ];
   for (const candidate of candidates) {

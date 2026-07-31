@@ -1,12 +1,12 @@
 # Zeabur Web Deployment
 
-This repo has two deployable services:
+This branch contains the Web application only.
 
-- Root `Dockerfile`: mini program backend.
-- Root `Dockerfile.web`: Next.js web frontend.
+- `Dockerfile.web`: Next.js web frontend image.
+- `web/imaima-queencard/frontend/`: runnable Next.js app.
 
-For the web page, create a separate Zeabur service from the same GitHub repo and
-deploy branch `lemonricebal`.
+Create a Zeabur service from this repository and deploy branch
+`chore/extract-web-20260731`.
 
 ## Zeabur Build Settings
 
@@ -30,8 +30,7 @@ or explicitly set:
 ZBPACK_DOCKERFILE_PATH=Dockerfile.web
 ```
 
-Do not deploy the web service with the root `Dockerfile`; that file starts
-`miniapp-backend`.
+Set the Dockerfile path to `Dockerfile.web` and port to `8080`.
 
 ## Required Runtime Environment
 
