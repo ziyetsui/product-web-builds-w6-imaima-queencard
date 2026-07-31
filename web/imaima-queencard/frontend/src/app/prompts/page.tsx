@@ -324,7 +324,7 @@ function promptForCase(item: XhsPromptCase) {
   const target = promptTargetFor(item);
   const sourceTraits = sourceTraitsFor(item);
 
-  return `参考图文《${item.sourceTitle}》的${sourceTraits}，生成一组新的${target.theme}主题：标题《${target.title}》，副标题“${target.subtitle}”。${target.output}`;
+  return `参考图文《${item.sourceTitle}》的${sourceTraits}，生成一组新的${target.theme}主题：标题《${target.title}》，副标题“${target.subtitle}”`;
 }
 
 function caseDateTimeFor(item: XhsPromptCase) {
