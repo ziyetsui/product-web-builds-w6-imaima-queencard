@@ -2,6 +2,11 @@
 .DS_Store
 node_modules
 **/node_modules
+**/.next
+**/.pnpm-store
+**/dist
+**/dist-ssr
+**/*.tsbuildinfo
 **/.env
 **/.env.*
 !miniapp-backend/.env.example
