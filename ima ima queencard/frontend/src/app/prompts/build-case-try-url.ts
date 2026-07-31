@@ -1,8 +1,9 @@
 import { buildPromptTryUrl } from "@/lib/tryUrl";
 import type { XhsPromptCase } from "@/data/xhsPromptCases";
+import { publicAssetUrl, publicAssetUrls } from "@/lib/public-assets";
 
 function imagesFor(item: XhsPromptCase) {
-  return item.images.length > 0 ? item.images : [item.image];
+  return publicAssetUrls(item.images.length > 0 ? item.images : [item.image]);
 }
 
 function referenceImagesForGenerate(item: XhsPromptCase) {
@@ -13,7 +14,7 @@ export function buildCaseTryUrl(item: XhsPromptCase, prompt: string) {
   return buildPromptTryUrl({
     templateId: item.id,
     prompt,
-    referenceImage: item.image,
+    referenceImage: publicAssetUrl(item.image),
     referenceImages: referenceImagesForGenerate(item),
     noteUrl: item.noteUrl,
     authorUrl: item.authorUrl,

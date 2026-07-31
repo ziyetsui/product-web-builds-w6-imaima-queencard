@@ -29,6 +29,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { potentialHitTopCount, xhsCaseMetrics } from "@/data/xhsCaseMetrics";
 import { boLandingPromptCases } from "@/data/boLandingPromptCases";
 import { xhsPromptCases, type XhsPromptCase } from "@/data/xhsPromptCases";
+import { publicAssetUrls } from "@/lib/public-assets";
 
 const boLandingCategories = ["爆款图文", "梗图", "公众号配图"];
 const promptCases = [...xhsPromptCases, ...boLandingPromptCases];
@@ -122,7 +123,7 @@ function accentFor(category: string) {
 }
 
 function imagesFor(item: XhsPromptCase) {
-  return item.images.length > 0 ? item.images : [item.image];
+  return publicAssetUrls(item.images.length > 0 ? item.images : [item.image]);
 }
 
 function buildCaseGenerationSeed(

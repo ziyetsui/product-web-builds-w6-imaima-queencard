@@ -34,6 +34,8 @@ export const env = createEnv({
     NEXT_PUBLIC_BILLING_PROVIDER: z.enum(["creem", "stripe"]).optional(),
     NEXT_PUBLIC_POSTHOG_KEY: z.string().optional(),
     NEXT_PUBLIC_POSTHOG_HOST: z.string().optional(),
+    NEXT_PUBLIC_ASSET_BASE_URL: z.string().optional(),
+    NEXT_PUBLIC_XHS_CASES_CDN_URL: z.string().optional(),
   },
   runtimeEnv: {
     BETTER_AUTH_SECRET: process.env.BETTER_AUTH_SECRET?.trim(),
@@ -78,5 +80,9 @@ export const env = createEnv({
       process.env.NEXT_PUBLIC_BILLING_PROVIDER?.trim(),
     NEXT_PUBLIC_POSTHOG_KEY: process.env.NEXT_PUBLIC_POSTHOG_KEY?.trim(),
     NEXT_PUBLIC_POSTHOG_HOST: process.env.NEXT_PUBLIC_POSTHOG_HOST?.trim(),
+    NEXT_PUBLIC_ASSET_BASE_URL:
+      process.env.NEXT_PUBLIC_ASSET_BASE_URL?.trim(),
+    NEXT_PUBLIC_XHS_CASES_CDN_URL:
+      process.env.NEXT_PUBLIC_XHS_CASES_CDN_URL?.trim(),
   },
 });
