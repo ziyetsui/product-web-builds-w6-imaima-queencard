@@ -1,0 +1,47 @@
+<view class="page">
+  <view class="topbar">
+    <button class="icon-button" bindtap="goCredits">‹</button>
+    <view class="brand">
+      <text class="brand-main">ima ima</text>
+      <text class="brand-accent">购买积分</text>
+    </view>
+    <button class="text-button" bindtap="goBilling">订单</button>
+  </view>
+
+  <view class="hero-panel">
+    <text class="kicker">CREDIT PACKS</text>
+    <text class="title">按生成量补充积分</text>
+    <text class="subtitle">当前余额 {{balance}} 积分。套餐来自 /api/miniapp/pricing，支付成功后自动刷新余额。</text>
+  </view>
+
+  <view wx:if="{{error}}" class="notice-card warning">
+    <text class="notice-title">提示</text>
+    <text class="notice-copy">{{error}}</text>
+    <button class="pay-button slim" bindtap="loadPage">重试</button>
+  </view>
+
+  <view wx:if="{{notice}}" class="notice-card">
+    <text class="notice-title">订单状态</text>
+    <text class="notice-copy">{{notice}}</text>
+  </view>
+
+  <view class="pack-list">
+    <view wx:for="{{packs}}" wx:key="id" class="pack-card {{item.accent}}">
+      <view class="pack-head">
+        <text class="pack-name">{{item.name}}</text>
+        <text class="pack-price">{{item.price}}</text>
+      </view>
+      <text class="pack-credits">{{item.credits}} 积分</text>
+      <text class="pack-desc">{{item.desc}}</text>
+      <button
+        class="pay-button"
+        loading="{{payingProductId === item.id}}"
+        disabled="{{loading || payingProductId}}"
+        data-id="{{item.id}}"
+        bindtap="choosePack"
+      >{{payingProductId === item.id ? '处理中' : '购买'}}</button>
+    </view>
+  </view>
+
+  <view wx:if="{{loading}}" class="load-row">正在读取套餐...</view>
+</view>
