@@ -30,6 +30,7 @@ import { potentialHitTopCount, xhsCaseMetrics } from "@/data/xhsCaseMetrics";
 import { boLandingPromptCases } from "@/data/boLandingPromptCases";
 import { xhsPromptCases, type XhsPromptCase } from "@/data/xhsPromptCases";
 import { publicAssetUrls } from "@/lib/public-assets";
+import { buildReplicationPrompt } from "./prompt-replication";
 
 const boLandingCategories = ["爆款图文", "梗图", "公众号配图"];
 const promptCases = [...xhsPromptCases, ...boLandingPromptCases];
@@ -346,12 +347,7 @@ function promptTargetFor(item: XhsPromptCase): PromptTarget {
 }
 
 function promptForCase(item: XhsPromptCase) {
-  const target = {
-    ...promptTargetFor(item),
-    subtitle: sourceAwareSubtitleFor(item),
-  };
-
-  return `生成一组新的${target.theme}主题：标题《${target.title}》，复刻参数“${target.subtitle}”`;
+  return buildReplicationPrompt(item);
 }
 
 function caseDateTimeFor(item: XhsPromptCase) {
