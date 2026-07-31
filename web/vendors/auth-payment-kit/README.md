@@ -5,7 +5,7 @@
 ## 已复制到哪里
 
 - Goya 归档包：`/Users/ziye/Library/Mobile Documents/com~apple~CloudDocs/wiki/20-29 Product and Web Builds/w5/goya/my-next-app-extras/60_integration-kits/goya-auth-payment-kit`
-- imaima queencard 参考包：`/Users/ziye/Library/Mobile Documents/com~apple~CloudDocs/wiki/20-29 Product and Web Builds/w6/ima ima queencard/frontend/_integration/goya-auth-payment-kit`
+- imaima queencard 参考包：`/Users/ziye/Library/Mobile Documents/com~apple~CloudDocs/wiki/20-29 Product and Web Builds/w6/product-web-builds-w6/web/frontend/_integration/goya-auth-payment-kit`
 
 ## 目录说明
 

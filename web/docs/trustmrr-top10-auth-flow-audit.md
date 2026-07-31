@@ -4,7 +4,7 @@ Checked on 2026-06-13 from https://trustmrr.com/.
 
 Screenshot folder:
 
-`w6/ima ima queencard/docs/trustmrr-screenshots/`
+`w6/product-web-builds-w6/web/docs/trustmrr-screenshots/`
 
 Folder structure:
 

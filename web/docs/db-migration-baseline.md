@@ -3,7 +3,7 @@
 ## Metadata
 
 - Date: 2026-06-14
-- App root: `w6/ima ima queencard/frontend/`
+- App root: `w6/product-web-builds-w6/web/frontend/`
 - Config: `frontend/drizzle.config.ts`
 - Schema: `frontend/src/db/schema.ts`
 - Migration output: `frontend/src/db/migrations/`

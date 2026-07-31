@@ -17,7 +17,7 @@ clean, the runnable app lives under `frontend/`.
 ## Current Root Shape
 
 ```text
-w6/ima ima queencard/
+w6/product-web-builds-w6/web/
   README.md
   AGENTS.md
   CodeGuideline.md
@@ -30,7 +30,7 @@ w6/ima ima queencard/
 Commands run from:
 
 ```text
-w6/ima ima queencard/frontend/
+w6/product-web-builds-w6/web/frontend/
 ```
 
 ```bash
@@ -142,8 +142,8 @@ into `frontend/` or a future `backend/` service.
 
 ## Migration Notes
 
-The project has been reorganized so `w6/ima ima queencard/` is a clean project root and
-`w6/ima ima queencard/frontend/` is the Next.js app root.
+The project has been reorganized so `w6/product-web-builds-w6/web/` is a clean project root and
+`w6/product-web-builds-w6/web/frontend/` is the Next.js app root.
 
 Top-level landing and shared components have been grouped:
 

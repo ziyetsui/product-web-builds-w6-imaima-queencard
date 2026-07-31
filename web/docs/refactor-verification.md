@@ -3,7 +3,7 @@
 ## Metadata
 
 - Date: 2026-06-12
-- App root: `w6/ima ima queencard/frontend/`
+- App root: `w6/product-web-builds-w6/web/frontend/`
 - Task source: `specs/w6/0007-imaima-queencard-implementation-tasks.md`
 - Current checkpoint: T001-T064
 
@@ -12,8 +12,8 @@
 Command:
 
 ```bash
-git -C w6/ima ima queencard status --short
-git -C w6/ima ima queencard branch --show-current
+git -C w6/product-web-builds-w6/web status --short
+git -C w6/product-web-builds-w6/web branch --show-current
 ```
 
 Result:
@@ -43,7 +43,7 @@ No existing user changes were reverted.
 See:
 
 ```text
-w6/ima ima queencard/docs/db-migration-baseline.md
+w6/product-web-builds-w6/web/docs/db-migration-baseline.md
 ```
 
 Summary:
@@ -326,7 +326,7 @@ pnpm run build:prod passed
 Issue:
 
 ```text
-w6/ima ima queencard/frontend/.env.local did not exist.
+w6/product-web-builds-w6/web/frontend/.env.local did not exist.
 w5/goya/Goya/.env.local already contained working local provider settings.
 ```
 
@@ -405,7 +405,7 @@ Port check:
 
 ```text
 localhost:8080 is served by next-server v16.2.7
-cwd: w6/ima ima queencard/frontend
+cwd: w6/product-web-builds-w6/web/frontend
 ```
 
 HTTP smoke:
@@ -438,8 +438,8 @@ Note:
 Project path note:
 
 ```text
-Previous spec path: w6/ima ima queencard/
-Current local path: w6/ima ima queencard/
+Previous spec path: w6/product-web-builds-w6/web/
+Current local path: w6/product-web-builds-w6/web/
 ```
 
 DB baseline:

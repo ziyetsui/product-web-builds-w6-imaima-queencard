@@ -2,7 +2,7 @@
 
 以下步骤以 imaima queencard 项目根目录为准：
 
-`/Users/ziye/Library/Mobile Documents/com~apple~CloudDocs/wiki/20-29 Product and Web Builds/w6/ima ima queencard/frontend`
+`/Users/ziye/Library/Mobile Documents/com~apple~CloudDocs/wiki/20-29 Product and Web Builds/w6/product-web-builds-w6/web/frontend`
 
 ## 1. 安装缺少依赖
 
