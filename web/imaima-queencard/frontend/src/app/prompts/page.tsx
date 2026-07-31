@@ -164,13 +164,43 @@ function compactPromptSeed(value: string, maxLength = 6) {
 }
 
 function seedForCase(item: XhsPromptCase) {
-  const genericTopics = new Set(["漫画", "原创漫画", "小红书", "清单种草", "生活灵感", "健康养生", "有趣"]);
+  const genericTopics = new Set([
+    "漫画",
+    "原创漫画",
+    "小红书",
+    "清单种草",
+    "生活灵感",
+    "健康养生",
+    "有趣",
+    "爆款图文",
+    "AI创作",
+    "抖音",
+  ]);
   const topic = item.topics.find((entry) => {
     const compact = compactPromptSeed(entry, 8);
     return compact.length >= 2 && !genericTopics.has(compact);
   });
 
   return compactPromptSeed(topic ?? item.sourceTitle ?? item.title, item.category === "知识科普" ? 8 : 6);
+}
+
+function sourceMethodFor(item: XhsPromptCase) {
+  const traitsMatch = item.prompt.match(/参考(?:图文|案例)《[^》]+》的(.+?)，生成一组新的/);
+  if (traitsMatch?.[1]) return traitsMatch[1];
+
+  const methodMatch = item.prompt.match(/创作方法：(.+?)\s*请输出/);
+  if (methodMatch?.[1]) {
+    return methodMatch[1]
+      .replace(/^保留原(?:案例|图文)的/, "")
+      .replace(/。$/, "")
+      .split("，")[0];
+  }
+
+  return "标题钩子、画面节奏和收藏理由";
+}
+
+function sourceAwareSubtitleFor(item: XhsPromptCase) {
+  return `保留原图文的${sourceMethodFor(item)}，换成新的主题`;
 }
 
 function emotionTargetFor(item: XhsPromptCase, seed: string): PromptTarget {
@@ -236,8 +266,8 @@ function promptTargetFor(item: XhsPromptCase): PromptTarget {
 
     return {
       theme: "爆款图文",
-      title: `${seed}，看完这组图就懂了`,
-      subtitle: "保留原图文的情绪钩子、画面节奏和收藏理由，换成新的主题",
+      title: `${item.category}，看完这组图就懂了`,
+      subtitle: sourceAwareSubtitleFor(item),
       output: "封面标题与副标题、6-8 页图文脚本，每页包含画面描述、主文案、信息点和互动/收藏动作。",
     };
   }
@@ -316,7 +346,10 @@ function promptTargetFor(item: XhsPromptCase): PromptTarget {
 }
 
 function promptForCase(item: XhsPromptCase) {
-  const target = promptTargetFor(item);
+  const target = {
+    ...promptTargetFor(item),
+    subtitle: sourceAwareSubtitleFor(item),
+  };
 
   return `生成一组新的${target.theme}主题：标题《${target.title}》，副标题“${target.subtitle}”`;
 }
