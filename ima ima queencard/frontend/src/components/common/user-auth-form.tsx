@@ -65,7 +65,9 @@ function getAuthFailureNotice(
 
   return {
     title: "登录失败",
-    description: "请检查邮箱和密码；如果之前用邮件链接注册过，可以先重置密码。",
+    description:
+      message ||
+      "请检查邮箱和密码；如果这个邮箱还没创建账号，请先注册。",
     showAccountRecoveryLinks: true,
   };
 }
@@ -209,7 +211,14 @@ export function UserAuthForm({
                     <Link href={loginHref} className="underline underline-offset-4">
                       去登录
                     </Link>
-                  ) : null}
+                  ) : (
+                    <Link
+                      href={`/register?from=${encodeURIComponent(callbackURL)}`}
+                      className="underline underline-offset-4"
+                    >
+                      去注册
+                    </Link>
+                  )}
                   <Link href="/forgot-password" className="underline underline-offset-4">
                     重置密码
                   </Link>
