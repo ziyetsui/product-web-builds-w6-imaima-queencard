@@ -174,7 +174,7 @@ function seedForCase(item: XhsPromptCase) {
 }
 
 function sourceTraitsFor(item: XhsPromptCase) {
-  const match = item.prompt.match(/参考图文《[^》]+》的(.+?)，生成一组新的/);
+  const match = item.prompt.match(/参考(?:图文|案例)《[^》]+》的(.+?)，生成一组新的/);
   return match?.[1] ?? "首图结构、标题节奏、内容组织和来源语气";
 }
 
@@ -218,6 +218,52 @@ function emotionTargetFor(item: XhsPromptCase, seed: string): PromptTarget {
 
 function promptTargetFor(item: XhsPromptCase): PromptTarget {
   const seed = seedForCase(item);
+
+  if (item.category === "爆款图文") {
+    const sourceText = `${item.sourceTitle} ${item.topics.join(" ")}`;
+    if (/旅行|攻略|景点|路线|城市/.test(sourceText)) {
+      return {
+        theme: "旅行攻略图文",
+        title: `${seed}旅行攻略，一张图讲清楚`,
+        subtitle: "把路线、体验和避坑信息整理成能直接收藏的出行清单",
+        output: "封面钩子、6-8 页图文脚本，每页包含地点/路线、画面重点、实用信息和互动/收藏动作。",
+      };
+    }
+
+    if (/知识|科普|考试|学习|方法/.test(sourceText)) {
+      return {
+        theme: "知识科普图文",
+        title: `一张图讲清${seed}的关键逻辑`,
+        subtitle: "把复杂知识拆成准确、清晰、能收藏转发的视觉卡片",
+        output: "封面钩子、6-8 页图文脚本，每页包含核心知识点、画面元素、口语化解释和互动/收藏动作。",
+      };
+    }
+
+    return {
+      theme: "爆款图文",
+      title: `${seed}，看完这组图就懂了`,
+      subtitle: "保留原图文的情绪钩子、画面节奏和收藏理由，换成新的主题",
+      output: "封面标题与副标题、6-8 页图文脚本，每页包含画面描述、主文案、信息点和互动/收藏动作。",
+    };
+  }
+
+  if (item.category === "梗图") {
+    return {
+      theme: "梗图",
+      title: `关于${seed}的几个离谱瞬间`,
+      subtitle: "用轻松、简短、有反差的画面把日常情绪讲出来",
+      output: "封面钩子、6-8 页梗图脚本，每页包含画面构图、短文案、反差点和最后一页互动提问。",
+    };
+  }
+
+  if (item.category === "公众号配图") {
+    return {
+      theme: "公众号配图",
+      title: `${seed}主题视觉图文`,
+      subtitle: "把文章观点拆成有层次、易阅读、适合转发的配图内容",
+      output: "封面标题与副标题、6-8 页配图脚本，每页包含画面描述、主文案、信息层级和版式建议。",
+    };
+  }
 
   if (item.category === "情绪疗愈") return emotionTargetFor(item, seed);
 
@@ -275,13 +321,10 @@ function promptTargetFor(item: XhsPromptCase): PromptTarget {
 }
 
 function promptForCase(item: XhsPromptCase) {
-  if (boLandingCategories.includes(item.category) && item.prompt) {
-    return item.prompt;
-  }
-
   const target = promptTargetFor(item);
+  const sourceTraits = sourceTraitsFor(item);
 
-  return `生成一组新的${target.theme}主题：标题《${target.title}》，副标题《${target.subtitle}》。`;
+  return `参考图文《${item.sourceTitle}》的${sourceTraits}，生成一组新的${target.theme}主题：标题《${target.title}》，副标题“${target.subtitle}”。${target.output}`;
 }
 
 function caseDateTimeFor(item: XhsPromptCase) {
