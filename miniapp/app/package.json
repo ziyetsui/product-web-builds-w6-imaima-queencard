@@ -1,8 +1,0 @@
-{
-  "name": "miniapp/app",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "validate": "node tools/validate.js"
-  }
-}

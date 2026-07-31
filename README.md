@@ -1,6 +1,6 @@
-# imaima queencard
+# imaima queencard web
 
-This repository is split into separate web and miniapp workspaces.
+This repository now contains the web product workspace.
 
 ```text
 web/
@@ -8,12 +8,15 @@ web/
   backend/        Reserved web backend boundary
   docs/           Web product docs and test evidence
   vendors/        Vendor/reference integration code
+```
 
-miniapp/
+The miniapp workspace has been extracted locally to:
+
+```text
+../product-web-builds-w6-miniapp/
   app/            WeChat Mini Program frontend
   backend/        Miniapp backend service
 ```
 
 Local temporary worktrees, generated experiments, build output, and OS files
 should stay out of the repository.
-
