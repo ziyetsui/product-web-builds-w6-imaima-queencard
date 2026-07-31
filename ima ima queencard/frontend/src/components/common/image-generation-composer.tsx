@@ -202,18 +202,11 @@ function formatSeedPrompt(value: string | undefined) {
 
   if (!parsed) return prompt;
 
-  return [
-    `参考案例：《${parsed.sourceTitle}》`,
-    `参考维度：${parsed.structure}`,
-    "",
-    `新主题：${parsed.theme}`,
-    `封面标题：《${parsed.title}》`,
-    `副标题：《${parsed.subtitle}》`,
-    "",
-    `输出要求：${parsed.output}`,
-    "",
-    "视觉提示词要求：保留原案例的情绪节奏、画面层次、首图钩子和收藏动机；不要复刻原作者内容，生成可直接用于图像生成的新画面描述。",
-  ].join("\n");
+  return buildFillPrompt({
+    theme: parsed.theme,
+    title: parsed.title,
+    subtitle: parsed.subtitle,
+  });
 }
 
 function setOptionalParam(params: URLSearchParams, key: string, value: string | undefined) {
