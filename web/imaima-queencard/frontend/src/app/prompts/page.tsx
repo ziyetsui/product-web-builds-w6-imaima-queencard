@@ -173,11 +173,6 @@ function seedForCase(item: XhsPromptCase) {
   return compactPromptSeed(topic ?? item.sourceTitle ?? item.title, item.category === "知识科普" ? 8 : 6);
 }
 
-function sourceTraitsFor(item: XhsPromptCase) {
-  const match = item.prompt.match(/参考(?:图文|案例)《[^》]+》的(.+?)，生成一组新的/);
-  return match?.[1] ?? "首图结构、标题节奏、内容组织和来源语气";
-}
-
 function emotionTargetFor(item: XhsPromptCase, seed: string): PromptTarget {
   const titleText = `${item.sourceTitle} ${item.topics.join(" ")}`;
 
@@ -322,9 +317,8 @@ function promptTargetFor(item: XhsPromptCase): PromptTarget {
 
 function promptForCase(item: XhsPromptCase) {
   const target = promptTargetFor(item);
-  const sourceTraits = sourceTraitsFor(item);
 
-  return `参考图文《${item.sourceTitle}》的${sourceTraits}，生成一组新的${target.theme}主题：标题《${target.title}》，副标题“${target.subtitle}”`;
+  return `生成一组新的${target.theme}主题：标题《${target.title}》，副标题“${target.subtitle}”`;
 }
 
 function caseDateTimeFor(item: XhsPromptCase) {
