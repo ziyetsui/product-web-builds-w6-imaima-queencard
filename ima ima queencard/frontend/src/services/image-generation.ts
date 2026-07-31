@@ -269,7 +269,7 @@ function assetUrlFor(image: { url?: string; b64Json?: string; mimeType?: string 
 function publicAsset(asset: GeneratedAsset) {
   return {
     id: asset.id,
-    url: asset.storageUrl,
+    url: `/api/v1/image-assets/${encodeURIComponent(asset.id)}/download`,
     width: asset.width,
     height: asset.height,
     mimeType: asset.mimeType,
