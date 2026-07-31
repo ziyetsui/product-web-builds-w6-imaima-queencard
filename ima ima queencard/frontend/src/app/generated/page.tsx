@@ -66,6 +66,8 @@ import {
 } from "@/lib/image-generation-workspace";
 import { cn } from "@/lib/utils";
 
+const COMPOSER_DRAFT_VERSION = "prompt-format-v2";
+
 type GeneratedAsset = {
   id: string;
   url: string;
@@ -596,7 +598,9 @@ function GeneratedWorkbenchContent() {
       buildGeneratedDraftStorageKey({
         taskId,
         source: seed.source,
-        sourceCaseId: seed.sourceCaseId,
+        sourceCaseId: seed.sourceCaseId
+          ? `${seed.sourceCaseId}:${COMPOSER_DRAFT_VERSION}`
+          : COMPOSER_DRAFT_VERSION,
         templateId: seed.templateId,
       }),
     [seed.source, seed.sourceCaseId, seed.templateId, taskId]
