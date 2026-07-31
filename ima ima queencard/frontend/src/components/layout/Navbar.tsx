@@ -2,21 +2,47 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { X, Menu } from "lucide-react";
 import { Wordmark } from "@/components/layout/Wordmark";
+import { authClient } from "@/lib/auth/client";
 
 const navLinks = [
   { label: "复刻爆款", href: "/prompts" },
   { label: "订阅", href: "/pricing" },
-  { label: "登录", href: "/login" },
+];
+
+const signedInLinks = [
+  { label: "历史", href: "/generated" },
+  { label: "额度", href: "/credits" },
 ];
 
 export default function Navbar() {
   const [open, setOpen] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
+  const { data: session, isPending } = authClient.useSession();
+  const user = session?.user;
 
   const isActive = (href: string) => pathname === href;
+  const buttonClass =
+    "px-[18px] py-2.5 rounded-pill border-2 border-charcoal font-manrope text-[14px] font-bold shadow-brand-sm transition-all duration-200 hover:-translate-y-[2px] active:translate-y-0 bg-surface-white text-charcoal hover:bg-lemon";
+  const activeClass =
+    "px-[18px] py-2.5 rounded-pill border-2 border-charcoal font-manrope text-[14px] font-bold shadow-brand-sm transition-all duration-200 hover:-translate-y-[2px] active:translate-y-0 bg-pumpkin text-charcoal";
+
+  async function handleSignOut() {
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    try {
+      await authClient.signOut();
+      setOpen(false);
+      router.push("/");
+      router.refresh();
+    } finally {
+      setIsSigningOut(false);
+    }
+  }
 
   return (
     <>
@@ -32,13 +58,27 @@ export default function Navbar() {
             <Link
               key={l.label}
               href={l.href}
-              className={`px-[18px] py-2.5 rounded-pill border-2 border-charcoal font-manrope text-[14px] font-bold shadow-brand-sm transition-all duration-200 hover:-translate-y-[2px] active:translate-y-0 ${
-                isActive(l.href) ? "bg-pumpkin text-charcoal" : "bg-surface-white text-charcoal hover:bg-lemon"
-              }`}
+              className={isActive(l.href) ? activeClass : buttonClass}
             >
               {l.label}
             </Link>
           ))}
+          {user ? (
+            <>
+              {signedInLinks.map((l) => (
+                <Link key={l.label} href={l.href} className={isActive(l.href) ? activeClass : buttonClass}>
+                  {l.label}
+                </Link>
+              ))}
+              <button type="button" onClick={handleSignOut} disabled={isSigningOut} className={buttonClass}>
+                {isSigningOut ? "退出中" : "退出"}
+              </button>
+            </>
+          ) : (
+            <Link href="/login" className={isActive("/login") ? activeClass : buttonClass}>
+              {isPending ? "..." : "登录"}
+            </Link>
+          )}
         </div>
 
         {/* Mobile menu button */}
@@ -76,6 +116,40 @@ export default function Navbar() {
                 {item.label}
               </Link>
             ))}
+            {user ? (
+              <>
+                {signedInLinks.map((item) => (
+                  <Link
+                    key={item.label}
+                    href={item.href}
+                    onClick={() => setOpen(false)}
+                    className={`text-left font-alfa text-4xl transition-colors ${
+                      isActive(item.href) ? "text-lemon" : "text-surface-white hover:text-lemon"
+                    }`}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  disabled={isSigningOut}
+                  className="text-left font-alfa text-4xl text-surface-white transition-colors hover:text-lemon"
+                >
+                  {isSigningOut ? "退出中" : "退出"}
+                </button>
+              </>
+            ) : (
+              <Link
+                href="/login"
+                onClick={() => setOpen(false)}
+                className={`text-left font-alfa text-4xl transition-colors ${
+                  isActive("/login") ? "text-lemon" : "text-surface-white hover:text-lemon"
+                }`}
+              >
+                {isPending ? "..." : "登录"}
+              </Link>
+            )}
           </div>
         </div>
       )}
