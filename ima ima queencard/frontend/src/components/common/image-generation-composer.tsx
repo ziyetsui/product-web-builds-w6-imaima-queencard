@@ -85,6 +85,15 @@ type FillPrompt = {
   subtitle: string;
 };
 
+type CasePromptParts = {
+  sourceTitle: string;
+  structure: string;
+  theme: string;
+  title: string;
+  subtitle: string;
+  output: string;
+};
+
 function defaultModelFor(referenceImages: string[]) {
   return defaultImageGenerationModel(referenceImages);
 }
@@ -168,6 +177,43 @@ function parseFillPrompt(value: string): FillPrompt | null {
 
 function buildFillPrompt(prompt: FillPrompt) {
   return `生成一组新的${prompt.theme}主题：标题《${prompt.title}》，副标题《${prompt.subtitle}》。`;
+}
+
+function parseCasePrompt(value: string): CasePromptParts | null {
+  const match = value.match(
+    /^参考图文《([^》]+)》的(.+?)，生成一组新的(?:小红书)?(.+?)主题：标题《([^》]*)》，副标题(?:《([^》]*)》|[“"]([^”"]*)[”"])。(.+)$/
+  );
+  if (!match) return null;
+
+  return {
+    sourceTitle: match[1] ?? "",
+    structure: match[2] ?? "",
+    theme: match[3] ?? "",
+    title: match[4] ?? "",
+    subtitle: match[5] ?? match[6] ?? "",
+    output: match[7] ?? "",
+  };
+}
+
+function formatSeedPrompt(value: string | undefined) {
+  if (!value) return "";
+  const prompt = value.trim();
+  const parsed = parseCasePrompt(prompt);
+
+  if (!parsed) return prompt;
+
+  return [
+    `参考案例：《${parsed.sourceTitle}》`,
+    `参考维度：${parsed.structure}`,
+    "",
+    `新主题：${parsed.theme}`,
+    `封面标题：《${parsed.title}》`,
+    `副标题：《${parsed.subtitle}》`,
+    "",
+    `输出要求：${parsed.output}`,
+    "",
+    "视觉提示词要求：保留原案例的情绪节奏、画面层次、首图钩子和收藏动机；不要复刻原作者内容，生成可直接用于图像生成的新画面描述。",
+  ].join("\n");
 }
 
 function setOptionalParam(params: URLSearchParams, key: string, value: string | undefined) {
@@ -464,7 +510,7 @@ export function ImageGenerationComposer({
   const onDraftChangeRef = useRef(onDraftChange);
   const seedKey = JSON.stringify(seed ?? {});
   const seedSnapshot = useMemo(() => JSON.parse(seedKey) as ImageGenerationSeed, [seedKey]);
-  const [prompt, setPrompt] = useState(seed?.prompt ?? "");
+  const [prompt, setPrompt] = useState(() => formatSeedPrompt(seed?.prompt));
   const [referenceImages, setReferenceImages] = useState(() =>
     uniqueFirstThree(seed?.referenceImages)
   );
@@ -488,7 +534,7 @@ export function ImageGenerationComposer({
   useEffect(() => {
     const nextReferences = uniqueFirstThree(seedSnapshot.referenceImages);
     const seedDraft: ComposerDraft = {
-      prompt: seedSnapshot.prompt ?? "",
+      prompt: formatSeedPrompt(seedSnapshot.prompt),
       referenceImages: nextReferences,
       model: modelForSeed(seedSnapshot, nextReferences),
       aspectRatio: aspectRatioForSeed(seedSnapshot, nextReferences),
