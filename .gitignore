@@ -75,3 +75,4 @@ old-generated-apps/
 *.sqlite
 *.db
 *.tsbuildinfo
+.trees

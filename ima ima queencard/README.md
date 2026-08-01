@@ -3,18 +3,19 @@
 `w6/ima ima queencard/` is the project root for imaima queencard.
 
 The runnable Next.js product lives in `frontend/`. The project root stays clean
-and only carries project-level docs, rules, future backend boundary, and vendor
-references.
+and only carries project-level rules, future backend boundary, and vendor
+references. Feature specs, verification notes, and evidence live one level up
+in the repo-level `.gba/` feature folders.
 
-Canonical W6 specs now live in the global 20-29 specs ledger:
+Canonical W6 specs also live in the global 20-29 specs ledger:
 
 ```text
 ../../../specs/w6/
 ```
 
-The local `docs/spec/` folder is a legacy source copy during migration. Do not
-add new long-lived PRDs, design specs, implementation plans, reviews, or
-acceptance specs there.
+Do not add new long-lived PRDs, design specs, implementation plans, reviews, or
+acceptance specs under the app folder. Put them in `.gba/{sequence}_{feature}/`
+at the repository root.
 
 ## Structure
 
@@ -23,7 +24,6 @@ w6/ima ima queencard/
   README.md
   AGENTS.md
   CodeGuideline.md
-  docs/
   backend/
   frontend/
   vendors/
@@ -176,8 +176,9 @@ Zeabur domain.
 
 ## Project Structure Map
 
-See `docs/project-structure-map.md` for how this project maps the shared
-backend/frontend/data structure rules into the current repository.
+See `../.gba/0004_project-structure/specs/project-structure-map.md` for how
+this project maps the shared backend/frontend/data structure rules into the
+current repository.
 
 ## Stack
 

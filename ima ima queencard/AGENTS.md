@@ -19,10 +19,18 @@ w6/ima ima queencard/
   README.md
   AGENTS.md
   CodeGuideline.md
-  docs/
   backend/
   frontend/
   vendors/
+```
+
+Feature specs, verification notes, and evidence are organized by GBA
+feature-first folders at the repository root:
+
+```text
+../.gba/{sequence}_{feature-slug}/
+  specs/
+  docs/
 ```
 
 Current backend status:
@@ -33,7 +41,7 @@ Current backend status:
 
 Before large structure changes, read:
 
-- `docs/project-structure-map.md`
+- `../.gba/0004_project-structure/specs/project-structure-map.md`
 - `CodeGuideline.md`
 
 ## Tech Stack
@@ -74,6 +82,8 @@ Backend-like responsibilities live inside the Next.js app:
 - `frontend/src/services/`: Business workflows and use-case orchestration.
 - `frontend/src/db/`: Drizzle client and schema.
 - `frontend/src/payment/`: Billing provider, plans, subscriptions, and webhooks.
+- `frontend/src/features/`: Feature-first source modules for product surfaces
+  that combine route UI, curated data, helpers, and focused tests.
 - `frontend/src/lib/api/`: API auth, response, error, and dashboard helpers.
 - `frontend/src/lib/auth/`: Better Auth setup and auth clients.
 - `frontend/src/mail/` and `frontend/src/lib/emails/`: Email components and email utilities.
@@ -92,7 +102,9 @@ Frontend responsibilities live in:
 
 Data and assets live in:
 
-- `frontend/src/data/`: Landing page data, prompt cases, and case metrics.
+- `frontend/src/features/<feature>/data/`: Feature-owned curated data. For
+  example, prompt cases and case metrics live in
+  `frontend/src/features/prompt-replication/data/`.
 - `frontend/public/`: Static assets served directly.
 - `frontend/public/xhs-cases/`: Static RedNote/XHS reference images.
 
@@ -144,6 +156,8 @@ compatibility layers unless the task clearly requires them.
 - Put shared shell components in `frontend/src/components/layout/`.
 - Put landing sections in `frontend/src/components/landing/`.
 - Put reusable non-React helpers in `frontend/src/lib/`.
+- Put feature-specific helpers, data, and focused tests under
+  `frontend/src/features/<feature>/`.
 - Put reusable hooks in `frontend/src/hooks/`.
 - Put business workflows in `frontend/src/services/`.
 - Put database schema and Drizzle setup in `frontend/src/db/`.
@@ -166,4 +180,4 @@ For visual changes, start the dev server and inspect the affected page in a brow
 - `frontend/` is the active runtime app.
 - `backend/` is intentionally present as a future standalone backend boundary.
 - `vendors/goya-auth-payment-kit/` is an integration reference/source kit, not active runtime code.
-- `docs/project-structure-map.md`, `CodeGuideline.md`, `frontend/package.json`, and `frontend/next.config.ts` are the source of truth for the current project structure.
+- `../.gba/0004_project-structure/specs/project-structure-map.md`, `CodeGuideline.md`, `frontend/package.json`, and `frontend/next.config.ts` are the source of truth for the current project structure.
