@@ -24,6 +24,11 @@ import {
 import { toast } from "sonner";
 
 import { ModelBrandLogo } from "@/components/common/model-brand-logo";
+import {
+  buildFillPrompt as buildReplicationFillPrompt,
+  parseReplicationPrompt,
+  type FillPrompt as ReplicationFillPrompt,
+} from "@/app/prompts/prompt-replication";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -79,11 +84,7 @@ const ASPECT_MARK_CLASS: Record<string, string> = {
   "21:9": "h-2.5 w-7",
 };
 
-type FillPrompt = {
-  theme: string;
-  title: string;
-  replicationParameters: string;
-};
+type FillPrompt = ReplicationFillPrompt;
 
 function defaultModelFor(referenceImages: string[]) {
   return defaultImageGenerationModel(referenceImages);
@@ -154,29 +155,41 @@ function optionDisplayLabel(option: string) {
   return option === "auto" ? "自动" : option;
 }
 
-function parseFillPrompt(value: string): FillPrompt | null {
-  const match = value.match(
-    /^生成一组新的(.+?)主题：标题《([^》]*)》，(?:复刻参数|副标题)(?:《([^》]*)》|[“"]([^”"]*)[”"])。?$/
-  );
-  if (!match) return null;
-  return {
-    theme: match[1] ?? "",
-    title: match[2] ?? "",
-    replicationParameters: match[3] ?? match[4] ?? "",
-  };
-}
+const parseFillPrompt = parseReplicationPrompt;
+const buildFillPrompt = buildReplicationFillPrompt;
 
-function buildFillPrompt(prompt: FillPrompt) {
-  return `生成一组新的${prompt.theme}主题：标题《${prompt.title}》，复刻参数“${prompt.replicationParameters}”`;
-}
+const DEFAULT_VISUAL_MECHANISMS = "视觉风格、构图和内容节奏";
 
 function normalizePromptForEditor(value: string, seed: ImageGenerationSeed) {
   if (parseFillPrompt(value)) return value;
+  const trimmed = value.trim();
+  const v3 = trimmed.match(
+    /^保留原图的(.+?)；沿用[“"]([^”"]*)[”"]的标题骨架，将主题替换为[“"]([^”"]*)[”"]。?$/,
+  );
+  if (v3) {
+    const topic = v3[3] || "新主题";
+    return buildFillPrompt({
+      visual: v3[1] || DEFAULT_VISUAL_MECHANISMS,
+      title: v3[2].includes("X") ? v3[2].split("X").join(topic) : v3[2],
+      topic,
+    });
+  }
+  const v2 = trimmed.match(
+    /^生成一组新的(.+?)主题：标题《([^》]*)》，(?:复刻参数|副标题)(?:《([^》]*)》|[“"]([^”"]*)[”"])。?$/,
+  );
+  if (v2) {
+    const parameters = (v2[3] ?? v2[4] ?? "").replace(/^保留原图(?:文)?的/, "");
+    return buildFillPrompt({
+      visual: parameters.split(/[；;]/)[0]?.trim() || DEFAULT_VISUAL_MECHANISMS,
+      title: v2[2] || seed.title || "",
+      topic: v2[1] || "新主题",
+    });
+  }
   if (!seed.sourceCaseCategory || !seed.title) return value;
   return buildFillPrompt({
-    theme: seed.sourceCaseCategory,
+    visual: DEFAULT_VISUAL_MECHANISMS,
     title: seed.title,
-    replicationParameters: "保留原图的视觉风格、构图和内容节奏；沿用原标题句式，将主题变量替换为新主题",
+    topic: seed.sourceCaseCategory,
   });
 }
 
@@ -384,32 +397,43 @@ function FillPromptEditor({
     );
   }
 
-  const updateSlot = (slot: keyof FillPrompt, nextValue: string) => {
-    onChange(buildFillPrompt({ ...parsed, [slot]: nextValue }));
+  const updateTopic = (nextTopic: string) => {
+    const nextTitle =
+      parsed.topic && parsed.title.includes(parsed.topic)
+        ? parsed.title.split(parsed.topic).join(nextTopic)
+        : parsed.title;
+    onChange(buildFillPrompt({ ...parsed, topic: nextTopic, title: nextTitle }));
+  };
+
+  const updateTitle = (nextTitle: string) => {
+    onChange(buildFillPrompt({ ...parsed, title: nextTitle }));
   };
 
   return (
     <div className={cn("min-h-full rounded-[18px] border border-charcoal/14 bg-canvas-pink/34 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]", className)}>
       <div className="flex min-h-[96px] flex-col justify-center gap-2.5 font-manrope text-[15px] font-extrabold text-charcoal md:min-h-[130px] md:text-[16px]">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="shrink-0">生成一组新的</span>
-          <FillSlotInput
-            label="主题"
-            value={parsed.theme}
-            onChange={(nextValue) => updateSlot("theme", nextValue)}
-            minWidth={8}
-            maxWidth={18}
-          />
-          <span className="shrink-0">主题</span>
-        </div>
-
         <label className="grid items-center gap-2 md:grid-cols-[72px_minmax(0,1fr)]">
-          <span className="font-black">标题</span>
+          <span className="font-black">新主题</span>
           <div className="flex min-w-0 items-center gap-2">
             <FillSlotInput
-              label="标题"
+              label="新主题"
+              value={parsed.topic}
+              onChange={updateTopic}
+              minWidth={8}
+              maxWidth={24}
+              tone="sky"
+              align="left"
+            />
+          </div>
+        </label>
+
+        <label className="grid items-center gap-2 md:grid-cols-[72px_minmax(0,1fr)]">
+          <span className="font-black">新标题</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <FillSlotInput
+              label="新标题"
               value={parsed.title}
-              onChange={(nextValue) => updateSlot("title", nextValue)}
+              onChange={updateTitle}
               minWidth={18}
               maxWidth={56}
               fullWidth
@@ -418,21 +442,15 @@ function FillPromptEditor({
           </div>
         </label>
 
-        <label className="grid items-center gap-2 md:grid-cols-[72px_minmax(0,1fr)]">
-          <span className="font-black">复刻参数</span>
-          <div className="flex min-w-0 items-center gap-2">
-            <FillSlotInput
-              label="复刻参数"
-              value={parsed.replicationParameters}
-              onChange={(nextValue) => updateSlot("replicationParameters", nextValue)}
-              minWidth={18}
-              maxWidth={60}
-              tone="sky"
-              fullWidth
-              align="left"
-            />
-          </div>
-        </label>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-bold text-charcoal/55">
+          <span className="shrink-0 rounded-full border border-charcoal/18 px-2 py-0.5">复刻 DNA</span>
+          <span className="min-w-0">{parsed.visual}</span>
+        </div>
+
+        <details className="text-[12px] font-bold text-charcoal/45">
+          <summary className="cursor-pointer select-none">查看发送给模型的完整提示词</summary>
+          <p className="mt-1 leading-[1.7] text-charcoal/60">{value}</p>
+        </details>
       </div>
       <div className="mt-1 text-right font-mono text-[12px] font-bold text-charcoal/42">
         {value.length}/2000

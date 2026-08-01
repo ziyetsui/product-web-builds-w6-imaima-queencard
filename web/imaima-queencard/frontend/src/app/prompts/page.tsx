@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type SyntheticEvent } from "react";
 import {
   ArrowDownUp,
   ArrowUpRight,
@@ -30,7 +30,7 @@ import { potentialHitTopCount, xhsCaseMetrics } from "@/data/xhsCaseMetrics";
 import { boLandingPromptCases } from "@/data/boLandingPromptCases";
 import { xhsPromptCases, type XhsPromptCase } from "@/data/xhsPromptCases";
 import { publicAssetUrls } from "@/lib/public-assets";
-import { buildReplicationPrompt } from "./prompt-replication";
+import { buildReplicationPrompt, parseReplicationPrompt } from "./prompt-replication";
 
 const boLandingCategories = ["爆款图文", "梗图", "公众号配图"];
 const promptCases = [...xhsPromptCases, ...boLandingPromptCases];
@@ -476,51 +476,21 @@ function useFilteredCases(activeCategory: string, query: string, sortMode: strin
 }
 
 function PromptTemplatePreview({ prompt, className = "" }: { prompt: string; className?: string }) {
-  const titleMatch = /标题《([^》]+)》/.exec(prompt);
-  const subtitleMatch = /(?:复刻参数|副标题)(?:《([^》]+)》|[“"]([^”"]+)[”"])/.exec(prompt);
-  const ranges = [
-    titleMatch
-      ? {
-          start: titleMatch.index + "标题".length,
-          end: titleMatch.index + titleMatch[0].length,
-          text: titleMatch[0].replace(/^标题/, ""),
-        }
-      : null,
-    subtitleMatch
-      ? {
-          start: subtitleMatch.index + (subtitleMatch[0].startsWith("复刻参数") ? "复刻参数" : "副标题").length,
-          end: subtitleMatch.index + subtitleMatch[0].length,
-          text: subtitleMatch[0].replace(/^(?:复刻参数|副标题)/, ""),
-        }
-      : null,
-  ]
-    .filter((range): range is { start: number; end: number; text: string } => Boolean(range))
-    .sort((a, b) => a.start - b.start);
+  const parsed = parseReplicationPrompt(prompt);
 
-  if (ranges.length === 0) {
+  if (!parsed) {
     return <p className={className}>{prompt}</p>;
   }
 
-  const parts: ReactNode[] = [];
-  let cursor = 0;
-
-  ranges.forEach((range, index) => {
-    if (range.start > cursor) {
-      parts.push(<span key={`text-${index}`}>{prompt.slice(cursor, range.start)}</span>);
-    }
-    parts.push(
-      <span key={`slot-${index}`} className="prompt-slot-highlight">
-        {range.text}
-      </span>,
-    );
-    cursor = range.end;
-  });
-
-  if (cursor < prompt.length) {
-    parts.push(<span key="text-tail">{prompt.slice(cursor)}</span>);
-  }
-
-  return <p className={className}>{parts}</p>;
+  return (
+    <p className={className}>
+      复刻原帖 DNA，主题换成
+      <span className="prompt-slot-highlight">{parsed.topic}</span>
+      ，标题换成
+      <span className="prompt-slot-highlight">《{parsed.title}》</span>
+      ，画面与风格保持不变。
+    </p>
+  );
 }
 
 function PromptHero({
