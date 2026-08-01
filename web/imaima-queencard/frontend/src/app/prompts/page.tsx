@@ -645,6 +645,7 @@ function PromptHero({
           </div>
 
           <ImageGenerationComposer
+            key={selectedCase.id}
             seed={buildCaseGenerationSeed(selectedCase, prompt)}
             showHeader={false}
             frameless
