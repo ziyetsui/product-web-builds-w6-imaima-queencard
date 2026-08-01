@@ -170,6 +170,16 @@ function buildFillPrompt(prompt: FillPrompt) {
   return `生成一组新的${prompt.theme}主题：标题《${prompt.title}》，复刻参数“${prompt.replicationParameters}”`;
 }
 
+function normalizePromptForEditor(value: string, seed: ImageGenerationSeed) {
+  if (parseFillPrompt(value)) return value;
+  if (!seed.sourceCaseCategory || !seed.title) return value;
+  return buildFillPrompt({
+    theme: seed.sourceCaseCategory,
+    title: seed.title,
+    replicationParameters: "保留原图的视觉风格、构图和内容节奏；沿用原标题句式，将主题变量替换为新主题",
+  });
+}
+
 function setOptionalParam(params: URLSearchParams, key: string, value: string | undefined) {
   if (value) params.set(key, value);
 }
@@ -486,7 +496,7 @@ export function ImageGenerationComposer({
   useEffect(() => {
     const nextReferences = uniqueFirstThree(seedSnapshot.referenceImages);
     const seedDraft: ComposerDraft = {
-      prompt: seedSnapshot.prompt ?? "",
+      prompt: normalizePromptForEditor(seedSnapshot.prompt ?? "", seedSnapshot),
       referenceImages: nextReferences,
       model: modelForSeed(seedSnapshot, nextReferences),
       aspectRatio: aspectRatioForSeed(seedSnapshot, nextReferences),
@@ -508,7 +518,8 @@ export function ImageGenerationComposer({
       : seedDraft;
 
     skipNextDraftPersistRef.current = true;
-    setPrompt(nextDraft.prompt);
+    const normalizedPrompt = normalizePromptForEditor(nextDraft.prompt, seedSnapshot);
+    setPrompt(normalizedPrompt);
     setReferenceImages(uniqueFirstThree(nextDraft.referenceImages));
     setModel(modelForSeed(nextDraft, nextDraft.referenceImages));
     setAspectRatio(aspectRatioForSeed(nextDraft, nextDraft.referenceImages));
