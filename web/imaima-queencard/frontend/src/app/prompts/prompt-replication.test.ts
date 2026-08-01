@@ -34,7 +34,7 @@ describe("prompt replication", () => {
     expect(analysis.type).toBe("搞笑漫画");
     expect(analysis.sourceTheme).toBe("冷笑话");
     expect(prompt).toContain("生成一组新的搞笑漫画主题");
-    expect(prompt).toContain("8个把冷笑话画成段子的离谱瞬间");
+    expect(prompt).toContain("冷笑话，谁懂？");
     expect(prompt).toContain("节奏、反差包袱、分镜密度和标题语气");
     expect(prompt).toContain("复刻参数");
   });
@@ -66,7 +66,7 @@ describe("prompt replication", () => {
       const prompt = buildReplicationPrompt(item);
       expect(prompt).toMatch(new RegExp(`^生成一组新的${item.category}主题：标题《.+》，复刻参数“.+”$`));
       expect(prompt).not.toContain("副标题");
-      expect(prompt).toContain("保留原图文的");
+      expect(prompt).toContain("保留原图的视觉风格、构图和内容节奏");
     }
   });
 });

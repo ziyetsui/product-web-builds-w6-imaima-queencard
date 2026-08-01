@@ -33,6 +33,25 @@ function sourceMechanismsFor(item: PromptCase) {
   return "标题句式、画面结构、情绪节奏和互动方式";
 }
 
+function titleForSource(item: PromptCase, analysis: SourceAnalysis) {
+  const { sourceTheme, sourceTitle } = analysis;
+  if (/^如何用.+?时间.+?(彻底|重新|快速)/.test(sourceTitle)) {
+    const result = sourceTitle.match(/时间(.+)/)?.[1] ?? "改变生活";
+    return `如何用7天时间${result.replace(/你的人生|人生/, sourceTheme)}`;
+  }
+  if (/^用\d+天时间/.test(sourceTitle)) {
+    return `用7天时间把${sourceTheme}重新安排好`;
+  }
+  if (/谁懂[？?！!]?/.test(sourceTitle)) return `${sourceTheme}，谁懂？`;
+  return titleFor(analysis);
+}
+
+function visualInstructionFor(item: PromptCase) {
+  const source = item.prompt.match(/参考(?:图文|案例)《[^》]+》的(.+?)，生成一组新的/);
+  const mechanism = source?.[1]?.trim() || "标题句式、画面结构、情绪节奏和互动方式";
+  return `保留原图的视觉风格、构图和内容节奏（${mechanism}）；沿用原标题句式，将主题变量替换为新主题`;
+}
+
 export function analyzeSource(item: PromptCase): SourceAnalysis {
   const sourceTheme = sourceThemeFor(item);
   return {
@@ -63,8 +82,8 @@ export function buildReplicationPrompt(item: PromptCase) {
   const analysis = analyzeSource(item);
   const fill: FillPrompt = {
     theme: analysis.type,
-    title: titleFor(analysis),
-    replicationParameters: `保留原图文的${analysis.sourceMechanisms}，换成新的主题`,
+    title: titleForSource(item, analysis),
+    replicationParameters: visualInstructionFor(item),
   };
   return `生成一组新的${fill.theme}主题：标题《${fill.title}》，复刻参数“${fill.replicationParameters}”`;
 }
