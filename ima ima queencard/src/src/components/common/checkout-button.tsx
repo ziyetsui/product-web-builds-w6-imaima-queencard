@@ -13,7 +13,11 @@ interface CheckoutButtonProps {
   disabled?: boolean;
 }
 
-const CHECKOUT_HOSTS = new Set(["checkout.stripe.com", "checkout.creem.io"]);
+const CHECKOUT_HOSTS = new Set([
+  "checkout.stripe.com",
+  "billing.stripe.com",
+  "checkout.creem.io",
+]);
 
 class UnsafeCheckoutUrlError extends Error {}
 

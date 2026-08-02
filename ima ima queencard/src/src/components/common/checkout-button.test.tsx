@@ -48,6 +48,7 @@ describe("CheckoutButton", () => {
 
   it.each([
     "https://checkout.stripe.com/c/pay_123",
+    "https://billing.stripe.com/p/session_123",
     "https://checkout.creem.io/ch_123",
   ])("allows hosted HTTPS checkout URL %s", (url) => {
     expect(isAllowedCheckoutUrl(url, "production")).toBe(true);
