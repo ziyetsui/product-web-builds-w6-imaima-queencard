@@ -1,12 +1,15 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   serial,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -473,6 +476,18 @@ export const generationTasks = pgTable(
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     startedAt: timestamp("started_at"),
     completedAt: timestamp("completed_at"),
+    idempotencyKey: text("idempotency_key"),
+    parentTaskId: text("parent_task_id"),
+    priority: smallint("priority").default(0).notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    maxAttempts: integer("max_attempts").default(3).notNull(),
+    nextAttemptAt: timestamp("next_attempt_at").defaultNow().notNull(),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at"),
+    heartbeatAt: timestamp("heartbeat_at"),
+    version: integer("version").default(0).notNull(),
+    failureCategory: text("failure_category"),
+    lastErrorAt: timestamp("last_error_at"),
   },
   (table) => ({
     userIdx: index("generation_tasks_user_id_idx").on(table.userId),
@@ -481,6 +496,63 @@ export const generationTasks = pgTable(
       table.sourceCaseId
     ),
     createdAtIdx: index("generation_tasks_created_at_idx").on(table.createdAt),
+    userIdempotencyIdx: uniqueIndex(
+      "generation_tasks_user_id_idempotency_key_idx"
+    )
+      .on(table.userId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
+    runnableIdx: index("generation_tasks_runnable_idx").on(
+      table.status,
+      table.nextAttemptAt,
+      table.priority.desc(),
+      table.createdAt
+    ),
+    expiredLeaseIdx: index("generation_tasks_expired_lease_idx")
+      .on(table.status, table.leaseExpiresAt)
+      .where(sql`${table.status} = 'running'`),
+    attemptCountRange: check(
+      "generation_tasks_attempt_count_range",
+      sql`${table.attemptCount} >= 0 and ${table.attemptCount} <= ${table.maxAttempts}`
+    ),
+    maxAttemptsRange: check(
+      "generation_tasks_max_attempts_range",
+      sql`${table.maxAttempts} >= 1 and ${table.maxAttempts} <= 5`
+    ),
+    stateLeaseConsistency: check(
+      "generation_tasks_state_lease_consistency",
+      sql`(${table.status} = 'running' and ${table.leaseOwner} is not null and ${table.leaseExpiresAt} is not null and ${table.heartbeatAt} is not null) or (${table.status} <> 'running' and ${table.leaseOwner} is null)`
+    ),
+  })
+);
+
+export const generationConcurrencyLeases = pgTable(
+  "generation_concurrency_leases",
+  {
+    scopeKey: text("scope_key").notNull(),
+    slotNumber: integer("slot_number").notNull(),
+    taskId: text("task_id").notNull(),
+    taskVersion: integer("task_version").notNull(),
+    leaseOwner: text("lease_owner").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    heartbeatAt: timestamp("heartbeat_at").notNull(),
+    acquiredAt: timestamp("acquired_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    primaryKey: primaryKey({
+      columns: [table.scopeKey, table.slotNumber],
+      name: "generation_concurrency_leases_pk",
+    }),
+    taskScopeIdx: uniqueIndex(
+      "generation_concurrency_leases_task_scope_idx"
+    ).on(table.taskId, table.scopeKey),
+    taskIdx: index("generation_concurrency_leases_task_id_idx").on(table.taskId),
+    expiresIdx: index("generation_concurrency_leases_expires_at_idx").on(
+      table.expiresAt
+    ),
+    slotPositive: check(
+      "generation_concurrency_leases_slot_positive",
+      sql`${table.slotNumber} >= 1`
+    ),
   })
 );
 
