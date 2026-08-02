@@ -1,0 +1,151 @@
+{
+  "executedAt": "2026-08-02T15:04:30+08:00",
+  "instance": "http://localhost:8080",
+  "codeBaseline": "feat/prompt-replication@2bbe3c5",
+  "qaAccount": "model-lab-***@example.com",
+  "input": {
+    "referenceImages": 1,
+    "prompt": "把这张几何图重绘成柔和的水彩画风格，保留主体构图和主要颜色，不添加文字。",
+    "aspectRatio": "3:4",
+    "outputCount": 1
+  },
+  "balance": {
+    "before": { "availableCredits": 32, "frozenCredits": 0 },
+    "after": { "availableCredits": 11, "frozenCredits": 0 },
+    "settledDelta": 21
+  },
+  "primaryResults": [
+    {
+      "model": "GPT Image 2",
+      "modelId": "gpt-image-2-edit",
+      "taskId": "gen_YhHaHS3Y8JwxCQ5U",
+      "resolution": "auto",
+      "status": "completed",
+      "serverSeconds": 25.33,
+      "assetCount": 1,
+      "imageHttpStatus": 200,
+      "imageContentType": "image/png",
+      "requestedCredits": 5,
+      "settledCredits": 5
+    },
+    {
+      "model": "Gemini 3.1 Flash",
+      "modelId": "gemini-3.1-flash-edit",
+      "taskId": "gen_BLN-oVFAn4sbMBaF",
+      "resolution": "auto",
+      "status": "completed",
+      "serverSeconds": 10.332,
+      "assetCount": 1,
+      "imageHttpStatus": 200,
+      "imageContentType": "image/png",
+      "requestedCredits": 5,
+      "settledCredits": 5
+    },
+    {
+      "model": "Seedream 5.0 (即梦/CJM 口径)",
+      "modelId": "seedream-5-edit",
+      "taskId": "gen_CWklLQFkp_6SVkTi",
+      "resolution": "auto",
+      "status": "failed",
+      "serverSeconds": 1.209,
+      "assetCount": 0,
+      "requestedCredits": 4,
+      "settledCredits": 0,
+      "errorCode": "PROVIDER_FAILED",
+      "errorMessage": "The parameter size is not valid: image size must be at least 3686400 pixels."
+    },
+    {
+      "model": "Doubao Seedream 5.0",
+      "modelId": "doubao-seedream-5-edit",
+      "taskId": "gen_Uq52zivof7EfHymi",
+      "resolution": "auto",
+      "status": "failed",
+      "serverSeconds": 3.377,
+      "assetCount": 0,
+      "requestedCredits": 4,
+      "settledCredits": 0,
+      "errorCode": "PROVIDER_FAILED",
+      "errorMessage": "The parameter size is not valid: image size must be at least 3686400 pixels."
+    },
+    {
+      "model": "Vidu Q2",
+      "modelId": "viduq2-i2i",
+      "taskId": "gen_v44aavm1r7NzhiKM",
+      "resolution": "auto",
+      "status": "completed",
+      "serverSeconds": 40.925,
+      "assetCount": 1,
+      "imageHttpStatus": 200,
+      "imageContentType": "image/png",
+      "requestedCredits": 3,
+      "settledCredits": 3
+    }
+  ],
+  "diagnosticRetries": [
+    {
+      "model": "Seedream 5.0",
+      "modelId": "seedream-5-edit",
+      "taskId": "gen_q9_C_3ybkbaOjVky",
+      "resolution": "2k",
+      "status": "completed",
+      "serverSeconds": 30.157,
+      "assetCount": 1,
+      "imageHttpStatus": 200,
+      "imageContentType": "image/jpeg",
+      "storedMimeType": "image/png",
+      "requestedCredits": 4,
+      "settledCredits": 4
+    },
+    {
+      "model": "Doubao Seedream 5.0",
+      "modelId": "doubao-seedream-5-edit",
+      "taskId": "gen_c82prsgIbZ0Li_rx",
+      "resolution": "2k",
+      "status": "completed",
+      "serverSeconds": 30.082,
+      "assetCount": 1,
+      "imageHttpStatus": 200,
+      "imageContentType": "image/jpeg",
+      "storedMimeType": "image/png",
+      "requestedCredits": 4,
+      "settledCredits": 4
+    }
+  ],
+  "followupRetests": [
+    {
+      "model": "Doubao Seedream 5.0",
+      "modelId": "doubao-seedream-5-edit",
+      "providerModel": "doubao-seedream-5-0-260128",
+      "taskId": "gen_U0tPvdsMSTSBGImi",
+      "aspectRatio": "1:1",
+      "resolution": "2k",
+      "effectiveSize": "2048x2048",
+      "status": "completed",
+      "serverSeconds": 28.285,
+      "assetCount": 1,
+      "storedMimeType": "image/png",
+      "requestedCredits": 4,
+      "settledCredits": 4,
+      "finalFrozenCredits": 0,
+      "notes": "Follow-up Computer Use run aligned with the provider documentation example. The model was temporarily re-enabled in the selector for this run, then hidden again while its provider route remained in code."
+    }
+  ],
+  "preflightIncidents": [
+    {
+      "model": "GPT Image 2",
+      "taskId": "gen_DOsxI_E_AHldrbuV",
+      "status": "failed",
+      "serverSeconds": 7.301,
+      "settledCredits": 0,
+      "cause": "Original prompt was rejected by upstream safety policy; safe neutral prompt succeeded on retry."
+    },
+    {
+      "model": "Gemini 3.1 Flash",
+      "taskId": "gen_pnpYnJzuZ_A9F4dJ",
+      "status": "failed",
+      "serverSeconds": 0.058,
+      "settledCredits": 0,
+      "cause": "Continue-generation path converted the reference to an authenticated localhost asset URL that server-side fetch could not load; a fresh task with the original upload succeeded."
+    }
+  ]
+}
