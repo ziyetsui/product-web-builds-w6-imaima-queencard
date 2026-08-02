@@ -434,12 +434,6 @@ export async function createImageGenerationTask(
         if (existing) return publicTask(existing);
       }
 
-      await creditService.freezeInTx(trx, {
-        userId,
-        credits: requestedCredits,
-        videoUuid: taskId,
-      });
-
       const now = new Date();
       const [task] = await trx
         .insert(generationTasks)
@@ -473,6 +467,12 @@ export async function createImageGenerationTask(
       if (!task) {
         throw new Error("Failed to create image generation task");
       }
+
+      await creditService.freezeInTx(trx, {
+        userId,
+        credits: requestedCredits,
+        videoUuid: taskId,
+      });
 
       return publicTask(task);
     });

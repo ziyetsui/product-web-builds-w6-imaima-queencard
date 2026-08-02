@@ -85,10 +85,9 @@ function comparisonValue(condition: any, column: string) {
   return comparisons.find((item: any) => item?.column === column)?.value;
 }
 
-function transactionalDb(options: { insertError?: Error } = {}) {
+function transactionalDb() {
   let committedTasks: any[] = [];
   let committedHolds: any[] = [];
-  let transactionQueue = Promise.resolve();
 
   mocks.creditService.freezeInTx.mockImplementation(
     async (trx: any, params: Record<string, unknown>) => {
@@ -97,59 +96,165 @@ function transactionalDb(options: { insertError?: Error } = {}) {
     }
   );
 
-  mocks.db.transaction.mockImplementation((callback: (trx: any) => Promise<any>) => {
-    const execute = async () => {
-      const trx = {
-        pendingTasks: [...committedTasks],
-        pendingHolds: [...committedHolds],
-        select: vi.fn(() => ({
-          from: vi.fn(() => ({
-            where: vi.fn((condition: unknown) => ({
-              limit: vi.fn(async () => {
-                const userId = comparisonValue(
-                  condition,
-                  "generationTasks.userId"
-                );
-                const idempotencyKey = comparisonValue(
-                  condition,
-                  "generationTasks.idempotencyKey"
-                );
-                const task = trx.pendingTasks.find(
-                  (candidate: any) =>
-                    candidate.userId === userId &&
-                    candidate.idempotencyKey === idempotencyKey
-                );
-                return task ? [task] : [];
-              }),
-            })),
-          })),
-        })),
-        insert: vi.fn(() => ({
-          values: vi.fn((values: Record<string, unknown>) => ({
-            returning: vi.fn(async () => {
-              if (options.insertError) throw options.insertError;
-              const task = taskFromInsert(values);
-              trx.pendingTasks.push(task);
-              return [task];
+  mocks.db.transaction.mockImplementation(async (callback: (trx: any) => Promise<any>) => {
+    const trx = {
+      pendingTasks: [...committedTasks],
+      pendingHolds: [...committedHolds],
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn((condition: unknown) => ({
+            limit: vi.fn(async () => {
+              const userId = comparisonValue(
+                condition,
+                "generationTasks.userId"
+              );
+              const idempotencyKey = comparisonValue(
+                condition,
+                "generationTasks.idempotencyKey"
+              );
+              const task = trx.pendingTasks.find(
+                (candidate: any) =>
+                  candidate.userId === userId &&
+                  candidate.idempotencyKey === idempotencyKey
+              );
+              return task ? [task] : [];
             }),
           })),
         })),
-      };
-
-      const result = await callback(trx);
-      committedTasks = trx.pendingTasks;
-      committedHolds = trx.pendingHolds;
-      return result;
+      })),
+      insert: vi.fn(() => ({
+        values: vi.fn((values: Record<string, unknown>) => ({
+          returning: vi.fn(async () => {
+            const task = taskFromInsert(values);
+            trx.pendingTasks.push(task);
+            return [task];
+          }),
+        })),
+      })),
     };
 
-    const pending = transactionQueue.then(execute, execute);
-    transactionQueue = pending.then(() => undefined, () => undefined);
-    return pending;
+    const result = await callback(trx);
+    committedTasks = trx.pendingTasks;
+    committedHolds = trx.pendingHolds;
+    return result;
   });
 
   return {
     tasks: () => committedTasks,
     holds: () => committedHolds,
+  };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function overlappingIdempotencyDb(concurrency: number) {
+  let committedTasks: any[] = [];
+  let committedHolds: any[] = [];
+  let initialLookupCount = 0;
+  let transactionId = 0;
+  const allInitialLookups = deferred();
+  const claims = new Map<
+    string,
+    { ownerId: number; committed: Promise<void>; resolve: () => void }
+  >();
+
+  mocks.creditService.freezeInTx.mockImplementation(
+    async (trx: any, params: Record<string, unknown>) => {
+      trx.pendingHolds.push(params);
+      return { success: true, holdId: 1 };
+    }
+  );
+
+  mocks.db.select.mockImplementation(() => ({
+    from: vi.fn(() => ({
+      where: vi.fn((condition: unknown) => ({
+        limit: vi.fn(async () => {
+          const userId = comparisonValue(condition, "generationTasks.userId");
+          const idempotencyKey = comparisonValue(
+            condition,
+            "generationTasks.idempotencyKey"
+          );
+          const task = committedTasks.find(
+            (candidate) =>
+              candidate.userId === userId &&
+              candidate.idempotencyKey === idempotencyKey
+          );
+          return task ? [task] : [];
+        }),
+      })),
+    })),
+  }));
+
+  mocks.db.transaction.mockImplementation(async (callback: (trx: any) => Promise<any>) => {
+    const id = transactionId++;
+    let stagedTask: any = null;
+    let ownedClaim: { committed: Promise<void>; resolve: () => void } | null = null;
+    const trx = {
+      pendingHolds: [] as any[],
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(async () => {
+              initialLookupCount += 1;
+              if (initialLookupCount === concurrency) allInitialLookups.resolve();
+              await allInitialLookups.promise;
+              return [];
+            }),
+          })),
+        })),
+      })),
+      insert: vi.fn(() => ({
+        values: vi.fn((values: Record<string, unknown>) => ({
+          returning: vi.fn(async () => {
+            const claimKey = `${values.userId}:${values.idempotencyKey}`;
+            const existingClaim = claims.get(claimKey);
+            if (existingClaim) {
+              await existingClaim.committed;
+              throw Object.assign(new Error("duplicate key"), {
+                code: "23505",
+                constraint: "generation_tasks_user_id_idempotency_key_idx",
+              });
+            }
+
+            const claim = deferred();
+            claims.set(claimKey, {
+              ownerId: id,
+              committed: claim.promise,
+              resolve: claim.resolve,
+            });
+            ownedClaim = {
+              committed: claim.promise,
+              resolve: claim.resolve,
+            };
+            stagedTask = taskFromInsert(values);
+            return [stagedTask];
+          }),
+        })),
+      })),
+    };
+
+    try {
+      const result = await callback(trx);
+      if (stagedTask) committedTasks.push(stagedTask);
+      committedHolds.push(...trx.pendingHolds);
+      ownedClaim?.resolve();
+      return result;
+    } catch (error) {
+      ownedClaim?.resolve();
+      throw error;
+    }
+  });
+
+  return {
+    tasks: () => committedTasks,
+    holds: () => committedHolds,
+    initialLookups: () => initialLookupCount,
   };
 }
 
@@ -214,7 +319,7 @@ describe("idempotent image generation enqueue", () => {
   });
 
   it("converges ten concurrent same-user requests to one task and one hold", async () => {
-    const state = transactionalDb();
+    const state = overlappingIdempotencyDb(10);
 
     const tasks = await Promise.all(
       Array.from({ length: 10 }, () =>
@@ -226,18 +331,20 @@ describe("idempotent image generation enqueue", () => {
       new Set([tasks[0].taskId])
     );
     expect(mocks.creditService.freezeInTx).toHaveBeenCalledTimes(1);
+    expect(state.initialLookups()).toBe(10);
     expect(state.tasks()).toHaveLength(1);
     expect(state.holds()).toHaveLength(1);
     expect(state.tasks()[0].creditHoldKey).toBe(state.tasks()[0].id);
     expect(state.holds()[0].videoUuid).toBe(state.tasks()[0].id);
   });
 
-  it("rolls back the credit hold when task insertion fails", async () => {
-    const state = transactionalDb({ insertError: new Error("insert failed") });
+  it("rolls back the claimed task when credit freezing fails", async () => {
+    const state = transactionalDb();
+    mocks.creditService.freezeInTx.mockRejectedValue(new Error("freeze failed"));
 
     await expect(
       createImageGenerationTask("user_1", validInput("request_123"))
-    ).rejects.toThrow("insert failed");
+    ).rejects.toThrow("freeze failed");
 
     expect(mocks.creditService.freezeInTx).toHaveBeenCalledTimes(1);
     expect(state.tasks()).toEqual([]);
@@ -337,5 +444,20 @@ describe("idempotent image generation enqueue", () => {
       creditHoldKey: state.tasks()[0].id,
     });
     expect(state.tasks()[0].nextAttemptAt).toBeInstanceOf(Date);
+  });
+
+  it("creates independent atomic tasks when no idempotency key is supplied", async () => {
+    const state = transactionalDb();
+
+    const first = await createImageGenerationTask("user_1", validInput());
+    const second = await createImageGenerationTask("user_1", validInput());
+
+    expect(first.taskId).not.toBe(second.taskId);
+    expect(state.tasks()).toHaveLength(2);
+    expect(state.tasks().map((task) => task.idempotencyKey)).toEqual([
+      null,
+      null,
+    ]);
+    expect(mocks.creditService.freezeInTx).toHaveBeenCalledTimes(2);
   });
 });
