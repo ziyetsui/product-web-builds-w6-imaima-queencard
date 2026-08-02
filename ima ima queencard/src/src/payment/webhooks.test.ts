@@ -9,6 +9,7 @@ import {
   invoicePaidEvent,
   invoicePaymentFailedEvent,
   invoicePaymentSucceededEvent,
+  modernInvoicePaymentSucceededEvent,
   stripeSubscription,
   subscriptionDeletedEvent,
   subscriptionUpdatedEvent,
@@ -118,6 +119,21 @@ describe("handleEvent", () => {
     expect(mocks.fulfillCreditGrantOnce).toHaveBeenCalledWith(
       expect.objectContaining({
         fulfillmentKey: "stripe:invoice:in_123",
+      })
+    );
+  });
+
+  it("supports Stripe 2026 invoice parent and pricing fields", async () => {
+    await handleEvent(modernInvoicePaymentSucceededEvent());
+
+    expect(mocks.retrieveSubscription).toHaveBeenCalledWith("sub_123");
+    expect(mocks.fulfillCreditGrantOnce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fulfillmentKey: "stripe:invoice:in_123",
+        productKey: "creator_monthly",
+        stripePriceId: "price_pro_monthly",
+        userId: "user_123",
+        credits: 600,
       })
     );
   });

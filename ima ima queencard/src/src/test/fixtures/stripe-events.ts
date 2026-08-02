@@ -126,6 +126,45 @@ export function invoicePaidEvent(overrides: Partial<Stripe.Invoice> = {}) {
   } as unknown as Stripe.DiscriminatedEvent;
 }
 
+export function modernInvoicePaymentSucceededEvent() {
+  const event = invoicePaymentSucceededEvent() as unknown as {
+    data: { object: Record<string, unknown> & { lines: { data: Array<Record<string, unknown>> } } };
+  };
+  const invoice = event.data.object;
+
+  invoice.subscription = null;
+  invoice.subscription_details = null;
+  invoice.parent = {
+    type: "subscription_details",
+    subscription_details: {
+      subscription: "sub_123",
+      metadata: {
+        userId: "user_123",
+        productKey: "creator_monthly",
+      },
+    },
+  };
+  invoice.lines.data[0].price = null;
+  invoice.lines.data[0].pricing = {
+    type: "price_details",
+    price_details: {
+      price: "price_pro_monthly",
+      product: "prod_123",
+    },
+    unit_amount_decimal: "9900",
+  };
+  invoice.lines.data[0].parent = {
+    type: "subscription_item_details",
+    subscription_item_details: {
+      subscription: "sub_123",
+      subscription_item: "si_123",
+      proration: false,
+    },
+  };
+
+  return event as unknown as Stripe.DiscriminatedEvent;
+}
+
 export function invoicePaymentFailedEvent(
   overrides: Partial<Stripe.Invoice> = {}
 ) {

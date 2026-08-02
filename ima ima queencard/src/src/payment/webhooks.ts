@@ -72,16 +72,54 @@ function getEventId(event: Stripe.DiscriminatedEvent) {
 }
 
 function getInvoiceLinePriceId(invoice: Stripe.Invoice) {
-  return invoice.lines?.data[0]?.price?.id ?? null;
+  const line = invoice.lines?.data[0] as
+    | (Stripe.InvoiceLineItem & {
+        pricing?: {
+          price_details?: { price?: string | null } | null;
+        } | null;
+      })
+    | undefined;
+
+  return line?.price?.id ?? line?.pricing?.price_details?.price ?? null;
+}
+
+function getInvoiceSubscriptionId(invoice: Stripe.Invoice) {
+  const modernInvoice = invoice as Stripe.Invoice & {
+    parent?: {
+      subscription_details?: {
+        subscription?: string | Stripe.Subscription | null;
+      } | null;
+    } | null;
+  };
+  const line = invoice.lines?.data[0] as
+    | (Stripe.InvoiceLineItem & {
+        parent?: {
+          subscription_item_details?: {
+            subscription?: string | Stripe.Subscription | null;
+          } | null;
+        } | null;
+      })
+    | undefined;
+
+  return getSubscriptionId(
+    invoice.subscription ??
+      modernInvoice.parent?.subscription_details?.subscription ??
+      line?.parent?.subscription_item_details?.subscription
+  );
 }
 
 function getInvoiceSubscriptionMetadata(invoice: Stripe.Invoice) {
-  const subscriptionDetails = (
-    invoice as Stripe.Invoice & {
+  const modernInvoice = invoice as Stripe.Invoice & {
       subscription_details?: { metadata?: Stripe.Metadata | null };
-    }
-  ).subscription_details;
-  return subscriptionDetails?.metadata ?? null;
+      parent?: {
+        subscription_details?: { metadata?: Stripe.Metadata | null } | null;
+      } | null;
+    };
+  return (
+    modernInvoice.subscription_details?.metadata ??
+    modernInvoice.parent?.subscription_details?.metadata ??
+    null
+  );
 }
 
 function getProductFromMetadataOrPrice(
@@ -332,7 +370,7 @@ async function handleInvoicePaymentSucceeded(
   event: Stripe.DiscriminatedEvent,
   invoice: Stripe.Invoice
 ) {
-  const subscriptionId = getSubscriptionId(invoice.subscription);
+  const subscriptionId = getInvoiceSubscriptionId(invoice);
   if (!subscriptionId) {
     console.warn("[Stripe] Invoice paid without subscription", {
       invoiceId: invoice.id,
@@ -388,7 +426,7 @@ async function handleInvoicePaymentFailed(
       eventType: event.type,
       stripeCustomerId: getStripeCustomerId(invoice.customer),
       stripeInvoiceId: invoice.id,
-      stripeSubscriptionId: getSubscriptionId(invoice.subscription),
+      stripeSubscriptionId: getInvoiceSubscriptionId(invoice),
       userId: getMetadataValue(invoice.metadata, "userId"),
       productKey: getMetadataValue(invoice.metadata, "productKey"),
       stripePriceId: getInvoiceLinePriceId(invoice),
