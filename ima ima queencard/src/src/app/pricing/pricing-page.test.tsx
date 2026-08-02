@@ -11,6 +11,29 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("PricingPage", () => {
+  it("treats a checkout return as pending server confirmation", async () => {
+    render(
+      await PricingPage({
+        searchParams: Promise.resolve({ checkout: "success" }),
+      })
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "支付结果确认中" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/以服务端 Webhook 处理结果和.*我的积分.*页面显示为准/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText("支付已完成")).not.toBeInTheDocument();
+  });
+
+  it("does not show a checkout result notice without a success parameter", async () => {
+    render(await PricingPage({}));
+
+    expect(screen.queryByText("支付结果确认中")).not.toBeInTheDocument();
+    expect(screen.queryByText("支付已完成")).not.toBeInTheDocument();
+  });
+
   it("renders Chinese pricing tabs and defaults to one-time credit packs", async () => {
     render(await PricingPage({}));
 
