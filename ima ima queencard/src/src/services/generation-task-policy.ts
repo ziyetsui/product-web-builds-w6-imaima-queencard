@@ -158,16 +158,18 @@ export function nextGenerationAttemptAt({
   random,
   retryAfterMs,
 }: RetryScheduleParams) {
-  if (!Number.isSafeInteger(attemptCount) || attemptCount < 1) {
-    throw new Error("attemptCount must be a positive integer");
+  if (
+    !Number.isSafeInteger(attemptCount) ||
+    attemptCount < 1 ||
+    attemptCount > BASE_RETRY_DELAYS_MS.length
+  ) {
+    throw new Error("attemptCount must be an integer between 1 and 3");
   }
   if (Number.isNaN(now.getTime())) {
     throw new Error("now must be a valid Date");
   }
 
-  const baseDelayMs = BASE_RETRY_DELAYS_MS[
-    Math.min(attemptCount - 1, BASE_RETRY_DELAYS_MS.length - 1)
-  ];
+  const baseDelayMs = BASE_RETRY_DELAYS_MS[attemptCount - 1];
   const randomValue = random();
   if (!Number.isFinite(randomValue)) {
     throw new Error("random must return a finite number");

@@ -41,6 +41,16 @@ describe("generation task policy", () => {
     ).toEqual(new Date("2026-08-02T00:00:30Z"));
   });
 
+  it("rejects attempt counts beyond the approved maximum", () => {
+    expect(() =>
+      nextGenerationAttemptAt({
+        attemptCount: 4,
+        now: new Date("2026-08-02T00:00:00Z"),
+        random: () => 0.5,
+      })
+    ).toThrow("attemptCount");
+  });
+
   it("honors and caps provider Retry-After values", () => {
     const failure = classifyGenerationFailure(
       Object.assign(new Error("rate limit"), { status: 429, retryAfter: 600 })
