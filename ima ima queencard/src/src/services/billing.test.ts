@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const stripeCases = [
+  ["creator_monthly", "subscription", "STRIPE_PRICE_CREATOR_MONTHLY", "price_creator_monthly", 600],
+  ["creator_annual", "subscription", "STRIPE_PRICE_CREATOR_ANNUAL", "price_creator_annual", 7200],
+  ["studio_monthly", "subscription", "STRIPE_PRICE_STUDIO_MONTHLY", "price_studio_monthly", 1800],
+  ["studio_annual", "subscription", "STRIPE_PRICE_STUDIO_ANNUAL", "price_studio_annual", 21600],
+  ["credit_creator", "payment", "STRIPE_PRICE_CREDIT_CREATOR", "price_credit_creator", 600],
+  ["credit_studio", "payment", "STRIPE_PRICE_CREDIT_STUDIO", "price_credit_studio", 1800],
+] as const;
 
 const mocks = vi.hoisted(() => ({
   ensureCustomer: vi.fn(),
@@ -40,8 +49,9 @@ describe("createStripeSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.NEXT_PUBLIC_APP_URL = "https://example.com";
-    process.env.STRIPE_PRICE_CREATOR_MONTHLY = "price_creator_monthly";
-    process.env.STRIPE_PRICE_CREDIT_CREATOR = "price_credit_creator";
+    for (const [, , envName, priceId] of stripeCases) {
+      process.env[envName] = priceId;
+    }
     process.env.CREEM_API_KEY = "creem_test_123";
     process.env.CREEM_API_BASE_URL = "https://test-api.creem.io/v1";
     process.env.CREEM_PRODUCT_CREATOR_MONTHLY = "prod_creator_monthly";
@@ -49,6 +59,102 @@ describe("createStripeSession", () => {
     mocks.getCurrentUser.mockResolvedValue({
       id: "user_123",
       email: "user@example.com",
+    });
+  });
+
+  afterEach(() => {
+    for (const [, , envName] of stripeCases) {
+      delete process.env[envName];
+    }
+  });
+
+  it.each(stripeCases)(
+    "creates %s as %s with server-owned metadata",
+    async (productKey, mode, _envName, priceId, credits) => {
+      mocks.ensureCustomer.mockResolvedValue({
+        id: 1,
+        authUserId: "user_123",
+        plan: "FREE",
+        stripeCustomerId: null,
+      });
+      mocks.stripe.checkout.sessions.create.mockResolvedValue({
+        url: "https://checkout.stripe.com/session",
+      });
+
+      await createStripeSession("user_123", productKey);
+
+      const checkoutParams = mocks.stripe.checkout.sessions.create.mock.calls[0]![0];
+      expect(checkoutParams).toEqual(
+        expect.objectContaining({
+          mode,
+          line_items: [{ price: priceId, quantity: 1 }],
+          metadata: {
+            userId: "user_123",
+            productKey,
+            mode,
+            credits: String(credits),
+          },
+        })
+      );
+      if (mode === "subscription") {
+        expect(checkoutParams.subscription_data).toEqual({
+          metadata: checkoutParams.metadata,
+        });
+      } else {
+        expect(checkoutParams.payment_intent_data).toEqual({
+          metadata: checkoutParams.metadata,
+        });
+      }
+    }
+  );
+
+  it("rejects a missing authenticated user with an explicit error", async () => {
+    mocks.ensureCustomer.mockResolvedValue({
+      id: 1,
+      authUserId: "user_123",
+      plan: "FREE",
+      stripeCustomerId: null,
+    });
+    mocks.getCurrentUser.mockResolvedValue(null);
+
+    await expect(createStripeSession("user_123", "creator_monthly")).resolves.toEqual({
+      success: false,
+      url: null,
+      error: "Missing user",
+    });
+    expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a user without an email before calling Stripe", async () => {
+    mocks.ensureCustomer.mockResolvedValue({
+      id: 1,
+      authUserId: "user_123",
+      plan: "FREE",
+      stripeCustomerId: null,
+    });
+    mocks.getCurrentUser.mockResolvedValue({ id: "user_123", email: null });
+
+    await expect(createStripeSession("user_123", "creator_monthly")).resolves.toEqual({
+      success: false,
+      url: null,
+      error: "Missing user email",
+    });
+    expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+  });
+
+  it("returns an explicit error when Stripe omits the checkout URL", async () => {
+    mocks.ensureCustomer.mockResolvedValue({
+      id: 1,
+      authUserId: "user_123",
+      plan: "FREE",
+      stripeCustomerId: null,
+    });
+    mocks.stripe.checkout.sessions.create.mockResolvedValue({ url: null });
+
+    await expect(createStripeSession("user_123", "creator_monthly")).resolves.toEqual({
+      success: false,
+      url: null,
+      error: "Stripe checkout did not return a URL",
     });
   });
 
@@ -101,19 +207,22 @@ describe("createStripeSession", () => {
     );
   });
 
-  it("rejects missing Stripe price IDs before calling Stripe", async () => {
-    delete process.env.STRIPE_PRICE_CREATOR_MONTHLY;
+  it.each(stripeCases)(
+    "rejects a missing Stripe price ID for %s before calling Stripe",
+    async (productKey, _mode, envName) => {
+      delete process.env[envName];
 
-    const result = await createStripeSession("user_123", "creator_monthly");
+      const result = await createStripeSession("user_123", productKey);
 
-    expect(result).toEqual({
-      success: false,
-      url: null,
-      error: "Missing or invalid Stripe price ID",
-    });
-    expect(mocks.ensureCustomer).not.toHaveBeenCalled();
-    expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({
+        success: false,
+        url: null,
+        error: "Missing or invalid Stripe price ID",
+      });
+      expect(mocks.ensureCustomer).not.toHaveBeenCalled();
+      expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+    }
+  );
 
   it("uses an existing Stripe customer when available", async () => {
     mocks.ensureCustomer.mockResolvedValue({
@@ -183,7 +292,7 @@ describe("createStripeSession", () => {
     expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
   });
 
-  it("creates payment checkout for one-time credit packs", async () => {
+  it("creates card-safe payment checkout without forcing optional wallets", async () => {
     mocks.ensureCustomer.mockResolvedValue({
       id: 1,
       authUserId: "user_123",
@@ -201,10 +310,6 @@ describe("createStripeSession", () => {
       expect.objectContaining({
         mode: "payment",
         line_items: [{ price: "price_credit_creator", quantity: 1 }],
-        payment_method_types: ["card", "alipay", "wechat_pay"],
-        payment_method_options: {
-          wechat_pay: { client: "web" },
-        },
         payment_intent_data: {
           metadata: {
             userId: "user_123",
@@ -213,6 +318,12 @@ describe("createStripeSession", () => {
             credits: "600",
           },
         },
+      })
+    );
+    expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        payment_method_types: expect.any(Array),
+        payment_method_options: expect.any(Object),
       })
     );
   });

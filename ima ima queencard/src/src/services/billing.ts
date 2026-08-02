@@ -239,9 +239,12 @@ export async function createStripeSession(userId: string, productKey: string) {
 
   const user = await getCurrentUser();
   if (!user) {
-    return { success: false as const, url: null };
+    return { success: false as const, url: null, error: "Missing user" };
   }
-  const email = user.email!;
+  if (!user.email) {
+    return { success: false as const, url: null, error: "Missing user email" };
+  }
+  const email = user.email;
   const metadata = {
     userId,
     productKey: product.key,
@@ -264,16 +267,18 @@ export async function createStripeSession(userId: string, productKey: string) {
   if (product.mode === "subscription") {
     checkoutParams.subscription_data = { metadata };
   } else {
-    checkoutParams.payment_method_types = ["card", "alipay", "wechat_pay"];
-    checkoutParams.payment_method_options = {
-      wechat_pay: { client: "web" },
-    };
     checkoutParams.payment_intent_data = { metadata };
   }
 
   const session = await stripe.checkout.sessions.create(checkoutParams);
 
-  if (!session.url) return { success: false as const, url: null };
+  if (!session.url) {
+    return {
+      success: false as const,
+      url: null,
+      error: "Stripe checkout did not return a URL",
+    };
+  }
   return { success: true as const, url: session.url };
 }
 
