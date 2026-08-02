@@ -13,6 +13,34 @@ interface CheckoutButtonProps {
   disabled?: boolean;
 }
 
+const CHECKOUT_HOSTS = new Set(["checkout.stripe.com", "checkout.creem.io"]);
+
+class UnsafeCheckoutUrlError extends Error {}
+
+export function isAllowedCheckoutUrl(
+  value: unknown,
+  environment = process.env.NODE_ENV
+) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" && CHECKOUT_HOSTS.has(url.hostname)) {
+      return true;
+    }
+
+    return (
+      environment === "development" &&
+      url.protocol === "http:" &&
+      url.origin === window.location.origin
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function getCheckoutEndpoint(
   provider = process.env.NEXT_PUBLIC_BILLING_PROVIDER
 ) {
@@ -60,11 +88,18 @@ export function CheckoutButton({
         throw new Error(result?.error?.message || "Failed to create checkout session");
       }
 
+      if (!isAllowedCheckoutUrl(url)) {
+        throw new UnsafeCheckoutUrlError("Unsafe checkout URL");
+      }
+
       window.location.href = url;
     } catch (error) {
       console.warn("Checkout session error:", error);
       toast.error("无法创建支付链接", {
-        description: `请检查 ${providerName} 环境变量和产品配置是否已经完成。`,
+        description:
+          error instanceof UnsafeCheckoutUrlError
+            ? "支付服务返回了不安全的跳转地址。"
+            : `请检查 ${providerName} 环境变量和产品配置是否已经完成。`,
       });
     } finally {
       setLoading(false);

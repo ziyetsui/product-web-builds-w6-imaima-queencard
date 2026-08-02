@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CheckoutButton } from "./checkout-button";
+import { CheckoutButton, isAllowedCheckoutUrl } from "./checkout-button";
 
 const pushMock = vi.fn();
 
@@ -44,6 +44,13 @@ describe("CheckoutButton", () => {
     await user.click(screen.getByRole("button", { name: "月付订阅" }));
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://checkout.stripe.com/c/pay_123",
+    "https://checkout.creem.io/ch_123",
+  ])("allows hosted HTTPS checkout URL %s", (url) => {
+    expect(isAllowedCheckoutUrl(url, "production")).toBe(true);
   });
 
   it.each([
@@ -112,5 +119,66 @@ describe("CheckoutButton", () => {
         description: `请检查 ${providerName} 环境变量和产品配置是否已经完成。`,
       });
     });
+  });
+
+  it.each([
+    "javascript:alert(document.domain)",
+    "data:text/html,<script>alert(1)</script>",
+    "ftp://checkout.stripe.com/session",
+    "/api/redirect-to-checkout",
+    "https://attacker.example/session",
+  ])("rejects unsafe checkout URL %s without navigating", async (url) => {
+    const user = userEvent.setup();
+    const originalHref = window.location.href;
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({ data: { success: true, url } }, { status: 200 })
+      )
+    );
+
+    render(<CheckoutButton productKey="creator_monthly" label="月付订阅" />);
+    await user.click(screen.getByRole("button", { name: "月付订阅" }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("无法创建支付链接", {
+        description: "支付服务返回了不安全的跳转地址。",
+      });
+    });
+    expect(window.location.href).toBe(originalHref);
+  });
+
+  it("rejects same-origin HTTP checkout URLs outside development", async () => {
+    const user = userEvent.setup();
+    vi.stubEnv("NODE_ENV", "production");
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json(
+          { data: { success: true, url: `${window.location.origin}/checkout/local` } },
+          { status: 200 }
+        )
+      )
+    );
+
+    render(<CheckoutButton productKey="creator_monthly" label="月付订阅" />);
+    await user.click(screen.getByRole("button", { name: "月付订阅" }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("无法创建支付链接", {
+        description: "支付服务返回了不安全的跳转地址。",
+      });
+    });
+  });
+
+  it("allows a same-origin HTTP checkout URL during development", () => {
+    expect(
+      isAllowedCheckoutUrl(
+        `${window.location.origin}/checkout/local`,
+        "development"
+      )
+    ).toBe(true);
   });
 });
