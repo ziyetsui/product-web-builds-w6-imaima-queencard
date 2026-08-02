@@ -29,7 +29,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "generation_tasks_user_id_idempotency_key_idx"
   WHERE "idempotency_key" IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS "generation_tasks_runnable_idx"
-  ON "generation_tasks" ("status", "next_attempt_at", "priority" DESC, "created_at");
+  ON "generation_tasks" ("status", "priority" DESC, "next_attempt_at", "created_at");
 
 CREATE INDEX IF NOT EXISTS "generation_tasks_expired_lease_idx"
   ON "generation_tasks" ("status", "lease_expires_at")
@@ -48,6 +48,7 @@ DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'generation_tasks_attempt_count_range'
+      AND conrelid = 'generation_tasks'::regclass
   ) THEN
     ALTER TABLE "generation_tasks"
       ADD CONSTRAINT "generation_tasks_attempt_count_range"
@@ -59,6 +60,7 @@ DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'generation_tasks_max_attempts_range'
+      AND conrelid = 'generation_tasks'::regclass
   ) THEN
     ALTER TABLE "generation_tasks"
       ADD CONSTRAINT "generation_tasks_max_attempts_range"
@@ -70,6 +72,7 @@ DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conname = 'generation_tasks_state_lease_consistency'
+      AND conrelid = 'generation_tasks'::regclass
   ) THEN
     ALTER TABLE "generation_tasks"
       ADD CONSTRAINT "generation_tasks_state_lease_consistency"

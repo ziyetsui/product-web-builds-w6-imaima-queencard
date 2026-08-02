@@ -503,8 +503,8 @@ export const generationTasks = pgTable(
       .where(sql`${table.idempotencyKey} is not null`),
     runnableIdx: index("generation_tasks_runnable_idx").on(
       table.status,
-      table.nextAttemptAt,
       table.priority.desc(),
+      table.nextAttemptAt,
       table.createdAt
     ),
     expiredLeaseIdx: index("generation_tasks_expired_lease_idx")
