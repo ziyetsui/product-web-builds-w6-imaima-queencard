@@ -44,10 +44,19 @@ export type StripeSessionResult =
 export type CheckoutSessionResult = StripeSessionResult;
 
 function getAppUrl() {
-  return (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:8080").replace(
-    /\/$/,
-    ""
-  );
+  const fallbackOrigin = "http://localhost:8080";
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (!configuredUrl) return fallbackOrigin;
+
+  try {
+    const url = new URL(configuredUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return fallbackOrigin;
+    }
+    return url.origin;
+  } catch {
+    return fallbackOrigin;
+  }
 }
 
 export function getStripeReturnUrls() {
@@ -354,16 +363,68 @@ export async function getMySubscription(userId: string) {
   const [customer] = await db
     .select({
       plan: customers.plan,
+      stripeSubscriptionId: customers.stripeSubscriptionId,
       stripeCurrentPeriodEnd: customers.stripeCurrentPeriodEnd,
+      billingProvider: customers.billingProvider,
+      billingSubscriptionId: customers.billingSubscriptionId,
       billingCurrentPeriodEnd: customers.billingCurrentPeriodEnd,
     })
     .from(customers)
     .where(eq(customers.authUserId, userId))
     .limit(1);
 
-  if (!customer) return null;
+  if (!customer) {
+    return {
+      plan: "FREE" as const,
+      status: "inactive" as const,
+      cancelAtPeriodEnd: false,
+      endsAt: null,
+    };
+  }
+
+  const storedEndsAt =
+    customer.billingCurrentPeriodEnd ?? customer.stripeCurrentPeriodEnd;
+  const stripeSubscriptionId =
+    (!customer.billingProvider || customer.billingProvider === "stripe")
+      ? customer.stripeSubscriptionId ?? customer.billingSubscriptionId
+      : null;
+
+  if (stripeSubscriptionId) {
+    const subscription = await stripe.subscriptions.retrieve(
+      stripeSubscriptionId
+    );
+    const legacyPeriodEnd = (
+      subscription as Stripe.Subscription & { current_period_end?: number }
+    ).current_period_end;
+    const itemPeriodEnds = subscription.items.data
+      .map(
+        (item) =>
+          (item as Stripe.SubscriptionItem & { current_period_end?: number })
+            .current_period_end
+      )
+      .filter((value): value is number => typeof value === "number");
+    const livePeriodEnd =
+      legacyPeriodEnd ??
+      (itemPeriodEnds.length > 0 ? Math.max(...itemPeriodEnds) : null);
+
+    return {
+      plan: customer.plan ?? "FREE",
+      status: subscription.status,
+      cancelAtPeriodEnd: subscription.cancel_at_period_end,
+      endsAt: livePeriodEnd ? new Date(livePeriodEnd * 1000) : storedEndsAt,
+    };
+  }
+
+  const isActive =
+    customer.plan !== null &&
+    customer.plan !== "FREE" &&
+    storedEndsAt !== null &&
+    storedEndsAt.getTime() > Date.now();
+
   return {
-    plan: customer.plan,
-    endsAt: customer.billingCurrentPeriodEnd ?? customer.stripeCurrentPeriodEnd,
+    plan: customer.plan ?? "FREE",
+    status: isActive ? ("active" as const) : ("inactive" as const),
+    cancelAtPeriodEnd: false,
+    endsAt: storedEndsAt,
   };
 }

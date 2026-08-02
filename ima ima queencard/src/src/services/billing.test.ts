@@ -10,6 +10,10 @@ const stripeCases = [
 ] as const;
 
 const mocks = vi.hoisted(() => ({
+  customerRows: [] as Array<Record<string, unknown>>,
+  db: {
+    select: vi.fn(),
+  },
   ensureCustomer: vi.fn(),
   getCurrentUser: vi.fn(),
   createPendingFulfillment: vi.fn(),
@@ -24,7 +28,31 @@ const mocks = vi.hoisted(() => ({
         create: vi.fn(),
       },
     },
+    subscriptions: {
+      retrieve: vi.fn(),
+    },
   },
+}));
+
+vi.mock("@/db", () => ({
+  customers: {
+    authUserId: "authUserId",
+    plan: "plan",
+    stripeCustomerId: "stripeCustomerId",
+    stripeSubscriptionId: "stripeSubscriptionId",
+    stripePriceId: "stripePriceId",
+    stripeCurrentPeriodEnd: "stripeCurrentPeriodEnd",
+    billingProvider: "billingProvider",
+    billingSubscriptionId: "billingSubscriptionId",
+    billingProductId: "billingProductId",
+    billingCurrentPeriodEnd: "billingCurrentPeriodEnd",
+  },
+  db: mocks.db,
+}));
+
+vi.mock("drizzle-orm", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("drizzle-orm")>()),
+  eq: vi.fn(() => "auth-user-filter"),
 }));
 
 vi.mock("@/services/customer", () => ({
@@ -43,11 +71,28 @@ vi.mock("@/payment", () => ({
   stripe: mocks.stripe,
 }));
 
-import { createCreemCheckout, createStripeSession } from "./billing";
+import {
+  createCreemCheckout,
+  createStripeSession,
+  getMySubscription,
+  getStripeReturnUrls,
+} from "./billing";
+
+function configureCustomerQuery() {
+  mocks.db.select.mockReturnValue({
+    from: vi.fn(() => ({
+      where: vi.fn(() => ({
+        limit: vi.fn(async () => mocks.customerRows),
+      })),
+    })),
+  });
+}
 
 describe("createStripeSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.customerRows = [];
+    configureCustomerQuery();
     process.env.NEXT_PUBLIC_APP_URL = "https://example.com";
     for (const [, , envName, priceId] of stripeCases) {
       process.env[envName] = priceId;
@@ -344,6 +389,113 @@ describe("createStripeSession", () => {
     expect(result.success).toBe(true);
     expect(mocks.stripe.billingPortal.sessions.create).not.toHaveBeenCalled();
     expect(mocks.stripe.checkout.sessions.create).toHaveBeenCalled();
+  });
+});
+
+describe("billing return URLs", () => {
+  const fallbackOrigin = "http://localhost:8080";
+
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+  });
+
+  it.each([
+    [
+      "https://example.com/base/path?unsafe=1#fragment",
+      "https://example.com",
+    ],
+    ["https://example.com///", "https://example.com"],
+    ["  http://localhost:9090/admin  ", "http://localhost:9090"],
+  ])("builds every Stripe return URL from the configured origin for %s", (configured, origin) => {
+    process.env.NEXT_PUBLIC_APP_URL = configured;
+
+    expect(getStripeReturnUrls()).toEqual({
+      checkoutSuccessUrl: `${origin}/pricing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+      checkoutCancelUrl: `${origin}/pricing?checkout=cancelled`,
+      portalReturnUrl: `${origin}/pricing?billing=return`,
+    });
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "ftp://example.com/store",
+    "//example.com/store",
+    "not a URL",
+  ])("rejects unsafe or malformed app URL %s and uses the local origin", (configured) => {
+    process.env.NEXT_PUBLIC_APP_URL = configured;
+
+    expect(getStripeReturnUrls()).toEqual({
+      checkoutSuccessUrl: `${fallbackOrigin}/pricing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+      checkoutCancelUrl: `${fallbackOrigin}/pricing?checkout=cancelled`,
+      portalReturnUrl: `${fallbackOrigin}/pricing?billing=return`,
+    });
+  });
+});
+
+describe("getMySubscription", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.customerRows = [];
+    configureCustomerQuery();
+  });
+
+  it("returns an explicit free inactive status when the user has no subscription row", async () => {
+    await expect(getMySubscription("user_123")).resolves.toEqual({
+      plan: "FREE",
+      status: "inactive",
+      cancelAtPeriodEnd: false,
+      endsAt: null,
+    });
+  });
+
+  it("uses the live Stripe subscription status and modern item period end", async () => {
+    mocks.customerRows = [
+      {
+        plan: "PRO",
+        stripeSubscriptionId: "sub_live",
+        stripeCurrentPeriodEnd: new Date("2026-09-01T00:00:00.000Z"),
+        billingProvider: "stripe",
+        billingSubscriptionId: null,
+        billingCurrentPeriodEnd: null,
+      },
+    ];
+    mocks.stripe.subscriptions.retrieve.mockResolvedValue({
+      id: "sub_live",
+      status: "active",
+      cancel_at_period_end: true,
+      items: {
+        data: [{ current_period_end: 1_788_220_800 }],
+      },
+    });
+
+    await expect(getMySubscription("user_123")).resolves.toEqual({
+      plan: "PRO",
+      status: "active",
+      cancelAtPeriodEnd: true,
+      endsAt: new Date("2026-09-01T00:00:00.000Z"),
+    });
+  });
+
+  it("falls back to stored subscription state when no Stripe subscription exists", async () => {
+    const endsAt = new Date("2099-01-01T00:00:00.000Z");
+    mocks.customerRows = [
+      {
+        plan: "BUSINESS",
+        stripeSubscriptionId: null,
+        stripeCurrentPeriodEnd: null,
+        billingProvider: "creem",
+        billingSubscriptionId: "creem_sub_123",
+        billingCurrentPeriodEnd: endsAt,
+      },
+    ];
+
+    await expect(getMySubscription("user_123")).resolves.toEqual({
+      plan: "BUSINESS",
+      status: "active",
+      cancelAtPeriodEnd: false,
+      endsAt,
+    });
+    expect(mocks.stripe.subscriptions.retrieve).not.toHaveBeenCalled();
   });
 });
 
