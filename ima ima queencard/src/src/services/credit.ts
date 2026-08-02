@@ -39,7 +39,10 @@ interface PackageAllocation {
   credits: number;
 }
 
-type CreditDb = Pick<typeof db, "insert" | "select" | "update">;
+export type CreditTransactionDb = Pick<
+  typeof db,
+  "insert" | "select" | "update"
+>;
 
 export async function getCreditBalanceInTx(
   trx: Pick<typeof db, "select">,
@@ -85,7 +88,7 @@ export async function getCreditBalanceInTx(
 }
 
 export async function grantCreditsInTx(
-  trx: CreditDb,
+  trx: CreditTransactionDb,
   params: {
     userId: string;
     credits: number;
@@ -206,91 +209,100 @@ export class CreditService {
     credits: number;
     videoUuid: string;
   }): Promise<{ success: boolean; holdId: number }> {
+    return db.transaction((trx) => this.freezeInTx(trx, params));
+  }
+
+  async freezeInTx(
+    trx: CreditTransactionDb,
+    params: {
+      userId: string;
+      credits: number;
+      videoUuid: string;
+    }
+  ): Promise<{ success: boolean; holdId: number }> {
     const { userId, credits, videoUuid } = params;
 
-    return db.transaction(async (trx) => {
-      const [existingHold] = await trx
-        .select()
-        .from(creditHolds)
-        .where(eq(creditHolds.videoUuid, videoUuid))
-        .limit(1);
+    const [existingHold] = await trx
+      .select()
+      .from(creditHolds)
+      .where(eq(creditHolds.videoUuid, videoUuid))
+      .limit(1);
 
-      if (existingHold) {
-        if (existingHold.status === "HOLDING") {
-          return { success: true, holdId: existingHold.id };
-        }
-        throw new Error(`Hold already processed for video: ${videoUuid}`);
+    if (existingHold) {
+      if (existingHold.status === "HOLDING") {
+        return { success: true, holdId: existingHold.id };
       }
+      throw new Error(`Hold already processed for video: ${videoUuid}`);
+    }
 
-      const now = new Date();
+    const now = new Date();
 
-      const packages = await trx
-        .select()
-        .from(creditPackages)
-        .where(
-          and(
-            eq(creditPackages.userId, userId),
-            eq(creditPackages.status, CreditPackageStatus.ACTIVE),
-            gt(creditPackages.remainingCredits, 0),
-            or(
-              isNull(creditPackages.expiredAt),
-              gt(creditPackages.expiredAt, now)
-            )
+    const packages = await trx
+      .select()
+      .from(creditPackages)
+      .where(
+        and(
+          eq(creditPackages.userId, userId),
+          eq(creditPackages.status, CreditPackageStatus.ACTIVE),
+          gt(creditPackages.remainingCredits, 0),
+          or(
+            isNull(creditPackages.expiredAt),
+            gt(creditPackages.expiredAt, now)
           )
         )
-        .orderBy(
-          sql`${creditPackages.expiredAt} is null`,
-          asc(creditPackages.expiredAt),
-          asc(creditPackages.createdAt)
-        );
-
-      const availableCredits = packages.reduce(
-        (sum, p) => sum + p.remainingCredits,
-        0
+      )
+      .orderBy(
+        sql`${creditPackages.expiredAt} is null`,
+        asc(creditPackages.expiredAt),
+        asc(creditPackages.createdAt)
       );
-      if (availableCredits < credits) {
-        throw new Error(
-          `Insufficient credits. Required: ${credits}, Available: ${availableCredits}`
-        );
-      }
 
-      const allocation: PackageAllocation[] = [];
-      let remaining = credits;
+    const availableCredits = packages.reduce(
+      (sum, p) => sum + p.remainingCredits,
+      0
+    );
+    if (availableCredits < credits) {
+      throw new Error(
+        `Insufficient credits. Required: ${credits}, Available: ${availableCredits}`
+      );
+    }
 
-      for (const pkg of packages) {
-        if (remaining <= 0) break;
+    const allocation: PackageAllocation[] = [];
+    let remaining = credits;
 
-        const toFreeze = Math.min(pkg.remainingCredits, remaining);
-        allocation.push({ packageId: pkg.id, credits: toFreeze });
+    for (const pkg of packages) {
+      if (remaining <= 0) break;
 
-        await trx
-          .update(creditPackages)
-          .set({
-            remainingCredits: pkg.remainingCredits - toFreeze,
-            frozenCredits: pkg.frozenCredits + toFreeze,
-          })
-          .where(eq(creditPackages.id, pkg.id));
+      const toFreeze = Math.min(pkg.remainingCredits, remaining);
+      allocation.push({ packageId: pkg.id, credits: toFreeze });
 
-        remaining -= toFreeze;
-      }
-
-      const [holdResult] = await trx
-        .insert(creditHolds)
-        .values({
-          userId,
-          videoUuid,
-          credits,
-          status: "HOLDING",
-          packageAllocation: allocation,
+      await trx
+        .update(creditPackages)
+        .set({
+          remainingCredits: pkg.remainingCredits - toFreeze,
+          frozenCredits: pkg.frozenCredits + toFreeze,
         })
-        .returning({ id: creditHolds.id });
+        .where(eq(creditPackages.id, pkg.id));
 
-      if (!holdResult) {
-        throw new Error("Failed to create credit hold");
-      }
+      remaining -= toFreeze;
+    }
 
-      return { success: true, holdId: holdResult.id };
-    });
+    const [holdResult] = await trx
+      .insert(creditHolds)
+      .values({
+        userId,
+        videoUuid,
+        credits,
+        status: "HOLDING",
+        packageAllocation: allocation,
+      })
+      .returning({ id: creditHolds.id });
+
+    if (!holdResult) {
+      throw new Error("Failed to create credit hold");
+    }
+
+    return { success: true, holdId: holdResult.id };
   }
 
   /**
@@ -378,86 +390,94 @@ export class CreditService {
    * 部分结算积分。用于多图生成里部分成功的场景。
    */
   async settlePartial(videoUuid: string, settledCredits: number): Promise<void> {
-    await db.transaction(async (trx) => {
-      const [hold] = await trx
+    await db.transaction((trx) =>
+      this.settlePartialInTx(trx, videoUuid, settledCredits)
+    );
+  }
+
+  async settlePartialInTx(
+    trx: CreditTransactionDb,
+    videoUuid: string,
+    settledCredits: number
+  ): Promise<void> {
+    const [hold] = await trx
+      .select()
+      .from(creditHolds)
+      .where(eq(creditHolds.videoUuid, videoUuid))
+      .limit(1);
+
+    if (!hold) {
+      throw new Error(`Hold not found for video: ${videoUuid}`);
+    }
+
+    if (hold.status === "SETTLED" || hold.status === "RELEASED") {
+      return;
+    }
+
+    if (hold.status !== "HOLDING") {
+      throw new Error(`Invalid hold status: ${hold.status}`);
+    }
+
+    const creditsToSettle = Math.min(
+      Math.max(0, Math.floor(settledCredits)),
+      hold.credits
+    );
+    const allocation = hold.packageAllocation as PackageAllocation[];
+    let remainingToSettle = creditsToSettle;
+
+    for (const { packageId, credits } of allocation) {
+      const [pkg] = await trx
         .select()
-        .from(creditHolds)
-        .where(eq(creditHolds.videoUuid, videoUuid))
+        .from(creditPackages)
+        .where(eq(creditPackages.id, packageId))
         .limit(1);
 
-      if (!hold) {
-        throw new Error(`Hold not found for video: ${videoUuid}`);
-      }
+      if (!pkg) continue;
 
-      if (hold.status === "SETTLED" || hold.status === "RELEASED") {
-        return;
-      }
-
-      if (hold.status !== "HOLDING") {
-        throw new Error(`Invalid hold status: ${hold.status}`);
-      }
-
-      const creditsToSettle = Math.min(
-        Math.max(0, Math.floor(settledCredits)),
-        hold.credits
-      );
-      const allocation = hold.packageAllocation as PackageAllocation[];
-      let remainingToSettle = creditsToSettle;
-
-      for (const { packageId, credits } of allocation) {
-        const [pkg] = await trx
-          .select()
-          .from(creditPackages)
-          .where(eq(creditPackages.id, packageId))
-          .limit(1);
-
-        if (!pkg) continue;
-
-        const settledFromPackage = Math.min(credits, remainingToSettle);
-        const releasedFromPackage = credits - settledFromPackage;
-        const nextRemainingCredits = pkg.remainingCredits + releasedFromPackage;
-        const nextFrozenCredits = pkg.frozenCredits - credits;
-
-        await trx
-          .update(creditPackages)
-          .set({
-            remainingCredits: nextRemainingCredits,
-            frozenCredits: nextFrozenCredits,
-            status:
-              nextRemainingCredits === 0 && nextFrozenCredits === 0
-                ? CreditPackageStatus.DEPLETED
-                : pkg.status,
-          })
-          .where(eq(creditPackages.id, packageId));
-
-        remainingToSettle -= settledFromPackage;
-      }
+      const settledFromPackage = Math.min(credits, remainingToSettle);
+      const releasedFromPackage = credits - settledFromPackage;
+      const nextRemainingCredits = pkg.remainingCredits + releasedFromPackage;
+      const nextFrozenCredits = pkg.frozenCredits - credits;
 
       await trx
-        .update(creditHolds)
+        .update(creditPackages)
         .set({
-          status: creditsToSettle > 0 ? "SETTLED" : "RELEASED",
-          settledAt: new Date(),
+          remainingCredits: nextRemainingCredits,
+          frozenCredits: nextFrozenCredits,
+          status:
+            nextRemainingCredits === 0 && nextFrozenCredits === 0
+              ? CreditPackageStatus.DEPLETED
+              : pkg.status,
         })
-        .where(eq(creditHolds.videoUuid, videoUuid));
+        .where(eq(creditPackages.id, packageId));
 
-      const balance = await this.getBalanceInTx(trx, hold.userId);
-      await trx.insert(creditTransactions).values({
-        transNo: `TXN${Date.now()}${nanoid(6)}`,
-        userId: hold.userId,
-        transType:
-          creditsToSettle > 0
-            ? CreditTransType.VIDEO_CONSUME
-            : CreditTransType.REFUND,
-        credits: -creditsToSettle,
-        balanceAfter: balance.availableCredits,
-        videoUuid,
-        holdId: hold.id,
-        remark:
-          creditsToSettle > 0
-            ? `Generation partially settled: ${videoUuid}`
-            : `Generation produced no billable output: ${videoUuid}`,
-      });
+      remainingToSettle -= settledFromPackage;
+    }
+
+    await trx
+      .update(creditHolds)
+      .set({
+        status: creditsToSettle > 0 ? "SETTLED" : "RELEASED",
+        settledAt: new Date(),
+      })
+      .where(eq(creditHolds.videoUuid, videoUuid));
+
+    const balance = await this.getBalanceInTx(trx, hold.userId);
+    await trx.insert(creditTransactions).values({
+      transNo: `TXN${Date.now()}${nanoid(6)}`,
+      userId: hold.userId,
+      transType:
+        creditsToSettle > 0
+          ? CreditTransType.VIDEO_CONSUME
+          : CreditTransType.REFUND,
+      credits: -creditsToSettle,
+      balanceAfter: balance.availableCredits,
+      videoUuid,
+      holdId: hold.id,
+      remark:
+        creditsToSettle > 0
+          ? `Generation partially settled: ${videoUuid}`
+          : `Generation produced no billable output: ${videoUuid}`,
     });
   }
 
@@ -465,64 +485,69 @@ export class CreditService {
    * 释放积分（任务失败时调用）
    */
   async release(videoUuid: string): Promise<void> {
-    await db.transaction(async (trx) => {
-      const [hold] = await trx
+    await db.transaction((trx) => this.releaseInTx(trx, videoUuid));
+  }
+
+  async releaseInTx(
+    trx: CreditTransactionDb,
+    videoUuid: string
+  ): Promise<void> {
+    const [hold] = await trx
+      .select()
+      .from(creditHolds)
+      .where(eq(creditHolds.videoUuid, videoUuid))
+      .limit(1);
+
+    if (!hold) {
+      throw new Error(`Hold not found for video: ${videoUuid}`);
+    }
+
+    if (hold.status === "RELEASED") {
+      return;
+    }
+
+    if (hold.status !== "HOLDING") {
+      throw new Error(`Invalid hold status: ${hold.status}`);
+    }
+
+    const allocation = hold.packageAllocation as PackageAllocation[];
+
+    for (const { packageId, credits } of allocation) {
+      const [pkg] = await trx
         .select()
-        .from(creditHolds)
-        .where(eq(creditHolds.videoUuid, videoUuid))
+        .from(creditPackages)
+        .where(eq(creditPackages.id, packageId))
         .limit(1);
 
-      if (!hold) {
-        throw new Error(`Hold not found for video: ${videoUuid}`);
+      if (pkg) {
+        await trx
+          .update(creditPackages)
+          .set({
+            remainingCredits: pkg.remainingCredits + credits,
+            frozenCredits: pkg.frozenCredits - credits,
+          })
+          .where(eq(creditPackages.id, packageId));
       }
+    }
 
-      if (hold.status === "RELEASED") {
-        return;
-      }
+    await trx
+      .update(creditHolds)
+      .set({
+        status: "RELEASED",
+        settledAt: new Date(),
+      })
+      .where(eq(creditHolds.videoUuid, videoUuid));
 
-      if (hold.status !== "HOLDING") {
-        throw new Error(`Invalid hold status: ${hold.status}`);
-      }
-
-      const allocation = hold.packageAllocation as PackageAllocation[];
-
-      for (const { packageId, credits } of allocation) {
-        const [pkg] = await trx
-          .select()
-          .from(creditPackages)
-          .where(eq(creditPackages.id, packageId))
-          .limit(1);
-
-        if (pkg) {
-          await trx
-            .update(creditPackages)
-            .set({
-              remainingCredits: pkg.remainingCredits + credits,
-              frozenCredits: pkg.frozenCredits - credits,
-            })
-            .where(eq(creditPackages.id, packageId));
-        }
-      }
-
-      await trx
-        .update(creditHolds)
-        .set({
-          status: "RELEASED",
-          settledAt: new Date(),
-        })
-        .where(eq(creditHolds.videoUuid, videoUuid));
-
-      const balance = await this.getBalanceInTx(trx, hold.userId);
-      await trx.insert(creditTransactions).values({
-        transNo: `TXN${Date.now()}${nanoid(6)}`,
-        userId: hold.userId,
-        transType: CreditTransType.REFUND,
-        credits: 0,
-        balanceAfter: balance.availableCredits,
-        videoUuid,
-        holdId: hold.id,
-        remark: `Video generation failed, credits released: ${videoUuid}`,
-      });
+    const balance = await this.getBalanceInTx(trx, hold.userId);
+    await trx.insert(creditTransactions).values({
+      transNo: `TXN${Date.now()}${nanoid(6)}`,
+      userId: hold.userId,
+      transType: CreditTransType.REFUND,
+      credits: 0,
+      balanceAfter: balance.availableCredits,
+      videoUuid,
+      holdId: hold.id,
+      remark: `Video generation failed, credits released: ${videoUuid}`,
     });
   }
 

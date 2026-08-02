@@ -12,6 +12,7 @@ import {
 import { nanoid } from "nanoid";
 
 import { calculateModelCredits, getModelConfig } from "@/config/credits";
+import { loadGenerationWorkerConfig } from "@/config/generation-worker";
 import {
   db,
   generatedAssets,
@@ -32,6 +33,7 @@ export type ImageGenerationCapability =
 export type ImageGenerationSource = "manual" | "prompt-library" | "regenerate";
 
 export interface ImageGenerationCreateInput {
+  idempotencyKey?: string;
   source?: ImageGenerationSource;
   sourceCaseId?: string | null;
   sourceCaseCategory?: string | null;
@@ -57,6 +59,10 @@ export interface ImageGenerationListOptions {
 
 const MAX_PROMPT_LENGTH = 2000;
 const MAX_REFERENCE_IMAGES = 3;
+const MIN_IDEMPOTENCY_KEY_LENGTH = 8;
+const MAX_IDEMPOTENCY_KEY_LENGTH = 120;
+const IDEMPOTENCY_UNIQUE_CONSTRAINT =
+  "generation_tasks_user_id_idempotency_key_idx";
 const DEFAULT_REFERENCE_IMAGE_MODEL = "gpt-image-2-edit";
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
@@ -145,6 +151,26 @@ function normalizeResolution(value: unknown) {
   return "auto";
 }
 
+function normalizeIdempotencyKey(value: unknown) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    throw new ApiError("Idempotency key must be a string", 400);
+  }
+
+  const idempotencyKey = value.trim();
+  if (
+    idempotencyKey.length < MIN_IDEMPOTENCY_KEY_LENGTH ||
+    idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH
+  ) {
+    throw new ApiError("Idempotency key must be 8 to 120 characters", 400, {
+      minLength: MIN_IDEMPOTENCY_KEY_LENGTH,
+      maxLength: MAX_IDEMPOTENCY_KEY_LENGTH,
+    });
+  }
+
+  return idempotencyKey;
+}
+
 function inferCapability(
   capability: ImageGenerationCapability | undefined,
   model: string
@@ -205,6 +231,7 @@ function normalizeCreateInput(input: ImageGenerationCreateInput) {
   const capability = inferCapability(input.capability, model);
 
   return {
+    idempotencyKey: normalizeIdempotencyKey(input.idempotencyKey),
     source: input.source ?? "manual",
     sourceCaseId: input.sourceCaseId ?? null,
     sourceCaseCategory: input.sourceCaseCategory ?? null,
@@ -326,6 +353,63 @@ function taskReferenceImages(task: GenerationTask) {
     : [];
 }
 
+async function findTaskByIdempotencyKey(
+  queryDb: Pick<typeof db, "select">,
+  userId: string,
+  idempotencyKey: string
+) {
+  const [task] = await queryDb
+    .select()
+    .from(generationTasks)
+    .where(
+      and(
+        eq(generationTasks.userId, userId),
+        eq(generationTasks.idempotencyKey, idempotencyKey)
+      )
+    )
+    .limit(1);
+
+  return task ?? null;
+}
+
+function isIdempotencyUniqueConflict(error: unknown) {
+  let current: unknown = error;
+
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    if (typeof current !== "object") return false;
+    const databaseError = current as {
+      code?: unknown;
+      constraint?: unknown;
+      constraint_name?: unknown;
+      cause?: unknown;
+    };
+    const constraint =
+      databaseError.constraint ?? databaseError.constraint_name;
+    if (
+      databaseError.code === "23505" &&
+      constraint === IDEMPOTENCY_UNIQUE_CONSTRAINT
+    ) {
+      return true;
+    }
+    current = databaseError.cause;
+  }
+
+  return false;
+}
+
+function asInsufficientCreditApiError(error: unknown) {
+  if (!(error instanceof Error)) return null;
+  const match = error.message.match(
+    /^Insufficient credits\. Required: (\d+), Available: (\d+)$/
+  );
+  if (!match) return null;
+
+  return new ApiError("Insufficient credits", 402, {
+    requiredCredits: Number(match[1]),
+    availableCredits: Number(match[2]),
+  });
+}
+
 export async function createImageGenerationTask(
   userId: string,
   input: ImageGenerationCreateInput
@@ -336,39 +420,76 @@ export async function createImageGenerationTask(
     resolution: normalized.resolution,
     referenceImageCount: normalized.referenceImages.length,
   });
-  const balance = await creditService.getBalance(userId);
-  if (balance.availableCredits < requestedCredits) {
-    throw new ApiError("Insufficient credits", 402, {
-      requiredCredits: requestedCredits,
-      availableCredits: balance.availableCredits,
-    });
-  }
-
   const taskId = `gen_${nanoid(16)}`;
-  const [task] = await db.insert(generationTasks).values({
-    id: taskId,
-    userId,
-    source: normalized.source,
-    sourceCaseId: normalized.sourceCaseId,
-    sourceCaseCategory: normalized.sourceCaseCategory,
-    sourceNoteUrl: normalized.sourceNoteUrl,
-    sourceAuthorUrl: normalized.sourceAuthorUrl,
-    prompt: normalized.prompt,
-    originalPrompt: normalized.aiEnhance ? normalized.prompt : null,
-    referenceImages: normalized.referenceImages,
-    model: normalized.model,
-    providerModel: normalized.providerModel,
-    capability: normalized.capability,
-    aspectRatio: normalized.aspectRatio,
-    resolution: normalized.resolution,
-    outputCount: normalized.outputCount,
-    status: "queued",
-    requestedCredits,
-    creditHoldKey: taskId,
-    updatedAt: new Date(),
-  }).returning();
+  const workerConfig = loadGenerationWorkerConfig(process.env);
 
-  return publicTask(task!);
+  try {
+    return await db.transaction(async (trx) => {
+      if (normalized.idempotencyKey) {
+        const existing = await findTaskByIdempotencyKey(
+          trx,
+          userId,
+          normalized.idempotencyKey
+        );
+        if (existing) return publicTask(existing);
+      }
+
+      await creditService.freezeInTx(trx, {
+        userId,
+        credits: requestedCredits,
+        videoUuid: taskId,
+      });
+
+      const now = new Date();
+      const [task] = await trx
+        .insert(generationTasks)
+        .values({
+          id: taskId,
+          userId,
+          idempotencyKey: normalized.idempotencyKey,
+          source: normalized.source,
+          sourceCaseId: normalized.sourceCaseId,
+          sourceCaseCategory: normalized.sourceCaseCategory,
+          sourceNoteUrl: normalized.sourceNoteUrl,
+          sourceAuthorUrl: normalized.sourceAuthorUrl,
+          prompt: normalized.prompt,
+          originalPrompt: normalized.aiEnhance ? normalized.prompt : null,
+          referenceImages: normalized.referenceImages,
+          model: normalized.model,
+          providerModel: normalized.providerModel,
+          capability: normalized.capability,
+          aspectRatio: normalized.aspectRatio,
+          resolution: normalized.resolution,
+          outputCount: normalized.outputCount,
+          status: "queued",
+          requestedCredits,
+          creditHoldKey: taskId,
+          maxAttempts: workerConfig.maxAttempts,
+          nextAttemptAt: now,
+          updatedAt: now,
+        })
+        .returning();
+
+      if (!task) {
+        throw new Error("Failed to create image generation task");
+      }
+
+      return publicTask(task);
+    });
+  } catch (error) {
+    if (normalized.idempotencyKey && isIdempotencyUniqueConflict(error)) {
+      const existing = await findTaskByIdempotencyKey(
+        db,
+        userId,
+        normalized.idempotencyKey
+      );
+      if (existing) return publicTask(existing);
+    }
+
+    const insufficientCredits = asInsufficientCreditApiError(error);
+    if (insufficientCredits) throw insufficientCredits;
+    throw error;
+  }
 }
 
 export async function runImageGenerationTask(userId: string, taskId: string) {

@@ -1,11 +1,47 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/error";
 
+const mocks = vi.hoisted(() => ({
+  db: {
+    select: vi.fn(),
+    insert: vi.fn(),
+    update: vi.fn(),
+    transaction: vi.fn(),
+  },
+  creditService: {
+    freezeInTx: vi.fn(),
+  },
+  loadGenerationWorkerConfig: vi.fn(() => ({ maxAttempts: 3 })),
+}));
+
+vi.mock("drizzle-orm", () => ({
+  and: vi.fn((...conditions: unknown[]) => ({ type: "and", conditions })),
+  asc: vi.fn(),
+  desc: vi.fn(),
+  eq: vi.fn((column: unknown, value: unknown) => ({
+    type: "eq",
+    column,
+    value,
+  })),
+  ilike: vi.fn(),
+  inArray: vi.fn(),
+  or: vi.fn(),
+  sql: vi.fn(),
+}));
+
+vi.mock("@/config/generation-worker", () => ({
+  loadGenerationWorkerConfig: mocks.loadGenerationWorkerConfig,
+}));
+
 vi.mock("@/db", () => ({
-  db: {},
+  db: mocks.db,
   generatedAssets: {},
-  generationTasks: {},
+  generationTasks: {
+    id: "generationTasks.id",
+    userId: "generationTasks.userId",
+    idempotencyKey: "generationTasks.idempotencyKey",
+  },
 }));
 
 vi.mock("@/services/image-provider", () => ({
@@ -13,12 +49,126 @@ vi.mock("@/services/image-provider", () => ({
 }));
 
 vi.mock("@/services/credit", () => ({
-  creditService: {},
+  creditService: mocks.creditService,
 }));
 
-import { estimateImageGeneration } from "./image-generation";
+import {
+  createImageGenerationTask,
+  estimateImageGeneration,
+} from "./image-generation";
+
+function validInput(idempotencyKey?: string, prompt = "make a poster") {
+  return {
+    idempotencyKey,
+    prompt,
+    model: "gpt-image-2-edit",
+    referenceImages: ["https://example.com/reference.png"],
+    outputCount: 1,
+  };
+}
+
+function taskFromInsert(values: Record<string, unknown>) {
+  return {
+    settledCredits: 0,
+    errorCode: null,
+    errorMessage: null,
+    completedAt: null,
+    createdAt: new Date(),
+    ...values,
+  };
+}
+
+function comparisonValue(condition: any, column: string) {
+  const comparisons = condition?.type === "and"
+    ? condition.conditions
+    : [condition];
+  return comparisons.find((item: any) => item?.column === column)?.value;
+}
+
+function transactionalDb(options: { insertError?: Error } = {}) {
+  let committedTasks: any[] = [];
+  let committedHolds: any[] = [];
+  let transactionQueue = Promise.resolve();
+
+  mocks.creditService.freezeInTx.mockImplementation(
+    async (trx: any, params: Record<string, unknown>) => {
+      trx.pendingHolds.push(params);
+      return { success: true, holdId: trx.pendingHolds.length };
+    }
+  );
+
+  mocks.db.transaction.mockImplementation((callback: (trx: any) => Promise<any>) => {
+    const execute = async () => {
+      const trx = {
+        pendingTasks: [...committedTasks],
+        pendingHolds: [...committedHolds],
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn((condition: unknown) => ({
+              limit: vi.fn(async () => {
+                const userId = comparisonValue(
+                  condition,
+                  "generationTasks.userId"
+                );
+                const idempotencyKey = comparisonValue(
+                  condition,
+                  "generationTasks.idempotencyKey"
+                );
+                const task = trx.pendingTasks.find(
+                  (candidate: any) =>
+                    candidate.userId === userId &&
+                    candidate.idempotencyKey === idempotencyKey
+                );
+                return task ? [task] : [];
+              }),
+            })),
+          })),
+        })),
+        insert: vi.fn(() => ({
+          values: vi.fn((values: Record<string, unknown>) => ({
+            returning: vi.fn(async () => {
+              if (options.insertError) throw options.insertError;
+              const task = taskFromInsert(values);
+              trx.pendingTasks.push(task);
+              return [task];
+            }),
+          })),
+        })),
+      };
+
+      const result = await callback(trx);
+      committedTasks = trx.pendingTasks;
+      committedHolds = trx.pendingHolds;
+      return result;
+    };
+
+    const pending = transactionQueue.then(execute, execute);
+    transactionQueue = pending.then(() => undefined, () => undefined);
+    return pending;
+  });
+
+  return {
+    tasks: () => committedTasks,
+    holds: () => committedHolds,
+  };
+}
+
+function selectRows(rows: unknown[]) {
+  return {
+    from: vi.fn(() => ({
+      where: vi.fn(() => ({
+        limit: vi.fn().mockResolvedValue(rows),
+      })),
+    })),
+  };
+}
 
 describe("image generation validation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadGenerationWorkerConfig.mockReturnValue({ maxAttempts: 3 });
+  });
+
   it("rejects disabled legacy image models", () => {
     expect(() =>
       estimateImageGeneration({
@@ -47,12 +197,145 @@ describe("image generation validation", () => {
   });
 
   it("rejects no-reference image generation", () => {
-    expect(
-      () => estimateImageGeneration({
+    expect(() =>
+      estimateImageGeneration({
         prompt: "make a poster",
         model: "doubao-seedream-5-edit",
         outputCount: 4,
       })
     ).toThrow(ApiError);
+  });
+});
+
+describe("idempotent image generation enqueue", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadGenerationWorkerConfig.mockReturnValue({ maxAttempts: 3 });
+  });
+
+  it("converges ten concurrent same-user requests to one task and one hold", async () => {
+    const state = transactionalDb();
+
+    const tasks = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        createImageGenerationTask("user_1", validInput("request_123"))
+      )
+    );
+
+    expect(new Set(tasks.map((task) => task.taskId))).toEqual(
+      new Set([tasks[0].taskId])
+    );
+    expect(mocks.creditService.freezeInTx).toHaveBeenCalledTimes(1);
+    expect(state.tasks()).toHaveLength(1);
+    expect(state.holds()).toHaveLength(1);
+    expect(state.tasks()[0].creditHoldKey).toBe(state.tasks()[0].id);
+    expect(state.holds()[0].videoUuid).toBe(state.tasks()[0].id);
+  });
+
+  it("rolls back the credit hold when task insertion fails", async () => {
+    const state = transactionalDb({ insertError: new Error("insert failed") });
+
+    await expect(
+      createImageGenerationTask("user_1", validInput("request_123"))
+    ).rejects.toThrow("insert failed");
+
+    expect(mocks.creditService.freezeInTx).toHaveBeenCalledTimes(1);
+    expect(state.tasks()).toEqual([]);
+    expect(state.holds()).toEqual([]);
+  });
+
+  it("normalizes keys, validates their length, and isolates them by user", async () => {
+    const state = transactionalDb();
+
+    await expect(
+      createImageGenerationTask("user_1", validInput("  request_123  "))
+    ).resolves.toBeDefined();
+    await expect(
+      createImageGenerationTask("user_2", validInput("request_123"))
+    ).resolves.toBeDefined();
+
+    expect(state.tasks()).toHaveLength(2);
+    expect(state.tasks().map((task) => task.idempotencyKey)).toEqual([
+      "request_123",
+      "request_123",
+    ]);
+    expect(mocks.creditService.freezeInTx).toHaveBeenCalledTimes(2);
+    await expect(
+      createImageGenerationTask("user_1", validInput("1234567"))
+    ).rejects.toBeInstanceOf(ApiError);
+    await expect(
+      createImageGenerationTask("user_1", validInput("x".repeat(121)))
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("reuses an existing task without comparing prompt text", async () => {
+    transactionalDb();
+
+    const first = await createImageGenerationTask(
+      "user_1",
+      validInput("request_123", "first prompt")
+    );
+    const second = await createImageGenerationTask(
+      "user_1",
+      validInput("request_123", "completely different prompt")
+    );
+
+    expect(second.taskId).toBe(first.taskId);
+    expect(second.prompt).toBe("first prompt");
+    expect(mocks.creditService.freezeInTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads after the idempotency constraint loses a unique-key race", async () => {
+    const existing = taskFromInsert({
+      ...validInput("request_123"),
+      id: "gen_existing",
+      userId: "user_1",
+      status: "queued",
+      source: "manual",
+      sourceCaseId: null,
+      sourceCaseCategory: null,
+      providerModel: "gpt-image-2",
+      capability: "image-edit",
+      aspectRatio: "3:4",
+      resolution: "auto",
+      requestedCredits: 1,
+      creditHoldKey: "gen_existing",
+    });
+    const conflict = Object.assign(new Error("duplicate key"), {
+      code: "23505",
+      constraint: "generation_tasks_user_id_idempotency_key_idx",
+    });
+    mocks.db.transaction.mockRejectedValue(conflict);
+    mocks.db.select.mockReturnValue(selectRows([existing]));
+
+    await expect(
+      createImageGenerationTask("user_1", validInput("request_123"))
+    ).resolves.toMatchObject({ taskId: "gen_existing" });
+  });
+
+  it("does not swallow unrelated database errors", async () => {
+    const unrelated = Object.assign(new Error("duplicate task id"), {
+      code: "23505",
+      constraint: "generation_tasks_pkey",
+    });
+    mocks.db.transaction.mockRejectedValue(unrelated);
+
+    await expect(
+      createImageGenerationTask("user_1", validInput("request_123"))
+    ).rejects.toBe(unrelated);
+    expect(mocks.db.select).not.toHaveBeenCalled();
+  });
+
+  it("stores the configured maximum attempts and initial schedule", async () => {
+    const state = transactionalDb();
+    mocks.loadGenerationWorkerConfig.mockReturnValue({ maxAttempts: 2 });
+
+    await createImageGenerationTask("user_1", validInput("request_123"));
+
+    expect(state.tasks()[0]).toMatchObject({
+      maxAttempts: 2,
+      creditHoldKey: state.tasks()[0].id,
+    });
+    expect(state.tasks()[0].nextAttemptAt).toBeInstanceOf(Date);
   });
 });
