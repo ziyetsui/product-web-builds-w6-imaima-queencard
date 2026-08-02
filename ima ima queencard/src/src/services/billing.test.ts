@@ -476,6 +476,36 @@ describe("getMySubscription", () => {
     });
   });
 
+  it("treats a future Stripe cancel_at as a scheduled cancellation", async () => {
+    mocks.customerRows = [
+      {
+        plan: "PRO",
+        stripeSubscriptionId: "sub_scheduled_cancel",
+        stripeCurrentPeriodEnd: new Date("2026-10-01T00:00:00.000Z"),
+        billingProvider: "stripe",
+        billingSubscriptionId: null,
+        billingCurrentPeriodEnd: null,
+      },
+    ];
+    mocks.stripe.subscriptions.retrieve.mockResolvedValue({
+      id: "sub_scheduled_cancel",
+      status: "active",
+      cancel_at_period_end: false,
+      cancel_at: 1_788_220_800,
+      cancellation_details: { reason: "cancellation_requested" },
+      items: {
+        data: [{ current_period_end: 1_790_812_800 }],
+      },
+    });
+
+    await expect(getMySubscription("user_123")).resolves.toEqual({
+      plan: "PRO",
+      status: "active",
+      cancelAtPeriodEnd: true,
+      endsAt: new Date("2026-09-01T00:00:00.000Z"),
+    });
+  });
+
   it("falls back to stored subscription state when no Stripe subscription exists", async () => {
     const endsAt = new Date("2099-01-01T00:00:00.000Z");
     mocks.customerRows = [

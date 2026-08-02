@@ -406,12 +406,23 @@ export async function getMySubscription(userId: string) {
     const livePeriodEnd =
       legacyPeriodEnd ??
       (itemPeriodEnds.length > 0 ? Math.max(...itemPeriodEnds) : null);
+    const scheduledCancelAt =
+      subscription.status === "active" &&
+      typeof subscription.cancel_at === "number" &&
+      subscription.cancel_at * 1000 > Date.now()
+        ? subscription.cancel_at
+        : null;
 
     return {
       plan: customer.plan ?? "FREE",
       status: subscription.status,
-      cancelAtPeriodEnd: subscription.cancel_at_period_end,
-      endsAt: livePeriodEnd ? new Date(livePeriodEnd * 1000) : storedEndsAt,
+      cancelAtPeriodEnd:
+        subscription.cancel_at_period_end || scheduledCancelAt !== null,
+      endsAt: scheduledCancelAt
+        ? new Date(scheduledCancelAt * 1000)
+        : livePeriodEnd
+          ? new Date(livePeriodEnd * 1000)
+          : storedEndsAt,
     };
   }
 
