@@ -13,6 +13,14 @@ interface CheckoutButtonProps {
   disabled?: boolean;
 }
 
+export function getCheckoutEndpoint(
+  provider = process.env.NEXT_PUBLIC_BILLING_PROVIDER
+) {
+  return provider === "creem"
+    ? "/api/billing/creem/checkout"
+    : "/api/billing/stripe/checkout";
+}
+
 export function CheckoutButton({
   productKey,
   label,
@@ -30,8 +38,11 @@ export function CheckoutButton({
     }
 
     setLoading(true);
+    const provider =
+      process.env.NEXT_PUBLIC_BILLING_PROVIDER === "creem" ? "creem" : "stripe";
+    const providerName = provider === "creem" ? "Creem" : "Stripe";
     try {
-      const response = await fetch("/api/billing/creem/checkout", {
+      const response = await fetch(getCheckoutEndpoint(provider), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ productKey }),
@@ -53,7 +64,7 @@ export function CheckoutButton({
     } catch (error) {
       console.warn("Checkout session error:", error);
       toast.error("无法创建支付链接", {
-        description: "请检查 Creem 环境变量和产品配置是否已经完成。",
+        description: `请检查 ${providerName} 环境变量和产品配置是否已经完成。`,
       });
     } finally {
       setLoading(false);
