@@ -44,10 +44,19 @@ export type StripeSessionResult =
 export type CheckoutSessionResult = StripeSessionResult;
 
 function getAppUrl() {
-  return (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:8080").replace(
-    /\/$/,
-    ""
-  );
+  const fallbackOrigin = "http://localhost:8080";
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (!configuredUrl) return fallbackOrigin;
+
+  try {
+    const url = new URL(configuredUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return fallbackOrigin;
+    }
+    return url.origin;
+  } catch {
+    return fallbackOrigin;
+  }
 }
 
 export function getStripeReturnUrls() {
@@ -239,9 +248,12 @@ export async function createStripeSession(userId: string, productKey: string) {
 
   const user = await getCurrentUser();
   if (!user) {
-    return { success: false as const, url: null };
+    return { success: false as const, url: null, error: "Missing user" };
   }
-  const email = user.email!;
+  if (!user.email) {
+    return { success: false as const, url: null, error: "Missing user email" };
+  }
+  const email = user.email;
   const metadata = {
     userId,
     productKey: product.key,
@@ -264,16 +276,18 @@ export async function createStripeSession(userId: string, productKey: string) {
   if (product.mode === "subscription") {
     checkoutParams.subscription_data = { metadata };
   } else {
-    checkoutParams.payment_method_types = ["card", "alipay", "wechat_pay"];
-    checkoutParams.payment_method_options = {
-      wechat_pay: { client: "web" },
-    };
     checkoutParams.payment_intent_data = { metadata };
   }
 
   const session = await stripe.checkout.sessions.create(checkoutParams);
 
-  if (!session.url) return { success: false as const, url: null };
+  if (!session.url) {
+    return {
+      success: false as const,
+      url: null,
+      error: "Stripe checkout did not return a URL",
+    };
+  }
   return { success: true as const, url: session.url };
 }
 
@@ -349,16 +363,79 @@ export async function getMySubscription(userId: string) {
   const [customer] = await db
     .select({
       plan: customers.plan,
+      stripeSubscriptionId: customers.stripeSubscriptionId,
       stripeCurrentPeriodEnd: customers.stripeCurrentPeriodEnd,
+      billingProvider: customers.billingProvider,
+      billingSubscriptionId: customers.billingSubscriptionId,
       billingCurrentPeriodEnd: customers.billingCurrentPeriodEnd,
     })
     .from(customers)
     .where(eq(customers.authUserId, userId))
     .limit(1);
 
-  if (!customer) return null;
+  if (!customer) {
+    return {
+      plan: "FREE" as const,
+      status: "inactive" as const,
+      cancelAtPeriodEnd: false,
+      endsAt: null,
+    };
+  }
+
+  const storedEndsAt =
+    customer.billingCurrentPeriodEnd ?? customer.stripeCurrentPeriodEnd;
+  const stripeSubscriptionId =
+    (!customer.billingProvider || customer.billingProvider === "stripe")
+      ? customer.stripeSubscriptionId ?? customer.billingSubscriptionId
+      : null;
+
+  if (stripeSubscriptionId) {
+    const subscription = await stripe.subscriptions.retrieve(
+      stripeSubscriptionId
+    );
+    const legacyPeriodEnd = (
+      subscription as Stripe.Subscription & { current_period_end?: number }
+    ).current_period_end;
+    const itemPeriodEnds = subscription.items.data
+      .map(
+        (item) =>
+          (item as Stripe.SubscriptionItem & { current_period_end?: number })
+            .current_period_end
+      )
+      .filter((value): value is number => typeof value === "number");
+    const livePeriodEnd =
+      legacyPeriodEnd ??
+      (itemPeriodEnds.length > 0 ? Math.max(...itemPeriodEnds) : null);
+    const scheduledCancelAt =
+      subscription.status === "active" &&
+      typeof subscription.cancel_at === "number" &&
+      subscription.cancel_at * 1000 > Date.now()
+        ? subscription.cancel_at
+        : null;
+
+    return {
+      plan: customer.plan ?? "FREE",
+      status: subscription.status,
+      cancelAtPeriodEnd:
+        subscription.cancel_at_period_end || scheduledCancelAt !== null,
+      endsAt: scheduledCancelAt
+        ? new Date(scheduledCancelAt * 1000)
+        : livePeriodEnd
+          ? new Date(livePeriodEnd * 1000)
+          : storedEndsAt,
+    };
+  }
+
+  const isActive =
+    customer.plan !== null &&
+    customer.plan !== "FREE" &&
+    storedEndsAt !== null &&
+    storedEndsAt.getTime() > Date.now();
+
   return {
-    plan: customer.plan,
-    endsAt: customer.billingCurrentPeriodEnd ?? customer.stripeCurrentPeriodEnd,
+    plan: customer.plan ?? "FREE",
+    status: isActive ? ("active" as const) : ("inactive" as const),
+    cancelAtPeriodEnd: false,
+    endsAt: storedEndsAt,
   };
 }

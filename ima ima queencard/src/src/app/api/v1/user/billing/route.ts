@@ -6,6 +6,7 @@ import { apiSuccess, handleApiError } from "@/lib/api/response";
 import { db } from "@/db";
 import { sql } from "drizzle-orm";
 import type { CreditTransType } from "@/db/schema";
+import { getMySubscription } from "@/services/billing";
 
 type BillingPackageRow = {
   id: number;
@@ -37,6 +38,7 @@ type BillingPackageRow = {
 export async function GET(request: NextRequest) {
   try {
     const user = await requireAuth(request);
+    const subscription = await getMySubscription(user.id);
     const { searchParams } = new URL(request.url);
 
     const limit = Number.parseInt(searchParams.get("limit") || "20");
@@ -131,6 +133,7 @@ export async function GET(request: NextRequest) {
         id: user.id,
         createdAt: user.createdAt,
       },
+      subscription,
       invoices,
       nextCursor,
       hasMore,
