@@ -11,6 +11,7 @@ describe("image generation model options", () => {
       "gpt-image-2-edit",
       "gemini-3.1-flash-edit",
       "seedream-5-edit",
+      "doubao-seedream-5-edit",
       "viduq2-i2i",
     ]);
     expect(

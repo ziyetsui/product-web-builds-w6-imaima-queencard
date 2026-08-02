@@ -154,7 +154,7 @@ export const IMAGE_MODEL_CREDIT_PRICING: Record<string, ModelConfig> = {
     name: "Doubao Seedream 5.0",
     description: "Doubao Seedream 5.0 reference image editing.",
     creditCost: { base: 4 },
-    enabled: false,
+    enabled: true,
     badge: "备用",
   },
   "doubao-seedream-5-0-260128-edit": {
