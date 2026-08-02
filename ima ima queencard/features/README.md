@@ -33,3 +33,7 @@ features/
 - `0008_agent-reverse-engineering`: reverse-engineering method spec.
 - `0009_merge-deployment`: merge/deployment spec and live smoke evidence.
 - `9999_archive-other-projects`: unrelated legacy notes kept as archive material.
+- `0009_prompt-replication`: pattern engine v4 — fill-in variables over a hidden composed prompt (branch feat/prompt-replication).
+- `0010_model-lab`: evaluate and onboard additional image generation models.
+- `0011_payment-upgrade`: production-ready payment — real keys, webhook reliability, credit consistency, refunds.
+- `0012_admin-console`: operations console over existing admin APIs with full audit.
