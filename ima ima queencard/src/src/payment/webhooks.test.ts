@@ -138,6 +138,62 @@ describe("handleEvent", () => {
     );
   });
 
+  it("uses a distinct fulfillment key for each subscription invoice", async () => {
+    await handleEvent(invoicePaymentSucceededEvent({ id: "in_first" }));
+    await handleEvent(invoicePaymentSucceededEvent({ id: "in_renewal" }));
+
+    expect(mocks.fulfillCreditGrantOnce).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ fulfillmentKey: "stripe:invoice:in_first" })
+    );
+    expect(mocks.fulfillCreditGrantOnce).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ fulfillmentKey: "stripe:invoice:in_renewal" })
+    );
+  });
+
+  it("records unknown subscription products as failed without granting credits", async () => {
+    mocks.retrieveSubscription.mockResolvedValue(
+      stripeSubscription({
+        metadata: { userId: "user_123", productKey: "unknown" },
+      })
+    );
+
+    await handleEvent(
+      invoicePaymentSucceededEvent({
+        subscription_details: {
+          metadata: { userId: "user_123", productKey: "unknown" },
+        },
+      } as never)
+    );
+
+    expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
+    expect(mocks.markFailed).toHaveBeenCalledWith(
+      "stripe:invoice:in_123",
+      "Unknown subscription product"
+    );
+  });
+
+  it("records missing subscription user ids as failed without granting credits", async () => {
+    mocks.retrieveSubscription.mockResolvedValue(
+      stripeSubscription({ metadata: { productKey: "creator_monthly" } })
+    );
+
+    await handleEvent(
+      invoicePaymentSucceededEvent({
+        subscription_details: {
+          metadata: { productKey: "creator_monthly" },
+        },
+      } as never)
+    );
+
+    expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
+    expect(mocks.markFailed).toHaveBeenCalledWith(
+      "stripe:invoice:in_123",
+      "Missing userId"
+    );
+  });
+
   it("falls back to stripeCustomerId when subscription metadata has no userId", async () => {
     mocks.retrieveSubscription.mockResolvedValue(
       stripeSubscription({ metadata: {} })
