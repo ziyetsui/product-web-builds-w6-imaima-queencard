@@ -57,7 +57,6 @@ describe("image credit pricing", () => {
       "gemini-3.1-flash-edit",
       "seedream-5-edit",
       "gpt-image-2-edit",
-      "doubao-seedream-5-edit",
       "viduq2-i2i",
     ]);
     expect(getModelConfig("gpt-image-2-all")?.creditCost.base).toBe(4);
