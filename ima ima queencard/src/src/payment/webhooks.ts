@@ -439,6 +439,32 @@ async function handleInvoicePaymentFailed(
   );
 }
 
+async function handlePaymentIntentFailed(
+  event: Stripe.DiscriminatedEvent,
+  paymentIntent: Stripe.PaymentIntent
+) {
+  const metadata = {
+    failureCode: paymentIntent.last_payment_error?.code ?? null,
+    declineCode: paymentIntent.last_payment_error?.decline_code ?? null,
+  };
+
+  return recordSkippedFulfillment(
+    {
+      fulfillmentKey: `stripe:payment_intent_failed:${paymentIntent.id}`,
+      eventId: getEventId(event),
+      eventType: event.type,
+      stripeCustomerId: getStripeCustomerId(paymentIntent.customer),
+      stripePaymentIntentId: paymentIntent.id,
+      stripeChargeId: getChargeId(paymentIntent.latest_charge),
+      userId: getMetadataValue(paymentIntent.metadata, "userId"),
+      productKey: getMetadataValue(paymentIntent.metadata, "productKey"),
+      credits: 0,
+      metadata,
+    },
+    "Payment intent failed"
+  );
+}
+
 async function handleChargeRefunded(
   event: Stripe.DiscriminatedEvent,
   charge: Stripe.Charge
@@ -524,6 +550,11 @@ export async function handleEvent(event: Stripe.DiscriminatedEvent) {
       );
     case "invoice.payment_failed":
       return handleInvoicePaymentFailed(event, event.data.object as Stripe.Invoice);
+    case "payment_intent.payment_failed":
+      return handlePaymentIntentFailed(
+        event,
+        event.data.object as Stripe.PaymentIntent
+      );
     case "customer.subscription.updated":
       return handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
     case "customer.subscription.deleted":

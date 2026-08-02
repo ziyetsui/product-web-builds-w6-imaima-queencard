@@ -179,6 +179,34 @@ export function invoicePaymentFailedEvent(
   } as unknown as Stripe.DiscriminatedEvent;
 }
 
+export function paymentIntentFailedEvent(
+  overrides: Partial<Stripe.PaymentIntent> = {}
+) {
+  return {
+    id: "evt_payment_intent_failed",
+    type: "payment_intent.payment_failed",
+    data: {
+      object: {
+        id: "pi_failed_123",
+        object: "payment_intent",
+        customer: "cus_123",
+        latest_charge: "ch_failed_123",
+        metadata: {
+          userId: "user_123",
+          productKey: "credit_creator",
+        },
+        last_payment_error: {
+          type: "card_error",
+          code: "card_declined",
+          decline_code: "insufficient_funds",
+          message: "Sensitive processor message must not be persisted",
+        },
+        ...overrides,
+      },
+    },
+  } as unknown as Stripe.DiscriminatedEvent;
+}
+
 export function subscriptionUpdatedEvent(
   overrides: Partial<Stripe.Subscription> = {}
 ) {

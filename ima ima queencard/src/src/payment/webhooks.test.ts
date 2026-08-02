@@ -10,6 +10,7 @@ import {
   invoicePaymentFailedEvent,
   invoicePaymentSucceededEvent,
   modernInvoicePaymentSucceededEvent,
+  paymentIntentFailedEvent,
   stripeSubscription,
   subscriptionDeletedEvent,
   subscriptionUpdatedEvent,
@@ -287,6 +288,58 @@ describe("handleEvent", () => {
 
     expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
     expect(mocks.markSkipped).toHaveBeenCalledTimes(2);
+  });
+
+  it("records payment intent failures with non-sensitive decline metadata", async () => {
+    await handleEvent(paymentIntentFailedEvent());
+
+    expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
+    expect(mocks.createPendingFulfillment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fulfillmentKey: "stripe:payment_intent_failed:pi_failed_123",
+        eventId: "evt_payment_intent_failed",
+        eventType: "payment_intent.payment_failed",
+        stripeCustomerId: "cus_123",
+        stripePaymentIntentId: "pi_failed_123",
+        userId: "user_123",
+        productKey: "credit_creator",
+        credits: 0,
+        metadata: {
+          failureCode: "card_declined",
+          declineCode: "insufficient_funds",
+        },
+      })
+    );
+    expect(mocks.markSkipped).toHaveBeenCalledWith(
+      "stripe:payment_intent_failed:pi_failed_123",
+      "Payment intent failed",
+      {
+        failureCode: "card_declined",
+        declineCode: "insufficient_funds",
+      }
+    );
+  });
+
+  it("uses one stable skipped fulfillment key when a failed intent is replayed", async () => {
+    const event = paymentIntentFailedEvent();
+
+    await handleEvent(event);
+    await handleEvent(event);
+
+    expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
+    expect(mocks.createPendingFulfillment).toHaveBeenCalledTimes(2);
+    expect(mocks.createPendingFulfillment).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        fulfillmentKey: "stripe:payment_intent_failed:pi_failed_123",
+      })
+    );
+    expect(mocks.createPendingFulfillment).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        fulfillmentKey: "stripe:payment_intent_failed:pi_failed_123",
+      })
+    );
   });
 
   it("marks refunded charges without granting negative credits", async () => {
