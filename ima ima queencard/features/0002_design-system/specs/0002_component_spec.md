@@ -2,7 +2,7 @@
 
 > Status: Living spec · Last updated 2026-06-17
 > Scope: `w6/ima ima queencard/frontend` (Next.js 16 + React + TypeScript + Tailwind + shadcn/ui)
-> Companion to [`0001-imaima-queencard-design-tokens.md`](./0001-imaima-queencard-design-tokens.md). 0001 defines the **tokens** (colour / type / spacing / shadow). This doc defines the **components** built from them: anatomy, props, variants, states, sizing, and reuse rules.
+> Companion to [`0001_design_tokens.md`](./0001_design_tokens.md). 0001 defines the **tokens** (colour / type / spacing / shadow). This doc defines the **components** built from them: anatomy, props, variants, states, sizing, and reuse rules.
 > Reference implementation (every pattern below ships here): `src/app/prompts/page.tsx`. Brand primitives: `src/components/layout/Wordmark.tsx`, `src/components/common/branded-carousel-controls.tsx`, custom classes in `src/index.css`.
 
 ---
@@ -286,4 +286,4 @@ Rule of thumb: **movement = hover, colour-shadow = selected, fill = toggle-on.**
 | Buttons / chips / cards / strips (inline patterns) | `src/app/prompts/page.tsx` (canonical) |
 | Case card, carousel, stat strip, dialog, money board, confirm panel | `src/app/prompts/page.tsx` |
 | Custom classes (shadows, containers, slot-highlight, stat-cell, masonry, money-board) | `src/index.css` |
-| Tokens (colour / type / spacing / shadow values) | [`0001-imaima-queencard-design-tokens.md`](./0001-imaima-queencard-design-tokens.md) |
+| Tokens (colour / type / spacing / shadow values) | [`0001_design_tokens.md`](./0001_design_tokens.md) |
