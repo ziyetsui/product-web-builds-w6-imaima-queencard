@@ -6,12 +6,18 @@ import { env } from "@/env.mjs";
 
 const handler = async (req: NextRequest) => {
   const payload = await req.text();
-  const signature = req.headers.get("Stripe-Signature")!;
+  const signature = req.headers.get("Stripe-Signature");
+  if (!signature || !env.STRIPE_WEBHOOK_SECRET) {
+    return NextResponse.json(
+      { error: "Stripe webhook is not configured" },
+      { status: 400 }
+    );
+  }
   try {
     const event = stripe.webhooks.constructEvent(
       payload,
       signature,
-      env.STRIPE_WEBHOOK_SECRET!,
+      env.STRIPE_WEBHOOK_SECRET,
     ) as Stripe.DiscriminatedEvent;
     await handleEvent(event);
 
