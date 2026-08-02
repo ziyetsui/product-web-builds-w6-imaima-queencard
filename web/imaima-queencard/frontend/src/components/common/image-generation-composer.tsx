@@ -24,6 +24,10 @@ import {
 import { toast } from "sonner";
 
 import { ModelBrandLogo } from "@/components/common/model-brand-logo";
+import { StyleRecreationEditor } from "@/features/style-recreation/style-recreation-editor";
+import { compileStyleRecreationPrompt } from "@/features/style-recreation/prompt-compiler";
+import { getPatternById, getSuggestedPatternValues } from "@/features/style-recreation/pattern-registry";
+import type { PatternValue, PatternValues } from "@/features/style-recreation/pattern-types";
 import {
   buildFillPrompt as buildReplicationFillPrompt,
   parseReplicationPrompt,
@@ -45,6 +49,7 @@ import {
 } from "@/config/image-generation-models";
 import {
   loadComposerDraft,
+  restorePatternDraft,
   saveComposerDraft,
   type ComposerDraft,
 } from "@/lib/image-generation-workspace";
@@ -54,6 +59,7 @@ export type ImageGenerationSeed = {
   source?: "manual" | "prompt-library" | "regenerate";
   templateId?: string;
   sourceCaseId?: string;
+  patternId?: string;
   sourceCaseCategory?: string;
   sourceNoteUrl?: string;
   sourceAuthorUrl?: string;
@@ -145,6 +151,17 @@ function uniqueFirstThree(images: string[] | undefined) {
       return true;
     })
     .slice(0, MAX_REFERENCE_IMAGES);
+}
+
+function defaultPatternValues(patternId: string | undefined, sourceCaseId?: string): PatternValues {
+  const pattern = patternId ? getPatternById(patternId) : undefined;
+  if (!pattern) return {};
+  return {
+    ...Object.fromEntries(pattern.variables
+      .filter((variable) => variable.defaultValue !== undefined)
+      .map((variable) => [variable.key, variable.defaultValue!])),
+    ...(sourceCaseId ? getSuggestedPatternValues(sourceCaseId) : undefined),
+  };
 }
 
 function resolutionLabel(resolution: string) {
@@ -447,10 +464,6 @@ function FillPromptEditor({
           <span className="min-w-0">{parsed.visual}</span>
         </div>
 
-        <details className="text-[12px] font-bold text-charcoal/45">
-          <summary className="cursor-pointer select-none">查看发送给模型的完整提示词</summary>
-          <p className="mt-1 leading-[1.7] text-charcoal/60">{value}</p>
-        </details>
       </div>
       <div className="mt-1 text-right font-mono text-[12px] font-bold text-charcoal/42">
         {value.length}/2000
@@ -491,6 +504,9 @@ export function ImageGenerationComposer({
   const seedKey = JSON.stringify(seed ?? {});
   const seedSnapshot = useMemo(() => JSON.parse(seedKey) as ImageGenerationSeed, [seedKey]);
   const [prompt, setPrompt] = useState(seed?.prompt ?? "");
+  const [patternValues, setPatternValues] = useState<PatternValues>(() =>
+    defaultPatternValues(seed?.patternId, seed?.sourceCaseId),
+  );
   const [referenceImages, setReferenceImages] = useState(() =>
     uniqueFirstThree(seed?.referenceImages)
   );
@@ -506,6 +522,10 @@ export function ImageGenerationComposer({
   const [fastMode, setFastMode] = useState(seed?.fastMode ?? true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isPatternLibraryMode = seedSnapshot.source === "prompt-library";
+  const pattern = isPatternLibraryMode && seedSnapshot.patternId
+    ? getPatternById(seedSnapshot.patternId)
+    : undefined;
 
   useEffect(() => {
     onDraftChangeRef.current = onDraftChange;
@@ -516,6 +536,9 @@ export function ImageGenerationComposer({
     const seedDraft: ComposerDraft = {
       prompt: normalizePromptForEditor(seedSnapshot.prompt ?? "", seedSnapshot),
       referenceImages: nextReferences,
+      patternId: seedSnapshot.patternId,
+      patternVersion: pattern?.version,
+      patternValues: defaultPatternValues(seedSnapshot.patternId, seedSnapshot.sourceCaseId),
       model: modelForSeed(seedSnapshot, nextReferences),
       aspectRatio: aspectRatioForSeed(seedSnapshot, nextReferences),
       outputCount: outputCountForSeed(seedSnapshot),
@@ -538,6 +561,12 @@ export function ImageGenerationComposer({
     skipNextDraftPersistRef.current = true;
     const normalizedPrompt = normalizePromptForEditor(nextDraft.prompt, seedSnapshot);
     setPrompt(normalizedPrompt);
+    if (pattern) {
+      const restored = restorePatternDraft(pattern, nextDraft);
+      setPatternValues({ ...defaultPatternValues(pattern.id, seedSnapshot.sourceCaseId), ...restored.values });
+    } else {
+      setPatternValues({});
+    }
     setReferenceImages(uniqueFirstThree(nextDraft.referenceImages));
     setModel(modelForSeed(nextDraft, nextDraft.referenceImages));
     setAspectRatio(aspectRatioForSeed(nextDraft, nextDraft.referenceImages));
@@ -546,7 +575,7 @@ export function ImageGenerationComposer({
     setAiEnhance(nextDraft.aiEnhance ?? false);
     setFastMode(nextDraft.fastMode ?? true);
     setError(null);
-  }, [draftStorageKey, seedSnapshot]);
+  }, [draftStorageKey, pattern, seedSnapshot]);
 
   const selectedOption = optionFor(model);
   const allowedOutputCounts = outputCountsForOption(selectedOption);
@@ -554,8 +583,20 @@ export function ImageGenerationComposer({
   const estimatedCredits = selectedOption.credits * effectiveOutputCount;
   const hasReferenceImage = referenceImages.length > 0;
   const requiresReference = modelRequiresReference();
+  const compiledPattern = useMemo(
+    () => isPatternLibraryMode
+      ? compileStyleRecreationPrompt({ pattern, values: patternValues })
+      : null,
+    [isPatternLibraryMode, pattern, patternValues],
+  );
+  const effectivePrompt = compiledPattern?.ok ? compiledPattern.value.prompt : prompt;
+  const fieldErrors: Record<string, string> = {};
+  if (compiledPattern?.ok === false && compiledPattern.error.fieldKey) {
+    fieldErrors[compiledPattern.error.fieldKey] = compiledPattern.error.message;
+  }
   const canSubmit =
-    prompt.trim().length > 0 &&
+    (!isPatternLibraryMode || Boolean(compiledPattern?.ok)) &&
+    effectivePrompt.trim().length > 0 &&
     (!requiresReference || hasReferenceImage) &&
     !isSubmitting;
   const generationNotice = hasReferenceImage
@@ -572,8 +613,11 @@ export function ImageGenerationComposer({
 
   const composerDraft = useMemo(
     () => ({
-      prompt,
+      prompt: effectivePrompt,
       referenceImages,
+      patternId: pattern?.id,
+      patternVersion: pattern?.version,
+      patternValues: isPatternLibraryMode ? patternValues : undefined,
       model,
       aspectRatio,
       outputCount: effectiveOutputCount,
@@ -587,7 +631,10 @@ export function ImageGenerationComposer({
       effectiveOutputCount,
       fastMode,
       model,
-      prompt,
+      effectivePrompt,
+      isPatternLibraryMode,
+      pattern,
+      patternValues,
       referenceImages,
       resolution,
     ]
@@ -612,6 +659,11 @@ export function ImageGenerationComposer({
     const nextPrompt = value.slice(0, 2000);
     setPrompt(nextPrompt);
     onPromptChange?.(nextPrompt);
+  };
+
+  const updatePatternValue = (key: string, value: PatternValue) => {
+    setPatternValues((current) => ({ ...current, [key]: value }));
+    setError(null);
   };
 
   const handleFiles = async (files: FileList | null) => {
@@ -644,7 +696,7 @@ export function ImageGenerationComposer({
       router.push(
         buildGeneratedPath({
           seed,
-          prompt,
+          prompt: effectivePrompt,
           referenceImages,
           model,
           aspectRatio,
@@ -660,7 +712,7 @@ export function ImageGenerationComposer({
       setError(null);
       const previewTask = createPreviewTask({
         seed,
-        prompt,
+        prompt: effectivePrompt,
         referenceImages,
         model,
         selectedOption,
@@ -690,7 +742,7 @@ export function ImageGenerationComposer({
           sourceCaseCategory: seed?.sourceCaseCategory,
           sourceNoteUrl: seed?.sourceNoteUrl,
           sourceAuthorUrl: seed?.sourceAuthorUrl,
-          prompt,
+          prompt: effectivePrompt,
           referenceImages,
           model,
           capability: selectedOption.capability,
@@ -839,17 +891,18 @@ export function ImageGenerationComposer({
 
           <div className="grid gap-2">
             <div className="flex items-center justify-between gap-3">
-              <span className="font-manrope text-[15px] font-black text-charcoal">提示词</span>
+              <span className="font-manrope text-[15px] font-black text-charcoal">{isPatternLibraryMode ? "创作变量" : "提示词"}</span>
               <span className="font-mono text-[13px] font-black text-charcoal/42">
-                {prompt.length}/2000
+                {effectivePrompt.length}/2000
               </span>
             </div>
-            <Textarea
-              value={prompt}
-              onChange={(event) => updatePrompt(event.target.value)}
-              placeholder="描述你要生成的小红书图文画面..."
-              className="min-h-[150px] resize-none rounded-[10px] border-2 border-charcoal bg-canvas-pink/35 px-4 py-4 font-manrope text-[15px] font-extrabold leading-[1.75] text-charcoal shadow-none placeholder:text-charcoal/35 focus-visible:ring-0 md:text-[16px]"
-            />
+            {isPatternLibraryMode ? pattern ? (
+              <StyleRecreationEditor pattern={pattern} values={patternValues} errors={fieldErrors} onValueChange={updatePatternValue} />
+            ) : (
+              <div className="rounded-[10px] border-2 border-charcoal bg-canvas-pink p-4 font-manrope"><p className="font-black">模板准备中</p><p className="mt-1 text-sm font-bold text-charcoal/55">该案例尚未完成 Pattern 审核，暂时不能生成。</p></div>
+            ) : (
+              <Textarea value={prompt} onChange={(event) => updatePrompt(event.target.value)} placeholder="描述你要生成的小红书图文画面..." className="min-h-[150px] resize-none rounded-[10px] border-2 border-charcoal bg-canvas-pink/35 px-4 py-4 font-manrope text-[15px] font-extrabold leading-[1.75] text-charcoal shadow-none placeholder:text-charcoal/35 focus-visible:ring-0 md:text-[16px]" />
+            )}
           </div>
 
           <div className="grid gap-4 rounded-[12px] border-2 border-charcoal bg-canvas-pink p-4">
@@ -1113,11 +1166,27 @@ export function ImageGenerationComposer({
               </PopoverContent>
             </Popover>
 
-            <FillPromptEditor
-              value={prompt}
-              onChange={updatePrompt}
-              className="min-w-0"
-            />
+            {isPatternLibraryMode ? (
+              pattern ? (
+                <StyleRecreationEditor
+                  pattern={pattern}
+                  values={patternValues}
+                  errors={fieldErrors}
+                  onValueChange={updatePatternValue}
+                />
+              ) : (
+                <div className="min-h-[132px] rounded-[18px] border border-charcoal/14 bg-canvas-pink/34 p-5 font-manrope text-charcoal">
+                  <p className="text-[16px] font-black">模板准备中</p>
+                  <p className="mt-2 text-[13px] font-bold leading-relaxed text-charcoal/55">该案例尚未完成 Pattern 审核，暂时不能生成。</p>
+                </div>
+              )
+            ) : (
+              <FillPromptEditor
+                value={prompt}
+                onChange={updatePrompt}
+                className="min-w-0"
+              />
+            )}
           </div>
         </div>
 
@@ -1375,17 +1444,18 @@ export function ImageGenerationComposer({
 
         <div className="grid gap-2">
           <div className="flex items-center justify-between">
-            <span className="font-manrope text-[13px] font-extrabold text-charcoal/62">提示词</span>
+            <span className="font-manrope text-[13px] font-extrabold text-charcoal/62">{isPatternLibraryMode ? "创作变量" : "提示词"}</span>
             <span className="font-mono text-[12px] font-bold text-charcoal/45">
-              {prompt.length}/2000
+              {effectivePrompt.length}/2000
             </span>
           </div>
-          <Textarea
-            value={prompt}
-            onChange={(event) => updatePrompt(event.target.value)}
-            placeholder="描述你要生成的小红书图文画面..."
-            className="min-h-[132px] resize-none rounded-[8px] border-2 border-charcoal bg-canvas-pink/45 font-manrope text-[14px] font-extrabold leading-[1.6] text-charcoal focus-visible:ring-0"
-          />
+          {isPatternLibraryMode ? pattern ? (
+            <StyleRecreationEditor pattern={pattern} values={patternValues} errors={fieldErrors} onValueChange={updatePatternValue} />
+          ) : (
+            <div className="rounded-[8px] border-2 border-charcoal bg-canvas-pink p-4 font-manrope"><p className="font-black">模板准备中</p><p className="mt-1 text-sm font-bold text-charcoal/55">该案例尚未完成 Pattern 审核，暂时不能生成。</p></div>
+          ) : (
+            <Textarea value={prompt} onChange={(event) => updatePrompt(event.target.value)} placeholder="描述你要生成的小红书图文画面..." className="min-h-[132px] resize-none rounded-[8px] border-2 border-charcoal bg-canvas-pink/45 font-manrope text-[14px] font-extrabold leading-[1.6] text-charcoal focus-visible:ring-0" />
+          )}
         </div>
 
         <div className="grid gap-3 rounded-[10px] border-2 border-charcoal bg-canvas-pink p-3">

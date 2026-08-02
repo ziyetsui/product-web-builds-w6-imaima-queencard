@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { XhsPromptCase } from "@/data/xhsPromptCases";
 import { boLandingPromptCases } from "@/data/boLandingPromptCases";
 import { xhsPromptCases } from "@/data/xhsPromptCases";
+import { compileStyleRecreationPrompt } from "@/features/style-recreation/prompt-compiler";
+import { getPatternById } from "@/features/style-recreation/pattern-registry";
 import {
   analyzeSource,
   buildReplicationPrompt,
@@ -95,14 +97,22 @@ describe("prompt replication (v4 pattern engine)", () => {
     });
   });
 
-  it("keeps the v4 contract for every route card", () => {
-    for (const item of [...xhsPromptCases, ...boLandingPromptCases]) {
-      const prompt = buildReplicationPrompt(item);
-      expect(prompt).toContain("参考已附上的原图");
-      expect(prompt).toContain("去除图片中的水印");
-      expect(prompt).not.toContain("生成一组新的");
-      expect(prompt).not.toContain("复刻参数");
-      expect(parseReplicationPrompt(prompt)).not.toBeNull();
+  it("uses reviewed Patterns for configured route cards without the v4 contract", () => {
+    const configuredCases = xhsPromptCases.filter((item) => item.patternId);
+    expect(configuredCases).toHaveLength(20);
+    for (const item of configuredCases) {
+      const pattern = getPatternById(item.patternId!);
+      expect(pattern).toBeDefined();
+      const values = Object.fromEntries(pattern!.variables.map((variable) => {
+        if (variable.defaultValue !== undefined) return [variable.key, variable.defaultValue];
+        if (variable.type === "enum") return [variable.key, variable.options![0]!.value];
+        if (variable.type === "number") return [variable.key, variable.min!];
+        return [variable.key, `${variable.label}内容`];
+      }));
+      const compiled = compileStyleRecreationPrompt({ pattern, values });
+      expect(compiled.ok).toBe(true);
+      if (compiled.ok) expect(compiled.value.prompt).not.toContain("逐项复刻原图");
     }
+    expect(boLandingPromptCases.every((item) => !item.patternId)).toBe(true);
   });
 });

@@ -135,6 +135,7 @@ function buildCaseGenerationSeed(
     source: "prompt-library",
     templateId: item.id,
     sourceCaseId: item.id,
+    patternId: item.patternId,
     sourceCaseCategory: item.category,
     sourceNoteUrl: item.noteUrl,
     sourceAuthorUrl: item.authorUrl,

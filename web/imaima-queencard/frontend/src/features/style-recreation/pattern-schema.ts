@@ -117,7 +117,7 @@ export const styleRecreationPatternSchema = z.object({
     context.addIssue({ code: "custom", message: "inline Pattern variables cannot use long_text", path: ["variables"] });
   }
   const fillTemplate = validateFillTemplate(pattern.fillTemplate, pattern.variables);
-  if (!fillTemplate.ok) context.addIssue({ code: "custom", message: fillTemplate.message, path: ["fillTemplate"] });
+  if (fillTemplate.ok === false) context.addIssue({ code: "custom", message: fillTemplate.message, path: ["fillTemplate"] });
   if (pattern.variables.filter((variable) => variable.required).length > 5) {
     context.addIssue({ code: "custom", message: "at most five variables may be required", path: ["variables"] });
   }
