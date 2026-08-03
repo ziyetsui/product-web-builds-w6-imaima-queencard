@@ -1,6 +1,8 @@
 import { createEnv } from "@t3-oss/env-nextjs";
 import { z } from "zod";
 
+export const DEFAULT_ADMIN_EMAIL = "iven_chloe@icloud.com";
+
 export const env = createEnv({
   server: {
     // Better Auth secret (replaces NEXTAUTH_SECRET)
@@ -23,7 +25,7 @@ export const env = createEnv({
     ZEABUR_EMAIL_FROM: z.string().optional(),
     ZEABUR_EMAIL_API_URL: z.string().url().optional(),
     // Admin
-    ADMIN_EMAIL: z.string().optional(),
+    ADMIN_EMAIL: z.string().email().default(DEFAULT_ADMIN_EMAIL),
     SUPERADMIN_EMAILS: z.string().optional(),
     // Debug
     IS_DEBUG: z.string().optional(),
@@ -49,7 +51,7 @@ export const env = createEnv({
     ZEABUR_EMAIL_API_KEY: process.env.ZEABUR_EMAIL_API_KEY?.trim(),
     ZEABUR_EMAIL_FROM: process.env.ZEABUR_EMAIL_FROM?.trim(),
     ZEABUR_EMAIL_API_URL: process.env.ZEABUR_EMAIL_API_URL?.trim(),
-    ADMIN_EMAIL: process.env.ADMIN_EMAIL?.trim(),
+    ADMIN_EMAIL: process.env.ADMIN_EMAIL?.trim() || undefined,
     SUPERADMIN_EMAILS: process.env.SUPERADMIN_EMAILS?.trim(),
     IS_DEBUG: process.env.IS_DEBUG?.trim(),
   },

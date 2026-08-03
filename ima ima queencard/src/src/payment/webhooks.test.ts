@@ -9,6 +9,8 @@ import {
   invoicePaidEvent,
   invoicePaymentFailedEvent,
   invoicePaymentSucceededEvent,
+  modernInvoicePaymentSucceededEvent,
+  paymentIntentFailedEvent,
   stripeSubscription,
   subscriptionDeletedEvent,
   subscriptionUpdatedEvent,
@@ -122,6 +124,77 @@ describe("handleEvent", () => {
     );
   });
 
+  it("supports Stripe 2026 invoice parent and pricing fields", async () => {
+    await handleEvent(modernInvoicePaymentSucceededEvent());
+
+    expect(mocks.retrieveSubscription).toHaveBeenCalledWith("sub_123");
+    expect(mocks.fulfillCreditGrantOnce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fulfillmentKey: "stripe:invoice:in_123",
+        productKey: "creator_monthly",
+        stripePriceId: "price_pro_monthly",
+        userId: "user_123",
+        credits: 600,
+      })
+    );
+  });
+
+  it("uses a distinct fulfillment key for each subscription invoice", async () => {
+    await handleEvent(invoicePaymentSucceededEvent({ id: "in_first" }));
+    await handleEvent(invoicePaymentSucceededEvent({ id: "in_renewal" }));
+
+    expect(mocks.fulfillCreditGrantOnce).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ fulfillmentKey: "stripe:invoice:in_first" })
+    );
+    expect(mocks.fulfillCreditGrantOnce).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ fulfillmentKey: "stripe:invoice:in_renewal" })
+    );
+  });
+
+  it("records unknown subscription products as failed without granting credits", async () => {
+    mocks.retrieveSubscription.mockResolvedValue(
+      stripeSubscription({
+        metadata: { userId: "user_123", productKey: "unknown" },
+      })
+    );
+
+    await handleEvent(
+      invoicePaymentSucceededEvent({
+        subscription_details: {
+          metadata: { userId: "user_123", productKey: "unknown" },
+        },
+      } as never)
+    );
+
+    expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
+    expect(mocks.markFailed).toHaveBeenCalledWith(
+      "stripe:invoice:in_123",
+      "Unknown subscription product"
+    );
+  });
+
+  it("records missing subscription user ids as failed without granting credits", async () => {
+    mocks.retrieveSubscription.mockResolvedValue(
+      stripeSubscription({ metadata: { productKey: "creator_monthly" } })
+    );
+
+    await handleEvent(
+      invoicePaymentSucceededEvent({
+        subscription_details: {
+          metadata: { productKey: "creator_monthly" },
+        },
+      } as never)
+    );
+
+    expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
+    expect(mocks.markFailed).toHaveBeenCalledWith(
+      "stripe:invoice:in_123",
+      "Missing userId"
+    );
+  });
+
   it("falls back to stripeCustomerId when subscription metadata has no userId", async () => {
     mocks.retrieveSubscription.mockResolvedValue(
       stripeSubscription({ metadata: {} })
@@ -215,6 +288,58 @@ describe("handleEvent", () => {
 
     expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
     expect(mocks.markSkipped).toHaveBeenCalledTimes(2);
+  });
+
+  it("records payment intent failures with non-sensitive decline metadata", async () => {
+    await handleEvent(paymentIntentFailedEvent());
+
+    expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
+    expect(mocks.createPendingFulfillment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fulfillmentKey: "stripe:payment_intent_failed:pi_failed_123",
+        eventId: "evt_payment_intent_failed",
+        eventType: "payment_intent.payment_failed",
+        stripeCustomerId: "cus_123",
+        stripePaymentIntentId: "pi_failed_123",
+        userId: "user_123",
+        productKey: "credit_creator",
+        credits: 0,
+        metadata: {
+          failureCode: "card_declined",
+          declineCode: "insufficient_funds",
+        },
+      })
+    );
+    expect(mocks.markSkipped).toHaveBeenCalledWith(
+      "stripe:payment_intent_failed:pi_failed_123",
+      "Payment intent failed",
+      {
+        failureCode: "card_declined",
+        declineCode: "insufficient_funds",
+      }
+    );
+  });
+
+  it("uses one stable skipped fulfillment key when a failed intent is replayed", async () => {
+    const event = paymentIntentFailedEvent();
+
+    await handleEvent(event);
+    await handleEvent(event);
+
+    expect(mocks.fulfillCreditGrantOnce).not.toHaveBeenCalled();
+    expect(mocks.createPendingFulfillment).toHaveBeenCalledTimes(2);
+    expect(mocks.createPendingFulfillment).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        fulfillmentKey: "stripe:payment_intent_failed:pi_failed_123",
+      })
+    );
+    expect(mocks.createPendingFulfillment).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        fulfillmentKey: "stripe:payment_intent_failed:pi_failed_123",
+      })
+    );
   });
 
   it("marks refunded charges without granting negative credits", async () => {

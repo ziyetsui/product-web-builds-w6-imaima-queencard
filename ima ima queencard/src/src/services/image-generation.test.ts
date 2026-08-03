@@ -306,7 +306,7 @@ describe("image generation validation", () => {
     expect(() =>
       estimateImageGeneration({
         prompt: "make a poster",
-        model: "doubao-seedream-5-edit",
+        model: "seedream-5-edit",
         outputCount: 4,
       })
     ).toThrow(ApiError);

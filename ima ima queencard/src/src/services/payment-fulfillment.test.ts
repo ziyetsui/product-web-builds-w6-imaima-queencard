@@ -69,6 +69,19 @@ function selectRows(rows: unknown[]) {
   };
 }
 
+function lockedSelectRows(rows: unknown[], lock: ReturnType<typeof vi.fn>) {
+  return {
+    from: vi.fn(() => ({
+      where: vi.fn(() => ({
+        limit: vi.fn().mockResolvedValue(rows),
+        for: lock.mockReturnValue({
+          limit: vi.fn().mockResolvedValue(rows),
+        }),
+      })),
+    })),
+  };
+}
+
 function insertRows(rows: unknown[]) {
   return {
     values: vi.fn(() => ({
@@ -119,14 +132,18 @@ describe("payment fulfillment service", () => {
     ).resolves.toEqual(existing);
   });
 
-  it("does not grant credits again when the fulfillment was already completed", async () => {
+  it.each(["FULFILLED", "REFUNDED", "FAILED", "SKIPPED"])(
+    "locks an existing %s fulfillment before refusing a duplicate grant",
+    async (status) => {
+      const lock = vi.fn();
     const existing = {
       id: 1,
       fulfillmentKey: "stripe:invoice:in_123",
-      status: "FULFILLED",
+        status,
       creditPackageId: 42,
     };
-    mocks.trx.select.mockReturnValue(selectRows([existing]));
+      mocks.trx.insert.mockReturnValue(insertRows([]));
+      mocks.trx.select.mockReturnValue(lockedSelectRows([existing], lock));
 
     await expect(
       fulfillCreditGrantOnce({
@@ -144,6 +161,8 @@ describe("payment fulfillment service", () => {
       fulfillment: existing,
       packageId: 42,
     });
-    expect(mocks.trx.insert).not.toHaveBeenCalled();
-  });
+      expect(mocks.trx.insert).toHaveBeenCalledTimes(1);
+      expect(lock).toHaveBeenCalledWith("update");
+    }
+  );
 });

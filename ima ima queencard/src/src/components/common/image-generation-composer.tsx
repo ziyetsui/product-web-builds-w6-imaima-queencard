@@ -24,6 +24,15 @@ import {
 import { toast } from "sonner";
 
 import { ModelBrandLogo } from "@/components/common/model-brand-logo";
+import { StyleRecreationEditor } from "@/features/style-recreation/style-recreation-editor";
+import { compileStyleRecreationPrompt } from "@/features/style-recreation/prompt-compiler";
+import { getPatternById, getPatternDisplayPrompt, getSuggestedPatternValues } from "@/features/style-recreation/pattern-registry";
+import type { PatternValue, PatternValues } from "@/features/style-recreation/pattern-types";
+import {
+  buildFillPrompt as buildReplicationFillPrompt,
+  parseReplicationPrompt,
+  type FillPrompt as ReplicationFillPrompt,
+} from "@/features/prompt-replication/lib/prompt-replication";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -40,6 +49,7 @@ import {
 } from "@/config/image-generation-models";
 import {
   loadComposerDraft,
+  restorePatternDraft,
   saveComposerDraft,
   type ComposerDraft,
 } from "@/lib/image-generation-workspace";
@@ -49,6 +59,9 @@ export type ImageGenerationSeed = {
   source?: "manual" | "prompt-library" | "regenerate";
   templateId?: string;
   sourceCaseId?: string;
+  patternId?: string;
+  patternVersion?: number;
+  patternValues?: PatternValues;
   sourceCaseCategory?: string;
   sourceNoteUrl?: string;
   sourceAuthorUrl?: string;
@@ -79,20 +92,7 @@ const ASPECT_MARK_CLASS: Record<string, string> = {
   "21:9": "h-2.5 w-7",
 };
 
-type FillPrompt = {
-  theme: string;
-  title: string;
-  subtitle: string;
-};
-
-type CasePromptParts = {
-  sourceTitle: string;
-  structure: string;
-  theme: string;
-  title: string;
-  subtitle: string;
-  output: string;
-};
+type FillPrompt = ReplicationFillPrompt;
 
 function defaultModelFor(referenceImages: string[]) {
   return defaultImageGenerationModel(referenceImages);
@@ -155,6 +155,17 @@ function uniqueFirstThree(images: string[] | undefined) {
     .slice(0, MAX_REFERENCE_IMAGES);
 }
 
+function defaultPatternValues(patternId: string | undefined, sourceCaseId?: string): PatternValues {
+  const pattern = patternId ? getPatternById(patternId) : undefined;
+  if (!pattern) return {};
+  return {
+    ...Object.fromEntries(pattern.variables
+      .filter((variable) => variable.defaultValue !== undefined)
+      .map((variable) => [variable.key, variable.defaultValue!])),
+    ...(sourceCaseId ? getSuggestedPatternValues(sourceCaseId) : undefined),
+  };
+}
+
 function resolutionLabel(resolution: string) {
   return resolution === "auto" ? "自动" : resolution.toUpperCase();
 }
@@ -163,49 +174,41 @@ function optionDisplayLabel(option: string) {
   return option === "auto" ? "自动" : option;
 }
 
-function parseFillPrompt(value: string): FillPrompt | null {
-  const match = value.match(
-    /^生成一组新的(.+?)主题：标题《([^》]*)》，副标题(?:《([^》]*)》|[“"]([^”"]*)[”"])。?$/
+const parseFillPrompt = parseReplicationPrompt;
+const buildFillPrompt = buildReplicationFillPrompt;
+
+const DEFAULT_VISUAL_MECHANISMS = "视觉风格、构图和内容节奏";
+
+function normalizePromptForEditor(value: string, seed: ImageGenerationSeed) {
+  if (parseFillPrompt(value)) return value;
+  const trimmed = value.trim();
+  const v3 = trimmed.match(
+    /^保留原图的(.+?)；沿用[“"]([^”"]*)[”"]的标题骨架，将主题替换为[“"]([^”"]*)[”"]。?$/,
   );
-  if (!match) return null;
-  return {
-    theme: match[1] ?? "",
-    title: match[2] ?? "",
-    subtitle: match[3] ?? match[4] ?? "",
-  };
-}
-
-function buildFillPrompt(prompt: FillPrompt) {
-  return `生成一组新的${prompt.theme}主题：标题《${prompt.title}》，副标题《${prompt.subtitle}》。`;
-}
-
-function parseCasePrompt(value: string): CasePromptParts | null {
-  const match = value.match(
-    /^参考图文《([^》]+)》的(.+?)，生成一组新的(?:小红书)?(.+?)主题：标题《([^》]*)》，副标题(?:《([^》]*)》|[“"]([^”"]*)[”"])。(.+)$/
+  if (v3) {
+    const topic = v3[3] || "新主题";
+    return buildFillPrompt({
+      visual: v3[1] || DEFAULT_VISUAL_MECHANISMS,
+      title: v3[2].includes("X") ? v3[2].split("X").join(topic) : v3[2],
+      topic,
+    });
+  }
+  const v2 = trimmed.match(
+    /^生成一组新的(.+?)主题：标题《([^》]*)》，(?:复刻参数|副标题)(?:《([^》]*)》|[“"]([^”"]*)[”"])。?$/,
   );
-  if (!match) return null;
-
-  return {
-    sourceTitle: match[1] ?? "",
-    structure: match[2] ?? "",
-    theme: match[3] ?? "",
-    title: match[4] ?? "",
-    subtitle: match[5] ?? match[6] ?? "",
-    output: match[7] ?? "",
-  };
-}
-
-function formatSeedPrompt(value: string | undefined) {
-  if (!value) return "";
-  const prompt = value.trim();
-  const parsed = parseCasePrompt(prompt);
-
-  if (!parsed) return prompt;
-
+  if (v2) {
+    const parameters = (v2[3] ?? v2[4] ?? "").replace(/^保留原图(?:文)?的/, "");
+    return buildFillPrompt({
+      visual: parameters.split(/[；;]/)[0]?.trim() || DEFAULT_VISUAL_MECHANISMS,
+      title: v2[2] || seed.title || "",
+      topic: v2[1] || "新主题",
+    });
+  }
+  if (!seed.sourceCaseCategory || !seed.title) return value;
   return buildFillPrompt({
-    theme: parsed.theme,
-    title: parsed.title,
-    subtitle: parsed.subtitle,
+    visual: DEFAULT_VISUAL_MECHANISMS,
+    title: seed.title,
+    topic: seed.sourceCaseCategory,
   });
 }
 
@@ -252,6 +255,13 @@ function buildGeneratedPath({
   setOptionalParam(params, "source_note_url", seed?.sourceNoteUrl);
   setOptionalParam(params, "source_author_url", seed?.sourceAuthorUrl);
   setOptionalParam(params, "title", seed?.title);
+  setOptionalParam(params, "pattern_id", seed?.patternId);
+  if (seed?.patternVersion !== undefined) {
+    params.set("pattern_version", String(seed.patternVersion));
+  }
+  if (seed?.patternValues) {
+    params.set("pattern_values", JSON.stringify(seed.patternValues));
+  }
 
   if (referenceImages.length > 0) {
     params.set("reference_images", JSON.stringify(referenceImages));
@@ -305,6 +315,10 @@ function createPreviewTask({
     source: seed?.source ?? "manual",
     sourceCaseId: seed?.sourceCaseId ?? null,
     sourceCaseCategory: seed?.sourceCaseCategory ?? null,
+    patternId: seed?.patternId,
+    patternVersion: seed?.patternVersion,
+    patternValues: seed?.patternValues,
+    displayPrompt: getPatternDisplayPrompt(seed?.patternId, seed?.patternValues),
     prompt,
     referenceImages,
     model,
@@ -413,57 +427,56 @@ function FillPromptEditor({
     );
   }
 
-  const updateSlot = (slot: keyof FillPrompt, nextValue: string) => {
-    onChange(buildFillPrompt({ ...parsed, [slot]: nextValue }));
+  const updateTopic = (nextTopic: string) => {
+    const nextTitle =
+      parsed.topic && parsed.title.includes(parsed.topic)
+        ? parsed.title.split(parsed.topic).join(nextTopic)
+        : parsed.title;
+    onChange(buildFillPrompt({ ...parsed, topic: nextTopic, title: nextTitle }));
+  };
+
+  const updateTitle = (nextTitle: string) => {
+    onChange(buildFillPrompt({ ...parsed, title: nextTitle }));
   };
 
   return (
     <div className={cn("min-h-full rounded-[18px] border border-charcoal/14 bg-canvas-pink/34 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)]", className)}>
       <div className="flex min-h-[96px] flex-col justify-center gap-2.5 font-manrope text-[15px] font-extrabold text-charcoal md:min-h-[130px] md:text-[16px]">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="shrink-0">生成一组新的</span>
-          <FillSlotInput
-            label="主题"
-            value={parsed.theme}
-            onChange={(nextValue) => updateSlot("theme", nextValue)}
-            minWidth={8}
-            maxWidth={18}
-          />
-          <span className="shrink-0">主题</span>
-        </div>
-
         <label className="grid items-center gap-2 md:grid-cols-[72px_minmax(0,1fr)]">
-          <span className="font-black">标题《</span>
+          <span className="font-black">新主题</span>
           <div className="flex min-w-0 items-center gap-2">
             <FillSlotInput
-              label="标题"
+              label="新主题"
+              value={parsed.topic}
+              onChange={updateTopic}
+              minWidth={8}
+              maxWidth={24}
+              tone="sky"
+              align="left"
+            />
+          </div>
+        </label>
+
+        <label className="grid items-center gap-2 md:grid-cols-[72px_minmax(0,1fr)]">
+          <span className="font-black">新标题</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <FillSlotInput
+              label="新标题"
               value={parsed.title}
-              onChange={(nextValue) => updateSlot("title", nextValue)}
+              onChange={updateTitle}
               minWidth={18}
               maxWidth={56}
               fullWidth
               align="left"
             />
-            <span className="shrink-0 font-black">》</span>
           </div>
         </label>
 
-        <label className="grid items-center gap-2 md:grid-cols-[72px_minmax(0,1fr)]">
-          <span className="font-black">副标题《</span>
-          <div className="flex min-w-0 items-center gap-2">
-            <FillSlotInput
-              label="副标题"
-              value={parsed.subtitle}
-              onChange={(nextValue) => updateSlot("subtitle", nextValue)}
-              minWidth={18}
-              maxWidth={60}
-              tone="sky"
-              fullWidth
-              align="left"
-            />
-            <span className="shrink-0 font-black">》</span>
-          </div>
-        </label>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-bold text-charcoal/55">
+          <span className="shrink-0 rounded-full border border-charcoal/18 px-2 py-0.5">复刻 DNA</span>
+          <span className="min-w-0">{parsed.visual}</span>
+        </div>
+
       </div>
       <div className="mt-1 text-right font-mono text-[12px] font-bold text-charcoal/42">
         {value.length}/2000
@@ -503,7 +516,10 @@ export function ImageGenerationComposer({
   const onDraftChangeRef = useRef(onDraftChange);
   const seedKey = JSON.stringify(seed ?? {});
   const seedSnapshot = useMemo(() => JSON.parse(seedKey) as ImageGenerationSeed, [seedKey]);
-  const [prompt, setPrompt] = useState(() => formatSeedPrompt(seed?.prompt));
+  const [prompt, setPrompt] = useState(seed?.prompt ?? "");
+  const [patternValues, setPatternValues] = useState<PatternValues>(() =>
+    ({ ...defaultPatternValues(seed?.patternId, seed?.sourceCaseId), ...seed?.patternValues }),
+  );
   const [referenceImages, setReferenceImages] = useState(() =>
     uniqueFirstThree(seed?.referenceImages)
   );
@@ -519,6 +535,10 @@ export function ImageGenerationComposer({
   const [fastMode, setFastMode] = useState(seed?.fastMode ?? true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isPatternLibraryMode = seedSnapshot.source === "prompt-library";
+  const pattern = isPatternLibraryMode && seedSnapshot.patternId
+    ? getPatternById(seedSnapshot.patternId)
+    : undefined;
 
   useEffect(() => {
     onDraftChangeRef.current = onDraftChange;
@@ -527,8 +547,14 @@ export function ImageGenerationComposer({
   useEffect(() => {
     const nextReferences = uniqueFirstThree(seedSnapshot.referenceImages);
     const seedDraft: ComposerDraft = {
-      prompt: formatSeedPrompt(seedSnapshot.prompt),
+      prompt: normalizePromptForEditor(seedSnapshot.prompt ?? "", seedSnapshot),
       referenceImages: nextReferences,
+      patternId: seedSnapshot.patternId,
+      patternVersion: seedSnapshot.patternVersion ?? pattern?.version,
+      patternValues: {
+        ...defaultPatternValues(seedSnapshot.patternId, seedSnapshot.sourceCaseId),
+        ...seedSnapshot.patternValues,
+      },
       model: modelForSeed(seedSnapshot, nextReferences),
       aspectRatio: aspectRatioForSeed(seedSnapshot, nextReferences),
       outputCount: outputCountForSeed(seedSnapshot),
@@ -549,7 +575,14 @@ export function ImageGenerationComposer({
       : seedDraft;
 
     skipNextDraftPersistRef.current = true;
-    setPrompt(nextDraft.prompt);
+    const normalizedPrompt = normalizePromptForEditor(nextDraft.prompt, seedSnapshot);
+    setPrompt(normalizedPrompt);
+    if (pattern) {
+      const restored = restorePatternDraft(pattern, nextDraft);
+      setPatternValues({ ...defaultPatternValues(pattern.id, seedSnapshot.sourceCaseId), ...restored.values });
+    } else {
+      setPatternValues({});
+    }
     setReferenceImages(uniqueFirstThree(nextDraft.referenceImages));
     setModel(modelForSeed(nextDraft, nextDraft.referenceImages));
     setAspectRatio(aspectRatioForSeed(nextDraft, nextDraft.referenceImages));
@@ -558,7 +591,7 @@ export function ImageGenerationComposer({
     setAiEnhance(nextDraft.aiEnhance ?? false);
     setFastMode(nextDraft.fastMode ?? true);
     setError(null);
-  }, [draftStorageKey, seedSnapshot]);
+  }, [draftStorageKey, pattern, seedSnapshot]);
 
   const selectedOption = optionFor(model);
   const allowedOutputCounts = outputCountsForOption(selectedOption);
@@ -566,8 +599,20 @@ export function ImageGenerationComposer({
   const estimatedCredits = selectedOption.credits * effectiveOutputCount;
   const hasReferenceImage = referenceImages.length > 0;
   const requiresReference = modelRequiresReference();
+  const compiledPattern = useMemo(
+    () => isPatternLibraryMode
+      ? compileStyleRecreationPrompt({ pattern, values: patternValues })
+      : null,
+    [isPatternLibraryMode, pattern, patternValues],
+  );
+  const effectivePrompt = compiledPattern?.ok ? compiledPattern.value.prompt : prompt;
+  const fieldErrors: Record<string, string> = {};
+  if (compiledPattern?.ok === false && compiledPattern.error.fieldKey) {
+    fieldErrors[compiledPattern.error.fieldKey] = compiledPattern.error.message;
+  }
   const canSubmit =
-    prompt.trim().length > 0 &&
+    (!isPatternLibraryMode || Boolean(compiledPattern?.ok)) &&
+    effectivePrompt.trim().length > 0 &&
     (!requiresReference || hasReferenceImage) &&
     !isSubmitting;
   const generationNotice = hasReferenceImage
@@ -584,8 +629,11 @@ export function ImageGenerationComposer({
 
   const composerDraft = useMemo(
     () => ({
-      prompt,
+      prompt: effectivePrompt,
       referenceImages,
+      patternId: pattern?.id,
+      patternVersion: pattern?.version,
+      patternValues: isPatternLibraryMode ? patternValues : undefined,
       model,
       aspectRatio,
       outputCount: effectiveOutputCount,
@@ -599,7 +647,10 @@ export function ImageGenerationComposer({
       effectiveOutputCount,
       fastMode,
       model,
-      prompt,
+      effectivePrompt,
+      isPatternLibraryMode,
+      pattern,
+      patternValues,
       referenceImages,
       resolution,
     ]
@@ -624,6 +675,11 @@ export function ImageGenerationComposer({
     const nextPrompt = value.slice(0, 2000);
     setPrompt(nextPrompt);
     onPromptChange?.(nextPrompt);
+  };
+
+  const updatePatternValue = (key: string, value: PatternValue) => {
+    setPatternValues((current) => ({ ...current, [key]: value }));
+    setError(null);
   };
 
   const handleFiles = async (files: FileList | null) => {
@@ -655,8 +711,13 @@ export function ImageGenerationComposer({
       setError(null);
       router.push(
         buildGeneratedPath({
-          seed,
-          prompt,
+          seed: {
+            ...seed,
+            patternId: pattern?.id,
+            patternVersion: pattern?.version,
+            patternValues: isPatternLibraryMode ? patternValues : undefined,
+          },
+          prompt: effectivePrompt,
           referenceImages,
           model,
           aspectRatio,
@@ -671,8 +732,13 @@ export function ImageGenerationComposer({
     if (submitMode === "preview-result") {
       setError(null);
       const previewTask = createPreviewTask({
-        seed,
-        prompt,
+        seed: {
+          ...seed,
+          patternId: pattern?.id,
+          patternVersion: pattern?.version,
+          patternValues: isPatternLibraryMode ? patternValues : undefined,
+        },
+        prompt: effectivePrompt,
         referenceImages,
         model,
         selectedOption,
@@ -702,7 +768,13 @@ export function ImageGenerationComposer({
           sourceCaseCategory: seed?.sourceCaseCategory,
           sourceNoteUrl: seed?.sourceNoteUrl,
           sourceAuthorUrl: seed?.sourceAuthorUrl,
-          prompt,
+          prompt: effectivePrompt,
+          patternId: pattern?.id,
+          patternVersion: pattern?.version,
+          patternValues: isPatternLibraryMode ? patternValues : undefined,
+          displayPrompt: isPatternLibraryMode
+            ? getPatternDisplayPrompt(pattern?.id, patternValues)
+            : undefined,
           referenceImages,
           model,
           capability: selectedOption.capability,
@@ -851,17 +923,18 @@ export function ImageGenerationComposer({
 
           <div className="grid gap-2">
             <div className="flex items-center justify-between gap-3">
-              <span className="font-manrope text-[15px] font-black text-charcoal">提示词</span>
+              <span className="font-manrope text-[15px] font-black text-charcoal">{isPatternLibraryMode ? "创作变量" : "提示词"}</span>
               <span className="font-mono text-[13px] font-black text-charcoal/42">
-                {prompt.length}/2000
+                {effectivePrompt.length}/2000
               </span>
             </div>
-            <Textarea
-              value={prompt}
-              onChange={(event) => updatePrompt(event.target.value)}
-              placeholder="描述你要生成的小红书图文画面..."
-              className="min-h-[150px] resize-none rounded-[10px] border-2 border-charcoal bg-canvas-pink/35 px-4 py-4 font-manrope text-[15px] font-extrabold leading-[1.75] text-charcoal shadow-none placeholder:text-charcoal/35 focus-visible:ring-0 md:text-[16px]"
-            />
+            {isPatternLibraryMode ? pattern ? (
+              <StyleRecreationEditor pattern={pattern} values={patternValues} errors={fieldErrors} onValueChange={updatePatternValue} />
+            ) : (
+              <div className="rounded-[10px] border-2 border-charcoal bg-canvas-pink p-4 font-manrope"><p className="font-black">模板准备中</p><p className="mt-1 text-sm font-bold text-charcoal/55">该案例尚未完成 Pattern 审核，暂时不能生成。</p></div>
+            ) : (
+              <Textarea value={prompt} onChange={(event) => updatePrompt(event.target.value)} placeholder="描述你要生成的小红书图文画面..." className="min-h-[150px] resize-none rounded-[10px] border-2 border-charcoal bg-canvas-pink/35 px-4 py-4 font-manrope text-[15px] font-extrabold leading-[1.75] text-charcoal shadow-none placeholder:text-charcoal/35 focus-visible:ring-0 md:text-[16px]" />
+            )}
           </div>
 
           <div className="grid gap-4 rounded-[12px] border-2 border-charcoal bg-canvas-pink p-4">
@@ -1023,14 +1096,14 @@ export function ImageGenerationComposer({
         />
 
         <div className="cursor-pointer bg-surface-white/72 p-3 md:p-4">
-          <div className="grid gap-3 md:grid-cols-[132px_1fr] md:items-stretch">
+          <div className="grid gap-3 md:grid-cols-[124px_minmax(0,1fr)] md:items-stretch">
             <Popover>
               <PopoverTrigger asChild>
                 <button
                   type="button"
                   aria-label={`参考图 ${referenceImages.length}/${MAX_REFERENCE_IMAGES}`}
                   className={cn(
-                    "relative flex min-h-[88px] w-full flex-col items-center justify-center overflow-hidden rounded-[18px] border bg-canvas-pink/44 p-3 text-center font-manrope text-charcoal transition-all hover:-translate-y-[2px] hover:bg-canvas-pink/72 md:min-h-[132px]",
+                    "relative flex min-h-[112px] w-full flex-col items-center justify-center overflow-hidden rounded-[18px] border bg-canvas-pink/44 p-3 text-center font-manrope text-charcoal transition-all hover:-translate-y-[2px] hover:bg-canvas-pink/72 md:h-full md:min-h-[124px]",
                     referenceImages.length > 0
                       ? "border-charcoal/20 bg-surface-white shadow-[0_16px_36px_rgba(26,23,20,0.08)]"
                       : "border-dashed border-charcoal/30"
@@ -1038,11 +1111,13 @@ export function ImageGenerationComposer({
                 >
                   {referenceImages[0] ? (
                     <>
-                      <img
-                        src={referenceImages[0]}
-                        alt="当前参考首图"
-                        className="absolute inset-0 h-full w-full object-cover object-top"
-                      />
+                      <span className="absolute inset-x-2 bottom-2 top-8 flex items-center justify-center overflow-hidden rounded-[9px] border border-charcoal/12 bg-surface-white">
+                        <img
+                          src={referenceImages[0]}
+                          alt="当前参考首图"
+                          className="max-h-full max-w-full object-contain"
+                        />
+                      </span>
                       <span className="absolute left-2 top-2 rounded-full border border-charcoal/18 bg-surface-white/90 px-2 py-1 text-[11px] font-extrabold leading-none shadow-[0_8px_18px_rgba(26,23,20,0.08)]">
                         参考图
                       </span>
@@ -1058,7 +1133,7 @@ export function ImageGenerationComposer({
                     </>
                   )}
                   {referenceImages.length > 0 ? (
-                    <span className="absolute bottom-2 right-2 rounded-full border border-charcoal/18 bg-lemon px-2 py-0.5 font-mono text-[11px] font-black shadow-[0_8px_18px_rgba(26,23,20,0.08)]">
+                    <span className="absolute right-2 top-2 rounded-full border border-charcoal/18 bg-lemon px-2 py-0.5 font-mono text-[11px] font-black shadow-[0_8px_18px_rgba(26,23,20,0.08)]">
                       {referenceImages.length}/{MAX_REFERENCE_IMAGES}
                     </span>
                   ) : null}
@@ -1094,7 +1169,7 @@ export function ImageGenerationComposer({
                       >
                         {image ? (
                           <>
-                            <img src={image} alt={`参考图 ${index + 1}`} className="h-full w-full object-cover object-top" />
+                            <img src={image} alt={`参考图 ${index + 1}`} className="h-full w-full object-contain" />
                             <button
                               type="button"
                               aria-label="移除参考图"
@@ -1125,11 +1200,27 @@ export function ImageGenerationComposer({
               </PopoverContent>
             </Popover>
 
-            <FillPromptEditor
-              value={prompt}
-              onChange={updatePrompt}
-              className="min-w-0"
-            />
+            {isPatternLibraryMode ? (
+              pattern ? (
+                <StyleRecreationEditor
+                  pattern={pattern}
+                  values={patternValues}
+                  errors={fieldErrors}
+                  onValueChange={updatePatternValue}
+                />
+              ) : (
+                <div className="min-h-[132px] rounded-[18px] border border-charcoal/14 bg-canvas-pink/34 p-5 font-manrope text-charcoal">
+                  <p className="text-[16px] font-black">模板准备中</p>
+                  <p className="mt-2 text-[13px] font-bold leading-relaxed text-charcoal/55">该案例尚未完成 Pattern 审核，暂时不能生成。</p>
+                </div>
+              )
+            ) : (
+              <FillPromptEditor
+                value={prompt}
+                onChange={updatePrompt}
+                className="min-w-0"
+              />
+            )}
           </div>
         </div>
 
@@ -1387,17 +1478,18 @@ export function ImageGenerationComposer({
 
         <div className="grid gap-2">
           <div className="flex items-center justify-between">
-            <span className="font-manrope text-[13px] font-extrabold text-charcoal/62">提示词</span>
+            <span className="font-manrope text-[13px] font-extrabold text-charcoal/62">{isPatternLibraryMode ? "创作变量" : "提示词"}</span>
             <span className="font-mono text-[12px] font-bold text-charcoal/45">
-              {prompt.length}/2000
+              {effectivePrompt.length}/2000
             </span>
           </div>
-          <Textarea
-            value={prompt}
-            onChange={(event) => updatePrompt(event.target.value)}
-            placeholder="描述你要生成的小红书图文画面..."
-            className="min-h-[132px] resize-none rounded-[8px] border-2 border-charcoal bg-canvas-pink/45 font-manrope text-[14px] font-extrabold leading-[1.6] text-charcoal focus-visible:ring-0"
-          />
+          {isPatternLibraryMode ? pattern ? (
+            <StyleRecreationEditor pattern={pattern} values={patternValues} errors={fieldErrors} onValueChange={updatePatternValue} />
+          ) : (
+            <div className="rounded-[8px] border-2 border-charcoal bg-canvas-pink p-4 font-manrope"><p className="font-black">模板准备中</p><p className="mt-1 text-sm font-bold text-charcoal/55">该案例尚未完成 Pattern 审核，暂时不能生成。</p></div>
+          ) : (
+            <Textarea value={prompt} onChange={(event) => updatePrompt(event.target.value)} placeholder="描述你要生成的小红书图文画面..." className="min-h-[132px] resize-none rounded-[8px] border-2 border-charcoal bg-canvas-pink/45 font-manrope text-[14px] font-extrabold leading-[1.6] text-charcoal focus-visible:ring-0" />
+          )}
         </div>
 
         <div className="grid gap-3 rounded-[10px] border-2 border-charcoal bg-canvas-pink p-3">

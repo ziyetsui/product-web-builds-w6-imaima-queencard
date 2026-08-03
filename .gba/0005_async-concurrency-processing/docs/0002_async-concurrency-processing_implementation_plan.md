@@ -36,7 +36,7 @@
 | `ima ima queencard/src/src/config/generation-worker.test.ts` | Configuration defaults and fail-fast validation. |
 | `ima ima queencard/src/src/services/generation-task-policy.ts` | Canonical statuses, failure classification, retry delay, scope construction, and lease token types. |
 | `ima ima queencard/src/src/services/generation-task-policy.test.ts` | Pure policy tests with deterministic clock and random input. |
-| `ima ima queencard/src/src/db/migrations/0006_async_generation_worker.sql` | Queue fields, permit table, constraints, and indexes. |
+| `ima ima queencard/src/src/db/migrations/0007_async_generation_worker.sql` | Queue fields, permit table, constraints, and indexes. |
 | `ima ima queencard/src/src/services/credit.test.ts` | Credit transaction-wrapper and hold idempotency regression tests. |
 | `ima ima queencard/src/src/services/generation-queue.ts` | PostgreSQL enqueue lookup, candidate claim, permit acquisition, heartbeat, retry, finalization guard, and recovery. |
 | `ima ima queencard/src/src/services/generation-queue.test.ts` | Repository behavior with deterministic database doubles. |
@@ -55,7 +55,7 @@
 | File | Change |
 | --- | --- |
 | `ima ima queencard/src/src/db/schema.ts` | Add queue fields and `generationConcurrencyLeases`. |
-| `ima ima queencard/src/src/db/migrations/meta/_journal.json` | Register migration `0006_async_generation_worker`. |
+| `ima ima queencard/src/src/db/migrations/meta/_journal.json` | Register migration `0007_async_generation_worker`. |
 | `ima ima queencard/src/src/services/credit.ts` | Expose transaction-aware freeze, partial settle, and release primitives. |
 | `ima ima queencard/src/src/services/image-provider.ts` | Keep raw provider generation separate from credit lifecycle; preserve legacy wrapper for non-worker callers. |
 | `ima ima queencard/src/src/services/image-generation.ts` | Enqueue idempotently, expose public async state, and delegate execution to the new executor. |
@@ -207,7 +207,7 @@ git push
 
 **Files:**
 - Modify: `ima ima queencard/src/src/db/schema.ts`
-- Create: `ima ima queencard/src/src/db/migrations/0006_async_generation_worker.sql`
+- Create: `ima ima queencard/src/src/db/migrations/0007_async_generation_worker.sql`
 - Modify: `ima ima queencard/src/src/db/migrations/meta/_journal.json`
 - Create: `ima ima queencard/src/src/db/generation-schema.test.ts`
 
@@ -281,7 +281,7 @@ CREATE TABLE IF NOT EXISTS "generation_concurrency_leases" (
 );
 ```
 
-Add the conditional unique idempotency index, runnable and expired-lease indexes, permit unique/indexes, attempt/max-attempt checks, and state/lease consistency checks. Register journal index `6` with tag `0006_async_generation_worker`.
+Add the conditional unique idempotency index, runnable and expired-lease indexes, permit unique/indexes, attempt/max-attempt checks, and state/lease consistency checks. After merging the Pattern Context migration from `main`, register journal index `7` with tag `0007_async_generation_worker`.
 
 - [ ] **Step 5: Run schema and existing generation tests**
 
@@ -292,7 +292,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit and push**
 
 ```bash
-git add src/db/schema.ts src/db/migrations/0006_async_generation_worker.sql src/db/migrations/meta/_journal.json src/db/generation-schema.test.ts
+git add src/db/schema.ts src/db/migrations/0007_async_generation_worker.sql src/db/migrations/meta/_journal.json src/db/generation-schema.test.ts
 git commit -m "feat: add durable generation queue schema"
 git push
 ```

@@ -72,16 +72,54 @@ function getEventId(event: Stripe.DiscriminatedEvent) {
 }
 
 function getInvoiceLinePriceId(invoice: Stripe.Invoice) {
-  return invoice.lines?.data[0]?.price?.id ?? null;
+  const line = invoice.lines?.data[0] as
+    | (Stripe.InvoiceLineItem & {
+        pricing?: {
+          price_details?: { price?: string | null } | null;
+        } | null;
+      })
+    | undefined;
+
+  return line?.price?.id ?? line?.pricing?.price_details?.price ?? null;
+}
+
+function getInvoiceSubscriptionId(invoice: Stripe.Invoice) {
+  const modernInvoice = invoice as Stripe.Invoice & {
+    parent?: {
+      subscription_details?: {
+        subscription?: string | Stripe.Subscription | null;
+      } | null;
+    } | null;
+  };
+  const line = invoice.lines?.data[0] as
+    | (Stripe.InvoiceLineItem & {
+        parent?: {
+          subscription_item_details?: {
+            subscription?: string | Stripe.Subscription | null;
+          } | null;
+        } | null;
+      })
+    | undefined;
+
+  return getSubscriptionId(
+    invoice.subscription ??
+      modernInvoice.parent?.subscription_details?.subscription ??
+      line?.parent?.subscription_item_details?.subscription
+  );
 }
 
 function getInvoiceSubscriptionMetadata(invoice: Stripe.Invoice) {
-  const subscriptionDetails = (
-    invoice as Stripe.Invoice & {
+  const modernInvoice = invoice as Stripe.Invoice & {
       subscription_details?: { metadata?: Stripe.Metadata | null };
-    }
-  ).subscription_details;
-  return subscriptionDetails?.metadata ?? null;
+      parent?: {
+        subscription_details?: { metadata?: Stripe.Metadata | null } | null;
+      } | null;
+    };
+  return (
+    modernInvoice.subscription_details?.metadata ??
+    modernInvoice.parent?.subscription_details?.metadata ??
+    null
+  );
 }
 
 function getProductFromMetadataOrPrice(
@@ -332,7 +370,7 @@ async function handleInvoicePaymentSucceeded(
   event: Stripe.DiscriminatedEvent,
   invoice: Stripe.Invoice
 ) {
-  const subscriptionId = getSubscriptionId(invoice.subscription);
+  const subscriptionId = getInvoiceSubscriptionId(invoice);
   if (!subscriptionId) {
     console.warn("[Stripe] Invoice paid without subscription", {
       invoiceId: invoice.id,
@@ -388,7 +426,7 @@ async function handleInvoicePaymentFailed(
       eventType: event.type,
       stripeCustomerId: getStripeCustomerId(invoice.customer),
       stripeInvoiceId: invoice.id,
-      stripeSubscriptionId: getSubscriptionId(invoice.subscription),
+      stripeSubscriptionId: getInvoiceSubscriptionId(invoice),
       userId: getMetadataValue(invoice.metadata, "userId"),
       productKey: getMetadataValue(invoice.metadata, "productKey"),
       stripePriceId: getInvoiceLinePriceId(invoice),
@@ -398,6 +436,32 @@ async function handleInvoicePaymentFailed(
       },
     },
     "Invoice payment failed"
+  );
+}
+
+async function handlePaymentIntentFailed(
+  event: Stripe.DiscriminatedEvent,
+  paymentIntent: Stripe.PaymentIntent
+) {
+  const metadata = {
+    failureCode: paymentIntent.last_payment_error?.code ?? null,
+    declineCode: paymentIntent.last_payment_error?.decline_code ?? null,
+  };
+
+  return recordSkippedFulfillment(
+    {
+      fulfillmentKey: `stripe:payment_intent_failed:${paymentIntent.id}`,
+      eventId: getEventId(event),
+      eventType: event.type,
+      stripeCustomerId: getStripeCustomerId(paymentIntent.customer),
+      stripePaymentIntentId: paymentIntent.id,
+      stripeChargeId: getChargeId(paymentIntent.latest_charge),
+      userId: getMetadataValue(paymentIntent.metadata, "userId"),
+      productKey: getMetadataValue(paymentIntent.metadata, "productKey"),
+      credits: 0,
+      metadata,
+    },
+    "Payment intent failed"
   );
 }
 
@@ -486,6 +550,11 @@ export async function handleEvent(event: Stripe.DiscriminatedEvent) {
       );
     case "invoice.payment_failed":
       return handleInvoicePaymentFailed(event, event.data.object as Stripe.Invoice);
+    case "payment_intent.payment_failed":
+      return handlePaymentIntentFailed(
+        event,
+        event.data.object as Stripe.PaymentIntent
+      );
     case "customer.subscription.updated":
       return handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
     case "customer.subscription.deleted":

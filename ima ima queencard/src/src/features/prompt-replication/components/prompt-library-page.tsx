@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type SyntheticEvent } from "react";
 import {
   ArrowDownUp,
   ArrowUpRight,
@@ -27,11 +27,21 @@ import { BrandedCarouselControls } from "@/components/common/branded-carousel-co
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { potentialHitTopCount, xhsCaseMetrics } from "@/features/prompt-replication/data/xhsCaseMetrics";
+import { boLandingPromptCases } from "@/features/prompt-replication/data/boLandingPromptCases";
 import { xhsPromptCases, type XhsPromptCase } from "@/features/prompt-replication/data/xhsPromptCases";
+import { publicAssetUrls } from "@/features/prompt-replication/lib/public-assets";
+import {
+  getPatternForPromptCase,
+  getSuggestedPatternValuesForCase,
+} from "@/features/style-recreation/pattern-registry";
+import { buildReplicationPrompt, parseReplicationPrompt } from "@/features/prompt-replication/lib/prompt-replication";
 
+const boLandingCategories = ["爆款图文", "梗图", "公众号配图"];
+const promptCases = [...xhsPromptCases, ...boLandingPromptCases];
 const categories = [
   "全部",
   "热门高赞",
+  ...boLandingCategories,
   "养生内调",
   "清单种草",
   "美女图集",
@@ -44,6 +54,9 @@ const categories = [
 const categoryAccents: Record<string, string> = {
   全部: "bg-pumpkin",
   热门高赞: "bg-lemon",
+  爆款图文: "bg-pumpkin",
+  梗图: "bg-sky",
+  公众号配图: "bg-seafoam",
   养生内调: "bg-seafoam",
   清单种草: "bg-lavender",
   美女图集: "bg-spring",
@@ -54,7 +67,7 @@ const categoryAccents: Record<string, string> = {
 };
 
 const sortModes = ["综合热度", "潜力优先", "收藏优先", "分享优先"];
-const defaultCase = xhsPromptCases[0];
+const defaultCase = promptCases[0];
 
 const IMAGE_FALLBACK =
   "data:image/svg+xml;utf8," +
@@ -115,17 +128,21 @@ function accentFor(category: string) {
 }
 
 function imagesFor(item: XhsPromptCase) {
-  return item.images.length > 0 ? item.images : [item.image];
+  return publicAssetUrls(item.images.length > 0 ? item.images : [item.image]);
 }
 
 function buildCaseGenerationSeed(
   item: XhsPromptCase,
   prompt: string
 ): ImageGenerationSeed {
+  const pattern = getPatternForPromptCase(item);
   return {
     source: "prompt-library",
     templateId: item.id,
     sourceCaseId: item.id,
+    patternId: pattern?.id,
+    patternVersion: pattern?.version,
+    patternValues: getSuggestedPatternValuesForCase(item),
     sourceCaseCategory: item.category,
     sourceNoteUrl: item.noteUrl,
     sourceAuthorUrl: item.authorUrl,
@@ -156,7 +173,18 @@ function compactPromptSeed(value: string, maxLength = 6) {
 }
 
 function seedForCase(item: XhsPromptCase) {
-  const genericTopics = new Set(["漫画", "原创漫画", "小红书", "清单种草", "生活灵感", "健康养生", "有趣"]);
+  const genericTopics = new Set([
+    "漫画",
+    "原创漫画",
+    "小红书",
+    "清单种草",
+    "生活灵感",
+    "健康养生",
+    "有趣",
+    "爆款图文",
+    "AI创作",
+    "抖音",
+  ]);
   const topic = item.topics.find((entry) => {
     const compact = compactPromptSeed(entry, 8);
     return compact.length >= 2 && !genericTopics.has(compact);
@@ -165,9 +193,23 @@ function seedForCase(item: XhsPromptCase) {
   return compactPromptSeed(topic ?? item.sourceTitle ?? item.title, item.category === "知识科普" ? 8 : 6);
 }
 
-function sourceTraitsFor(item: XhsPromptCase) {
-  const match = item.prompt.match(/参考图文《[^》]+》的(.+?)，生成一组新的/);
-  return match?.[1] ?? "首图结构、标题节奏、内容组织和来源语气";
+function sourceMethodFor(item: XhsPromptCase) {
+  const traitsMatch = item.prompt.match(/参考(?:图文|案例)《[^》]+》的(.+?)，生成一组新的/);
+  if (traitsMatch?.[1]) return traitsMatch[1];
+
+  const methodMatch = item.prompt.match(/创作方法：(.+?)\s*请输出/);
+  if (methodMatch?.[1]) {
+    return methodMatch[1]
+      .replace(/^保留原(?:案例|图文)的/, "")
+      .replace(/。$/, "")
+      .split("，")[0];
+  }
+
+  return "标题钩子、画面节奏和收藏理由";
+}
+
+function sourceAwareSubtitleFor(item: XhsPromptCase) {
+  return `保留原图文的${sourceMethodFor(item)}，换成新的主题`;
 }
 
 function emotionTargetFor(item: XhsPromptCase, seed: string): PromptTarget {
@@ -210,6 +252,52 @@ function emotionTargetFor(item: XhsPromptCase, seed: string): PromptTarget {
 
 function promptTargetFor(item: XhsPromptCase): PromptTarget {
   const seed = seedForCase(item);
+
+  if (item.category === "爆款图文") {
+    const sourceText = `${item.sourceTitle} ${item.topics.join(" ")}`;
+    if (/旅行|攻略|景点|路线|城市/.test(sourceText)) {
+      return {
+        theme: "旅行攻略图文",
+        title: `${seed}旅行攻略，一张图讲清楚`,
+        subtitle: "把路线、体验和避坑信息整理成能直接收藏的出行清单",
+        output: "封面钩子、6-8 页图文脚本，每页包含地点/路线、画面重点、实用信息和互动/收藏动作。",
+      };
+    }
+
+    if (/知识|科普|考试|学习|方法/.test(sourceText)) {
+      return {
+        theme: "知识科普图文",
+        title: `一张图讲清${seed}的关键逻辑`,
+        subtitle: "把复杂知识拆成准确、清晰、能收藏转发的视觉卡片",
+        output: "封面钩子、6-8 页图文脚本，每页包含核心知识点、画面元素、口语化解释和互动/收藏动作。",
+      };
+    }
+
+    return {
+      theme: "爆款图文",
+      title: `${item.category}，看完这组图就懂了`,
+      subtitle: sourceAwareSubtitleFor(item),
+      output: "封面标题与副标题、6-8 页图文脚本，每页包含画面描述、主文案、信息点和互动/收藏动作。",
+    };
+  }
+
+  if (item.category === "梗图") {
+    return {
+      theme: "梗图",
+      title: `关于${seed}的几个离谱瞬间`,
+      subtitle: "用轻松、简短、有反差的画面把日常情绪讲出来",
+      output: "封面钩子、6-8 页梗图脚本，每页包含画面构图、短文案、反差点和最后一页互动提问。",
+    };
+  }
+
+  if (item.category === "公众号配图") {
+    return {
+      theme: "公众号配图",
+      title: `${seed}主题视觉图文`,
+      subtitle: "把文章观点拆成有层次、易阅读、适合转发的配图内容",
+      output: "封面标题与副标题、6-8 页配图脚本，每页包含画面描述、主文案、信息层级和版式建议。",
+    };
+  }
 
   if (item.category === "情绪疗愈") return emotionTargetFor(item, seed);
 
@@ -267,9 +355,7 @@ function promptTargetFor(item: XhsPromptCase): PromptTarget {
 }
 
 function promptForCase(item: XhsPromptCase) {
-  const target = promptTargetFor(item);
-
-  return `生成一组新的${target.theme}主题：标题《${target.title}》，副标题《${target.subtitle}》。`;
+  return buildReplicationPrompt(item);
 }
 
 function caseDateTimeFor(item: XhsPromptCase) {
@@ -285,10 +371,10 @@ function formatShortDate(date: string) {
   return date.slice(5).replace("-", ".");
 }
 
-const latestCaseTime = Math.max(...xhsPromptCases.map(caseDateTimeFor));
+const latestCaseTime = Math.max(...promptCases.map(caseDateTimeFor));
 const moneyBoardWindowStartTime = latestCaseTime - 13 * 24 * 60 * 60 * 1000;
 const moneyBoardWindowLabel = `${formatShortDate(dateStringFromTime(moneyBoardWindowStartTime))} - ${formatShortDate(dateStringFromTime(latestCaseTime))}`;
-const moneyBoardRecentCases = xhsPromptCases.filter((item) => {
+const moneyBoardRecentCases = promptCases.filter((item) => {
   const time = caseDateTimeFor(item);
   return time >= moneyBoardWindowStartTime && time <= latestCaseTime;
 });
@@ -339,7 +425,7 @@ function compactRatio(value: number) {
 
 function fallbackHeatScore(item: XhsPromptCase) {
   const heat = item.likes + item.saves * 0.35 + item.shares * 0.45;
-  const maxHeat = Math.max(...xhsPromptCases.map((entry) => entry.likes + entry.saves * 0.35 + entry.shares * 0.45));
+  const maxHeat = Math.max(...promptCases.map((entry) => entry.likes + entry.saves * 0.35 + entry.shares * 0.45));
   return Math.max(40, Math.round((heat / Math.max(maxHeat, 1)) * 60 + 40));
 }
 
@@ -379,7 +465,7 @@ function useFilteredCases(activeCategory: string, query: string, sortMode: strin
   return useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
-    const filtered = xhsPromptCases.filter((item) => {
+    const filtered = promptCases.filter((item) => {
       const matchesCategory =
         activeCategory === "全部" ||
         (activeCategory === "热门高赞" ? item.likes >= 20000 || item.saves >= 20000 : item.category === activeCategory);
@@ -398,51 +484,21 @@ function useFilteredCases(activeCategory: string, query: string, sortMode: strin
 }
 
 function PromptTemplatePreview({ prompt, className = "" }: { prompt: string; className?: string }) {
-  const titleMatch = /标题《([^》]+)》/.exec(prompt);
-  const subtitleMatch = /副标题(?:《([^》]+)》|[“"]([^”"]+)[”"])/.exec(prompt);
-  const ranges = [
-    titleMatch
-      ? {
-          start: titleMatch.index + "标题".length,
-          end: titleMatch.index + titleMatch[0].length,
-          text: titleMatch[0].replace(/^标题/, ""),
-        }
-      : null,
-    subtitleMatch
-      ? {
-          start: subtitleMatch.index + "副标题".length,
-          end: subtitleMatch.index + subtitleMatch[0].length,
-          text: subtitleMatch[0].replace(/^副标题/, ""),
-        }
-      : null,
-  ]
-    .filter((range): range is { start: number; end: number; text: string } => Boolean(range))
-    .sort((a, b) => a.start - b.start);
+  const parsed = parseReplicationPrompt(prompt);
 
-  if (ranges.length === 0) {
+  if (!parsed) {
     return <p className={className}>{prompt}</p>;
   }
 
-  const parts: ReactNode[] = [];
-  let cursor = 0;
-
-  ranges.forEach((range, index) => {
-    if (range.start > cursor) {
-      parts.push(<span key={`text-${index}`}>{prompt.slice(cursor, range.start)}</span>);
-    }
-    parts.push(
-      <span key={`slot-${index}`} className="prompt-slot-highlight">
-        {range.text}
-      </span>,
-    );
-    cursor = range.end;
-  });
-
-  if (cursor < prompt.length) {
-    parts.push(<span key="text-tail">{prompt.slice(cursor)}</span>);
-  }
-
-  return <p className={className}>{parts}</p>;
+  return (
+    <p className={className}>
+      复刻原帖 DNA，主题换成
+      <span className="prompt-slot-highlight">{parsed.topic}</span>
+      ，标题换成
+      <span className="prompt-slot-highlight">《{parsed.title}》</span>
+      ，画面与风格保持不变。
+    </p>
+  );
 }
 
 function PromptHero({
@@ -567,6 +623,7 @@ function PromptHero({
           </div>
 
           <ImageGenerationComposer
+            key={selectedCase.id}
             seed={buildCaseGenerationSeed(selectedCase, prompt)}
             showHeader={false}
             frameless
@@ -700,6 +757,7 @@ function CaseImageCarousel({
   onUseImage: (item: XhsPromptCase, imageIndex: number) => void;
 }) {
   const images = imagesFor(item);
+  const usesImageBackdrop = item.category === "公众号配图";
   const [selectedIndex, setSelectedIndex] = useState(0);
   const previousIndexRef = useRef(0);
   const slideRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -740,7 +798,7 @@ function CaseImageCarousel({
 
     const direction = selectedIndex >= previousIndexRef.current ? 1 : -1;
     const activeSlide = slideRefs.current[selectedIndex];
-    const activeImage = activeSlide?.querySelector("img");
+    const activeImage = activeSlide?.querySelector("img:not(.case-image-backdrop)");
     const frame = frameRef.current;
 
     if (activeSlide && activeImage && frame) {
@@ -780,7 +838,7 @@ function CaseImageCarousel({
 
   const playImageClickMotion = useCallback((event: ReactMouseEvent<HTMLButtonElement>) => {
     const trigger = event.currentTarget;
-    const activeImage = trigger.querySelector("img");
+    const activeImage = trigger.querySelector("img:not(.case-image-backdrop)");
 
     gsap.killTweensOf([trigger, activeImage]);
 
@@ -796,7 +854,11 @@ function CaseImageCarousel({
   }, []);
 
   return (
-    <div className="case-card-gallery bg-canvas-pink p-3">
+    <div
+      className={`case-card-gallery bg-canvas-pink p-3 ${
+        usesImageBackdrop ? "case-card-gallery--landscape" : ""
+      }`}
+    >
       <div className="case-image-card-shell">
         <div
           ref={frameRef}
@@ -832,9 +894,20 @@ function CaseImageCarousel({
                       alt={`${item.title} 第 ${index + 1} 张参考图`}
                       loading="lazy"
                       onError={handleImageError}
-                      className="select-none transition-transform duration-700 ease-out"
+                      className={`${usesImageBackdrop ? "case-image-contained-center" : ""} select-none transition-transform duration-700 ease-out`}
                       draggable={false}
                     />
+                    {usesImageBackdrop ? (
+                      <img
+                        src={src}
+                        alt=""
+                        aria-hidden="true"
+                        loading="lazy"
+                        onError={handleImageError}
+                        className="case-image-backdrop select-none"
+                        draggable={false}
+                      />
+                    ) : null}
                   </button>
                   <a
                     href={src}
@@ -854,13 +927,15 @@ function CaseImageCarousel({
         </div>
       </div>
 
-      <BrandedCarouselControls
-        count={images.length}
-        selectedIndex={selectedIndex}
-        ariaLabel={`${item.title} 图集分页`}
-        onPrevious={(event) => stepImage(-1, event)}
-        onNext={(event) => stepImage(1, event)}
-      />
+      {images.length > 1 ? (
+        <BrandedCarouselControls
+          count={images.length}
+          selectedIndex={selectedIndex}
+          ariaLabel={`${item.title} 图集分页`}
+          onPrevious={(event) => stepImage(-1, event)}
+          onNext={(event) => stepImage(1, event)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1339,7 +1414,7 @@ export default function Prompts() {
                 className="w-full bg-transparent font-manrope text-[15px] font-semibold text-charcoal placeholder:font-medium placeholder:text-charcoal/40 focus:outline-none"
               />
               <span className="shrink-0 whitespace-nowrap font-manrope text-[12px] font-bold tabular-nums text-charcoal/45">
-                共 {xhsPromptCases.length}
+                共 {promptCases.length}
               </span>
             </label>
 

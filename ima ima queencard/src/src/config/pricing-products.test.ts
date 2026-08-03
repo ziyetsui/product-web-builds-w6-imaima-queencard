@@ -26,13 +26,22 @@ afterEach(() => {
 
 describe("pricing products", () => {
   it("defines the six billable catalog products", () => {
-    expect(PRICING_PRODUCTS.map((product) => product.key)).toEqual([
-      "creator_monthly",
-      "creator_annual",
-      "studio_monthly",
-      "studio_annual",
-      "credit_creator",
-      "credit_studio",
+    expect(
+      PRICING_PRODUCTS.map(({ key, mode, plan, billingPeriod, credits, validityDays }) => ({
+        key,
+        mode,
+        plan,
+        billingPeriod,
+        credits,
+        validityDays,
+      }))
+    ).toEqual([
+      { key: "creator_monthly", mode: "subscription", plan: "PRO", billingPeriod: "month", credits: 600, validityDays: 30 },
+      { key: "creator_annual", mode: "subscription", plan: "PRO", billingPeriod: "year", credits: 7200, validityDays: 365 },
+      { key: "studio_monthly", mode: "subscription", plan: "BUSINESS", billingPeriod: "month", credits: 1800, validityDays: 30 },
+      { key: "studio_annual", mode: "subscription", plan: "BUSINESS", billingPeriod: "year", credits: 21600, validityDays: 365 },
+      { key: "credit_creator", mode: "payment", plan: null, billingPeriod: null, credits: 600, validityDays: 365 },
+      { key: "credit_studio", mode: "payment", plan: null, billingPeriod: null, credits: 1800, validityDays: 365 },
     ]);
   });
 

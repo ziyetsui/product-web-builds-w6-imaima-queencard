@@ -126,6 +126,45 @@ export function invoicePaidEvent(overrides: Partial<Stripe.Invoice> = {}) {
   } as unknown as Stripe.DiscriminatedEvent;
 }
 
+export function modernInvoicePaymentSucceededEvent() {
+  const event = invoicePaymentSucceededEvent() as unknown as {
+    data: { object: Record<string, unknown> & { lines: { data: Array<Record<string, unknown>> } } };
+  };
+  const invoice = event.data.object;
+
+  invoice.subscription = null;
+  invoice.subscription_details = null;
+  invoice.parent = {
+    type: "subscription_details",
+    subscription_details: {
+      subscription: "sub_123",
+      metadata: {
+        userId: "user_123",
+        productKey: "creator_monthly",
+      },
+    },
+  };
+  invoice.lines.data[0].price = null;
+  invoice.lines.data[0].pricing = {
+    type: "price_details",
+    price_details: {
+      price: "price_pro_monthly",
+      product: "prod_123",
+    },
+    unit_amount_decimal: "9900",
+  };
+  invoice.lines.data[0].parent = {
+    type: "subscription_item_details",
+    subscription_item_details: {
+      subscription: "sub_123",
+      subscription_item: "si_123",
+      proration: false,
+    },
+  };
+
+  return event as unknown as Stripe.DiscriminatedEvent;
+}
+
 export function invoicePaymentFailedEvent(
   overrides: Partial<Stripe.Invoice> = {}
 ) {
@@ -137,6 +176,34 @@ export function invoicePaymentFailedEvent(
     }),
     id: "evt_invoice_payment_failed",
     type: "invoice.payment_failed",
+  } as unknown as Stripe.DiscriminatedEvent;
+}
+
+export function paymentIntentFailedEvent(
+  overrides: Partial<Stripe.PaymentIntent> = {}
+) {
+  return {
+    id: "evt_payment_intent_failed",
+    type: "payment_intent.payment_failed",
+    data: {
+      object: {
+        id: "pi_failed_123",
+        object: "payment_intent",
+        customer: "cus_123",
+        latest_charge: "ch_failed_123",
+        metadata: {
+          userId: "user_123",
+          productKey: "credit_creator",
+        },
+        last_payment_error: {
+          type: "card_error",
+          code: "card_declined",
+          decline_code: "insufficient_funds",
+          message: "Sensitive processor message must not be persisted",
+        },
+        ...overrides,
+      },
+    },
   } as unknown as Stripe.DiscriminatedEvent;
 }
 

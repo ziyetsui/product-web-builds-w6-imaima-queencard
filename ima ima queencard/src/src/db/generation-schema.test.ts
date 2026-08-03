@@ -11,7 +11,7 @@ import {
 } from "./schema";
 
 const migrationSql = readFileSync(
-  resolve(process.cwd(), "src/db/migrations/0006_async_generation_worker.sql"),
+  resolve(process.cwd(), "src/db/migrations/0007_async_generation_worker.sql"),
   "utf8"
 );
 const migrationJournal = JSON.parse(
@@ -377,9 +377,9 @@ describe("async generation schema", () => {
   it("registers the async generation worker migration in the journal", () => {
     expect(migrationJournal.entries).toContainEqual(
       expect.objectContaining({
-        idx: 6,
+        idx: 7,
         version: "7",
-        tag: "0006_async_generation_worker",
+        tag: "0007_async_generation_worker",
         breakpoints: true,
       })
     );

@@ -24,8 +24,9 @@ function getPricingNotice(searchParams: Record<string, SearchParamsValue>) {
 
   if (checkout === "success") {
     return {
-      title: "支付已完成",
-      description: "我们正在同步你的订阅状态或积分包到账。通常几秒内完成。",
+      title: "支付结果确认中",
+      description:
+        "你已返回支付页面，支付结果仍需服务端确认。订阅或积分是否到账，以服务端 Webhook 处理结果和「我的积分」页面显示为准。",
     };
   }
 

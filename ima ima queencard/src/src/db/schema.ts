@@ -454,6 +454,7 @@ export const generationTasks = pgTable(
     sourceAuthorUrl: text("source_author_url"),
     prompt: text("prompt").notNull(),
     originalPrompt: text("original_prompt"),
+    patternContext: jsonb("pattern_context"),
     referenceImages: jsonb("reference_images").default(sql`'[]'::jsonb`).notNull(),
     model: text("model").notNull(),
     providerModel: text("provider_model").notNull(),

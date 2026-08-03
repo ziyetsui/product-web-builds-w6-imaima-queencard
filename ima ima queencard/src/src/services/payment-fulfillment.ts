@@ -146,58 +146,57 @@ export function markRefunded(
 
 export async function fulfillCreditGrantOnce(params: FulfillCreditGrantParams) {
   return db.transaction(async (trx) => {
-    const [existing] = await trx
+    await trx
+      .insert(paymentFulfillments)
+      .values({
+        fulfillmentKey: params.fulfillmentKey,
+        provider: params.provider ?? "stripe",
+        eventId: params.eventId,
+        eventType: params.eventType,
+        providerCustomerId: params.providerCustomerId,
+        providerSubscriptionId: params.providerSubscriptionId,
+        providerCheckoutId: params.providerCheckoutId,
+        providerOrderId: params.providerOrderId,
+        providerTransactionId: params.providerTransactionId,
+        providerRefundId: params.providerRefundId,
+        providerDisputeId: params.providerDisputeId,
+        providerProductId: params.providerProductId,
+        stripeCustomerId: params.stripeCustomerId,
+        stripeSubscriptionId: params.stripeSubscriptionId,
+        stripeSessionId: params.stripeSessionId,
+        stripeInvoiceId: params.stripeInvoiceId,
+        stripePaymentIntentId: params.stripePaymentIntentId,
+        stripeChargeId: params.stripeChargeId,
+        stripeRefundId: params.stripeRefundId,
+        productKey: params.productKey,
+        stripePriceId: params.stripePriceId,
+        userId: params.userId,
+        credits: normalizeCredits(params.credits),
+        status: PaymentFulfillmentStatus.PENDING,
+        metadata: params.metadata,
+        updatedAt: new Date(),
+      })
+      .onConflictDoNothing({
+        target: paymentFulfillments.fulfillmentKey,
+      });
+
+    const [fulfillment] = await trx
       .select()
       .from(paymentFulfillments)
       .where(eq(paymentFulfillments.fulfillmentKey, params.fulfillmentKey))
+      .for("update")
       .limit(1);
 
-    if (existing && existing.status !== PaymentFulfillmentStatus.PENDING) {
-      return {
-        fulfilled: false,
-        fulfillment: existing,
-        packageId: existing.creditPackageId,
-      };
+    if (!fulfillment) {
+      throw new Error(`Failed to lock fulfillment ${params.fulfillmentKey}`);
     }
 
-    const fulfillment =
-      existing ??
-      (
-        await trx
-          .insert(paymentFulfillments)
-          .values({
-            fulfillmentKey: params.fulfillmentKey,
-            provider: params.provider ?? "stripe",
-            eventId: params.eventId,
-            eventType: params.eventType,
-            providerCustomerId: params.providerCustomerId,
-            providerSubscriptionId: params.providerSubscriptionId,
-            providerCheckoutId: params.providerCheckoutId,
-            providerOrderId: params.providerOrderId,
-            providerTransactionId: params.providerTransactionId,
-            providerRefundId: params.providerRefundId,
-            providerDisputeId: params.providerDisputeId,
-            providerProductId: params.providerProductId,
-            stripeCustomerId: params.stripeCustomerId,
-            stripeSubscriptionId: params.stripeSubscriptionId,
-            stripeSessionId: params.stripeSessionId,
-            stripeInvoiceId: params.stripeInvoiceId,
-            stripePaymentIntentId: params.stripePaymentIntentId,
-            stripeChargeId: params.stripeChargeId,
-            stripeRefundId: params.stripeRefundId,
-            productKey: params.productKey,
-            stripePriceId: params.stripePriceId,
-            userId: params.userId,
-            credits: normalizeCredits(params.credits),
-            status: PaymentFulfillmentStatus.PENDING,
-            metadata: params.metadata,
-            updatedAt: new Date(),
-          })
-          .returning()
-      )[0];
-
-    if (!fulfillment) {
-      throw new Error(`Failed to create fulfillment ${params.fulfillmentKey}`);
+    if (fulfillment.status !== PaymentFulfillmentStatus.PENDING) {
+      return {
+        fulfilled: false,
+        fulfillment,
+        packageId: fulfillment.creditPackageId,
+      };
     }
 
     if (params.credits <= 0) {
