@@ -11,6 +11,7 @@
 ## Global Constraints
 
 - Work only in `app/`, `backend/`, and `.gba/0001_complete-miniapp/`; do not edit the Web product.
+- Keep Web and Mini independently deployable: separate servers, domains, databases, object storage, identities, credits, orders, and histories are valid. Template synchronization uses a pinned, checksummed artifact and creates no runtime dependency on the Web service.
 - Preserve all existing template records and stable ids. The catalog import must produce the union of current Mini and reconciled Web data after deterministic deduplication.
 - Keep real credentials out of source, fixtures, logs, snapshots, and commits.
 - Production defaults: PostgreSQL required, S3-compatible storage required, development login disabled, mock payment disabled, payment provider `disabled`.

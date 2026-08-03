@@ -31,8 +31,9 @@ Baseline verification on 2026-08-03:
 - The deployed mini backend health and template endpoints were reachable, but
   the deployed SHA was not proven and the template endpoint returned 122
   records.
-- The reconciled Web source contains 210 prompt cases, so template data has
-  diverged.
+- The latest reconciled Web source contains 2,155 BO prompt cases and the Mini
+  source retains 122 XHS cases, so the production catalog target is 2,277
+  records before documented exact-id deduplication.
 - The current backend uses SQLite and local files, runs generation through an
   in-process timer, charges credits before generation, and does not release
   credits when generation fails.
@@ -91,6 +92,12 @@ Mini BFF / business service
 The mini BFF owns WeChat-specific authentication, response DTOs, uploads,
 payment calls, and payment notifications. It must not depend on Web cookies or
 write directly through Web route handlers.
+
+The Web product and mini-program may run on different servers, cloud vendors,
+domains, PostgreSQL clusters, and object-storage buckets. Neither product is a
+runtime dependency of the other. Their only synchronization boundary in this
+delivery is a portable, checksummed template-catalog artifact published from a
+pinned source revision and imported independently by the mini backend.
 
 ### 5.2 Repository and Branch Boundary
 
@@ -217,8 +224,10 @@ ingested. No current record is removed merely because a new source is added.
 ### 8.2 Synchronization
 
 - The branch retains a checked-in catalog snapshot for reproducible builds.
-- An import script accepts a Web catalog export or configured HTTPS catalog
-  endpoint and produces the neutral snapshot plus checksum.
+- An import script accepts a pinned Web catalog export and produces the neutral
+  snapshot plus checksum. A configured HTTPS export endpoint may be used by an
+  operator, but the deployed mini backend never needs the Web service at
+  runtime and always boots from its own validated snapshot/database.
 - The backend imports a new catalog version transactionally and switches the
   active version only after validation succeeds.
 - The template API exposes `catalogVersion`, pagination, category, tags,
