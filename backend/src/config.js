@@ -61,10 +61,22 @@ function configError(missing, invalid) {
   return error;
 }
 
+function isSecretKey(key) {
+  const normalized = String(key || "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+  return normalized.includes("secret")
+    || normalized.includes("token")
+    || normalized.includes("password")
+    || normalized.includes("privatekey")
+    || normalized.includes("accesskey")
+    || normalized.endsWith("apikey")
+    || normalized === "apiv3key"
+    || normalized === "databaseurl";
+}
+
 function redactConfig(value, key = "") {
   if (value === null || value === undefined) return value;
   if (typeof value !== "object") {
-    return /secret|token|password|privatekey|accesskey|apiKey|apikey|databaseurl|^url$/i.test(key)
+    return isSecretKey(key) || /^url$/i.test(key)
       ? REDACTED_SECRET
       : value;
   }
@@ -72,7 +84,7 @@ function redactConfig(value, key = "") {
 
   const result = {};
   for (const [childKey, childValue] of Object.entries(value)) {
-    if (/secret|token|password|privatekey|accesskey|apiKey|apikey/i.test(childKey)) {
+    if (isSecretKey(childKey)) {
       result[childKey] = REDACTED_SECRET;
     } else if (/^url$/i.test(childKey) && /database|connection/i.test(key)) {
       result[childKey] = REDACTED_SECRET;
@@ -161,6 +173,20 @@ function loadConfig(env = process.env) {
     : valueFor(env, ["STORAGE_SECRET_ACCESS_KEY", "S3_SECRET_ACCESS_KEY"], "");
   if (!["local", "s3", "minio", "r2"].includes(storageDriver)) invalid.push("STORAGE_PROVIDER");
 
+  const legacyPaymentMode = valueFor(env, ["MINIAPP_PAYMENT_MODE"], production ? "manual" : "mock").toLowerCase();
+  const paymentProvider = valueFor(
+    env,
+    ["PAYMENT_PROVIDER"],
+    legacyPaymentMode === "mock" || legacyPaymentMode === "wechat"
+      ? legacyPaymentMode
+      : "disabled",
+  ).toLowerCase();
+  if (production && legacyPaymentMode === "mock") invalid.push("MINIAPP_PAYMENT_MODE");
+  if (production && paymentProvider === "mock") invalid.push("PAYMENT_PROVIDER");
+  const paymentMode = paymentProvider === "mock"
+    ? "mock"
+    : paymentProvider === "wechat" ? "wechat" : "manual";
+
   const config = {
     server: {
       environment,
@@ -201,7 +227,7 @@ function loadConfig(env = process.env) {
       forcePathStyle: booleanFor(env, ["STORAGE_FORCE_PATH_STYLE", "S3_FORCE_PATH_STYLE"], storageDriver === "minio"),
     },
     generation: {
-      provider: valueFor(env, ["GENERATION_PROVIDER", "MINIAPP_IMAGE_PROVIDER", "MINIAPP_GENERATION_MODE"], "preview").toLowerCase(),
+      provider: valueFor(env, ["MINIAPP_IMAGE_PROVIDER", "GENERATION_PROVIDER", "MINIAPP_GENERATION_MODE"], "preview").toLowerCase(),
       upstreamBaseUrl: valueFor(env, ["GENERATION_UPSTREAM_BASE_URL", "ANCHER_GENERATOR_API_BASE_URL"], ""),
       upstreamAuthToken: valueFor(env, ["GENERATION_UPSTREAM_AUTH_TOKEN", "MINIAPP_UPSTREAM_AUTH_TOKEN"], ""),
       workerMode: valueFor(env, ["GENERATION_WORKER_MODE"], production ? "durable" : "in-process").toLowerCase(),
@@ -211,8 +237,8 @@ function loadConfig(env = process.env) {
       maxAttempts: numberFor(env, ["GENERATION_MAX_ATTEMPTS"], 3, { min: 1 }),
     },
     payment: {
-      provider: valueFor(env, ["PAYMENT_PROVIDER"], production ? "disabled" : "mock").toLowerCase(),
-      mode: valueFor(env, ["MINIAPP_PAYMENT_MODE"], production ? "manual" : "mock").toLowerCase(),
+      provider: paymentProvider,
+      mode: paymentMode,
       merchantId: valueFor(env, ["WECHAT_PAY_MERCHANT_ID", "WECHAT_MCHID"], ""),
       certificateSerial: valueFor(env, ["WECHAT_PAY_CERTIFICATE_SERIAL"], ""),
       apiV3Key: valueFor(env, ["WECHAT_PAY_API_V3_KEY"], ""),
@@ -240,12 +266,14 @@ function toRuntimeEnv(config, sourceEnv = {}) {
     MINIAPP_DEV_LOGIN: config.wechat.devLogin ? "1" : "0",
     WECHAT_MINIAPP_APP_ID: config.wechat.appId,
     WECHAT_MINIAPP_APP_SECRET: config.wechat.appSecret,
+    WECHAT_LOGIN_ENDPOINT: config.wechat.loginEndpoint,
     MINIAPP_AUTH_TOKEN_SECRET: config.auth.tokenSecret,
     MINIAPP_AUTH_TOKEN_TTL_SECONDS: String(config.auth.tokenTtlSeconds),
     MINIAPP_DB_PATH: config.database.sqlitePath,
     MINIAPP_UPLOAD_ROOT: config.storage.localRoot,
     MINIAPP_PUBLIC_ASSET_BASE_URL: config.storage.publicBaseUrl,
     MINIAPP_IMAGE_PROVIDER: config.generation.provider,
+    PAYMENT_PROVIDER: config.payment.provider,
     MINIAPP_PAYMENT_MODE: config.payment.mode,
   };
 }

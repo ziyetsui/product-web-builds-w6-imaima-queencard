@@ -1,7 +1,12 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { loadConfig } = require("../src/config");
+const {
+  REDACTED_SECRET,
+  loadConfig,
+  redactConfig,
+  toRuntimeEnv,
+} = require("../src/config");
 
 function productionEnv(overrides = {}) {
   return {
@@ -100,4 +105,91 @@ test("returns typed runtime sections and redacted public diagnostics", () => {
   assert.equal(config.public.storage.secretAccessKey, undefined);
   assert.equal(config.public.auth.tokenSecret, undefined);
   assert.doesNotMatch(JSON.stringify(config.public), /db-password|storage-secret-key|auth-token-secret/);
+});
+
+test("rejects mock payment in production through either payment variable", () => {
+  const cases = [
+    {
+      PAYMENT_PROVIDER: "disabled",
+      MINIAPP_PAYMENT_MODE: "mock",
+      expectedKey: "MINIAPP_PAYMENT_MODE",
+    },
+    {
+      PAYMENT_PROVIDER: "mock",
+      MINIAPP_PAYMENT_MODE: "manual",
+      expectedKey: "PAYMENT_PROVIDER",
+    },
+  ];
+
+  for (const fixture of cases) {
+    assert.throws(
+      () => loadConfig(productionEnv(fixture)),
+      (error) => {
+        assert.equal(error.code, "CONFIG_INVALID");
+        assert.match(error.message, new RegExp(fixture.expectedKey));
+        return true;
+      },
+    );
+  }
+});
+
+test("preserves legacy manual payment mode outside production", () => {
+  const config = loadConfig({
+    NODE_ENV: "test",
+    MINIAPP_PAYMENT_MODE: "manual",
+  });
+
+  assert.equal(config.payment.provider, "disabled");
+  assert.equal(config.payment.mode, "manual");
+  assert.equal(toRuntimeEnv(config).MINIAPP_PAYMENT_MODE, "manual");
+});
+
+test("keeps the existing MINIAPP_IMAGE_PROVIDER authoritative during migration", () => {
+  const config = loadConfig({
+    NODE_ENV: "test",
+    GENERATION_PROVIDER: "preview",
+    MINIAPP_IMAGE_PROVIDER: "gptproto",
+  });
+  const runtimeEnv = toRuntimeEnv(config);
+
+  assert.equal(config.generation.provider, "gptproto");
+  assert.equal(runtimeEnv.MINIAPP_IMAGE_PROVIDER, "gptproto");
+});
+
+test("redacts every configured secret field including the WeChat Pay API v3 key", () => {
+  const redacted = redactConfig({
+    database: { url: "postgres://user:password@db.example/miniapp" },
+    auth: { tokenSecret: "token-secret" },
+    wechat: { appSecret: "wechat-secret" },
+    storage: {
+      accessKeyId: "access-key",
+      secretAccessKey: "secret-access-key",
+    },
+    generation: { upstreamAuthToken: "upstream-token" },
+    payment: {
+      apiV3Key: "api-v3-secret",
+      privateKey: "private-key",
+    },
+  });
+
+  assert.equal(redacted.database.url, REDACTED_SECRET);
+  assert.equal(redacted.auth.tokenSecret, REDACTED_SECRET);
+  assert.equal(redacted.wechat.appSecret, REDACTED_SECRET);
+  assert.equal(redacted.storage.accessKeyId, REDACTED_SECRET);
+  assert.equal(redacted.storage.secretAccessKey, REDACTED_SECRET);
+  assert.equal(redacted.generation.upstreamAuthToken, REDACTED_SECRET);
+  assert.equal(redacted.payment.apiV3Key, REDACTED_SECRET);
+  assert.equal(redacted.payment.privateKey, REDACTED_SECRET);
+});
+
+test("propagates the configured WeChat login endpoint into the app runtime", () => {
+  const config = loadConfig({
+    NODE_ENV: "test",
+    WECHAT_LOGIN_ENDPOINT: "https://wechat-gateway.example/code2session",
+  });
+
+  assert.equal(
+    toRuntimeEnv(config).WECHAT_LOGIN_ENDPOINT,
+    "https://wechat-gateway.example/code2session",
+  );
 });

@@ -69,16 +69,6 @@ function requireAdmin(request, env, store) {
   return { payload, user };
 }
 
-function isDevLoginAdmin(request, env) {
-  if (env.MINIAPP_DEV_LOGIN !== "1") return false;
-  try {
-    getAuthPayload(request, env);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function loginWithWechatCode(input) {
   const { code, env, fetchImpl } = input;
   if (env.MINIAPP_DEV_LOGIN === "1") {
@@ -96,13 +86,16 @@ async function loginWithWechatCode(input) {
     throw error;
   }
 
-  const params = new URLSearchParams({
-    appid,
-    secret,
-    js_code: code,
-    grant_type: "authorization_code",
-  });
-  const response = await fetchImpl(`https://api.weixin.qq.com/sns/jscode2session?${params.toString()}`);
+  const endpoint = new URL(getEnv(
+    env,
+    "WECHAT_LOGIN_ENDPOINT",
+    "https://api.weixin.qq.com/sns/jscode2session",
+  ));
+  endpoint.searchParams.set("appid", appid);
+  endpoint.searchParams.set("secret", secret);
+  endpoint.searchParams.set("js_code", code);
+  endpoint.searchParams.set("grant_type", "authorization_code");
+  const response = await fetchImpl(endpoint.toString());
   const payload = await response.json();
   if (!response.ok || payload.errcode || !payload.openid) {
     const error = new Error(payload.errmsg || "WeChat code2Session failed");
@@ -328,6 +321,12 @@ function findProduct(env, productId) {
 }
 
 function paymentMode(env) {
+  const production = ["production", "prod"].includes(String(getEnv(env, "NODE_ENV")).toLowerCase());
+  const provider = String(getEnv(env, "PAYMENT_PROVIDER")).trim().toLowerCase();
+  if (provider === "mock") return production ? "disabled" : "mock";
+  if (provider === "wechat") return "wechat";
+  if (provider) return "disabled";
+  if (production) return "disabled";
   return getEnv(env, "MINIAPP_PAYMENT_MODE", env.MINIAPP_DEV_LOGIN === "1" ? "mock" : "manual");
 }
 
@@ -666,7 +665,7 @@ function createApp(options = {}) {
         const { user } = getCurrentUser(request, env, store);
         const order = store.getOrder(decodeURIComponent(mockPayMatch[1]));
         if (!order || order.userId !== user.id) return json({ success: false, error: "Order not found" }, 404);
-        if (paymentMode(env) !== "mock" && !isDevLoginAdmin(request, env)) {
+        if (paymentMode(env) !== "mock") {
           return json({ success: false, error: "Mock payment is disabled" }, 403);
         }
         const result = store.fulfillOrder(order.id, {

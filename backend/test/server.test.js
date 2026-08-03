@@ -5,6 +5,8 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { createApp } = require("../src/app");
+const { createMiniappToken } = require("../src/auth");
+const { createMemoryStore } = require("../src/store");
 
 async function readJson(response) {
   return response.json();
@@ -45,13 +47,14 @@ async function login(app) {
   return `Bearer ${response.data.token}`;
 }
 
-test("exchanges wx.login code for real WeChat openid when dev login is disabled", async () => {
+test("uses the configured WeChat login endpoint when dev login is disabled", async () => {
   let requestedUrl = "";
   const app = createApp({
     env: {
       MINIAPP_DEV_LOGIN: "0",
       WECHAT_MINIAPP_APP_ID: "wx-real",
       WECHAT_MINIAPP_APP_SECRET: "secret-real",
+      WECHAT_LOGIN_ENDPOINT: "https://wechat-gateway.example/code2session",
       MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_DB_PATH: tempDbPath(),
     },
@@ -71,12 +74,46 @@ test("exchanges wx.login code for real WeChat openid when dev login is disabled"
   })));
 
   assert.equal(response.success, true);
-  assert.match(requestedUrl, /api\.weixin\.qq\.com\/sns\/jscode2session/);
+  assert.match(requestedUrl, /^https:\/\/wechat-gateway\.example\/code2session\?/);
   assert.match(requestedUrl, /appid=wx-real/);
   assert.match(requestedUrl, /js_code=wx-code-1/);
   assert.equal(response.data.user.id, "wechat:wx-real:real-openid-1");
   assert.equal(response.data.user.openid, "real-openid-1");
   assert.equal(response.data.user.unionid, "real-unionid-1");
+  app.close();
+});
+
+test("production payment provider blocks legacy mock-pay without granting credits", async () => {
+  const env = {
+    NODE_ENV: "production",
+    MINIAPP_DEV_LOGIN: "0",
+    WECHAT_MINIAPP_APP_ID: "wx-production",
+    MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
+    MINIAPP_PAYMENT_MODE: "mock",
+  };
+  const store = createMemoryStore({ initialCredits: 10 });
+  const app = createApp({ env, store });
+  const token = createMiniappToken({
+    appid: "wx-production",
+    openid: "payment-user",
+    secret: "test-secret",
+  });
+  const authorization = `Bearer ${token}`;
+
+  const created = await readJson(await app.fetch(new Request("http://local/api/miniapp/orders", {
+    method: "POST",
+    headers: { Authorization: authorization },
+    body: JSON.stringify({ productId: "credits_20" }),
+  })));
+  const payment = await app.fetch(new Request(`http://local/api/miniapp/orders/${created.data.order.id}/mock-pay`, {
+    method: "POST",
+    headers: { Authorization: authorization },
+  }));
+  const paymentBody = await readJson(payment);
+
+  assert.equal(payment.status, 403);
+  assert.equal(paymentBody.error, "Mock payment is disabled");
+  assert.equal(store.getUser("wechat:wx-production:payment-user").balance, 10);
   app.close();
 });
 

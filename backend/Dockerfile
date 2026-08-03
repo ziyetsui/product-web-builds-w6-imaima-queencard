@@ -1,3 +1,4 @@
+# From the repository root: docker build -t ima-miniapp-backend backend
 FROM node:24-bookworm-slim
 
 WORKDIR /app
