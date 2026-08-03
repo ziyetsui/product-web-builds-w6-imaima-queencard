@@ -90,10 +90,21 @@
       <text class="feed-empty-copy">配置模板 API 后，这里会按分页加载模板，不会把 1000+ 模板打进小程序包。</text>
     </view>
 
+    <view wx:elif="{{templateLoading && templates.length === 0}}" class="feed-empty">
+      <text class="feed-empty-title">模板加载中</text>
+      <text class="feed-empty-copy">正在同步当前 catalog 的模板和分类。</text>
+    </view>
+
     <view wx:elif="{{templateError}}" class="feed-empty">
       <text class="feed-empty-title">模板暂时没加载出来</text>
       <text class="feed-empty-copy">{{templateError}}</text>
       <button class="small-feed-button" bindtap="refreshTemplates">重试</button>
+    </view>
+
+    <view wx:elif="{{templates.length === 0}}" class="feed-empty">
+      <text class="feed-empty-title">暂无匹配模板</text>
+      <text class="feed-empty-copy">换一个分类或关键词试试。</text>
+      <button class="small-feed-button" bindtap="refreshTemplates">刷新</button>
     </view>
 
     <view wx:else class="template-list">
@@ -104,11 +115,11 @@
         </view>
         <view class="template-copy">
           <view class="template-meta">
-            <text>{{template.scenarioCategory || template.category}}</text>
-            <text>{{template.source}}</text>
+            <text>{{template.category || template.scenarioCategory}}</text>
+            <text wx:if="{{template.author}}">{{template.author}}</text>
           </view>
           <text class="template-title">{{template.title}}</text>
-          <text class="template-desc">{{template.useCase}}</text>
+          <text class="template-desc">{{template.subtitle || template.useCase}}</text>
           <button class="template-button" data-id="{{template.id}}" bindtap="generateTemplate">生成同款</button>
         </view>
       </view>

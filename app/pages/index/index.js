@@ -18,10 +18,10 @@ var TEMPLATE_CATEGORIES = [
 ];
 
 var TEMPLATE_SORT_OPTIONS = [
-  { label: "综合热度", value: "heat" },
-  { label: "潜力优先", value: "potential" },
-  { label: "收藏优先", value: "saves" },
-  { label: "分享优先", value: "shares" },
+  { label: "默认", value: "default" },
+  { label: "最新", value: "latest" },
+  { label: "热门", value: "hot" },
+  { label: "潜力", value: "potential" },
 ];
 
 function appendTemplates(current, next) {
@@ -54,6 +54,41 @@ function markCategoryOptions(selectedKey) {
   });
 }
 
+function markServerCategoryOptions(categories, specialFilters, selectedKey, selectedScenarioCategory, selectedHotOnly) {
+  var options = [{
+    label: "全部",
+    key: "all",
+    value: "image",
+    scenarioCategory: "",
+    hotOnly: false,
+  }];
+  (categories || []).forEach(function (item, index) {
+    var value = item.value || item.label || "";
+    if (!value) return;
+    options.push({
+      label: (item.label || value) + " " + String(item.count == null ? "" : item.count),
+      key: "server-category-" + index,
+      value: "image",
+      scenarioCategory: value,
+      hotOnly: false,
+    });
+  });
+  options.push({
+    label: ((specialFilters && specialFilters[0] && specialFilters[0].label) || "热门高赞") + " "
+      + String(specialFilters && specialFilters[0] && specialFilters[0].count != null ? specialFilters[0].count : ""),
+    key: "hot",
+    value: "image",
+    scenarioCategory: "",
+    hotOnly: true,
+  });
+  return options.map(function (item) {
+    var active = item.key === selectedKey
+      || (item.scenarioCategory && item.scenarioCategory === selectedScenarioCategory)
+      || (item.hotOnly && selectedHotOnly);
+    return Object.assign({}, item, { active: active });
+  });
+}
+
 function markSortOptions(selectedSort) {
   return TEMPLATE_SORT_OPTIONS.map(function (item) {
     return {
@@ -78,10 +113,12 @@ Page({
     templateCategory: "image",
     templateScenarioCategory: "",
     templateHotOnly: false,
-    templateSort: "heat",
+    templateSort: "default",
     templateCategories: markCategoryOptions("all"),
-    templateSortOptions: markSortOptions("heat"),
+    templateSortOptions: markSortOptions("default"),
     templates: [],
+    catalogVersion: "",
+    templateCursor: "",
     templatePage: 1,
     templateLimit: 12,
     templateHasMore: true,
@@ -100,6 +137,8 @@ Page({
       clearTimeout(this.templateSearchTimer);
       this.templateSearchTimer = null;
     }
+    this.templateRequestSerial = (this.templateRequestSerial || 0) + 1;
+    templatesService.cancelPending();
   },
 
   onReachBottom: function () {
@@ -201,6 +240,7 @@ Page({
     this.setData({
       templateSearch: value,
       templatePage: 1,
+      templateCursor: "",
       templateHasMore: true,
     });
     if (this.templateSearchTimer) {
@@ -233,13 +273,14 @@ Page({
       templateHotOnly: hotOnly,
       templateCategories: markCategoryOptions(key),
       templatePage: 1,
+      templateCursor: "",
       templateHasMore: true,
     });
     this.loadTemplates(true);
   },
 
   selectTemplateSort: function (event) {
-    var sort = event.currentTarget.dataset.value || "heat";
+    var sort = event.currentTarget.dataset.value || "default";
     if (sort === this.data.templateSort) return;
     this.setData({
       templateSort: sort,
@@ -252,6 +293,9 @@ Page({
 
   loadTemplates: function (reset) {
     var page = this;
+    if (reset) templatesService.cancelPending();
+    var requestSerial = (this.templateRequestSerial || 0) + 1;
+    this.templateRequestSerial = requestSerial;
     var nextPage = reset ? 1 : this.data.templatePage;
     var query = cleanText(this.data.templateSearch);
     if (!this.data.templateReady) {
@@ -260,7 +304,7 @@ Page({
       });
       return Promise.resolve();
     }
-    if (this.data.templateLoading) return Promise.resolve();
+    if (this.data.templateLoading && !reset) return Promise.resolve();
     if (!reset && !this.data.templateHasMore) return Promise.resolve();
 
     this.setData({
@@ -276,19 +320,34 @@ Page({
       scenarioCategory: this.data.templateScenarioCategory,
       hotOnly: this.data.templateHotOnly,
       sort: this.data.templateSort,
+      cursor: reset ? "" : this.data.templateCursor,
       language: "zh",
     }).then(function (result) {
+      if (requestSerial !== page.templateRequestSerial) return;
       var records = result.records || [];
       var pagination = result.pagination || {};
       var totalPages = pagination.totalPages || pagination.total_pages || nextPage;
       page.setData({
         templates: reset ? records : appendTemplates(page.data.templates, records),
         templatePage: nextPage + 1,
-        templateHasMore: nextPage < totalPages || records.length >= page.data.templateLimit,
+        templateCursor: pagination.nextCursor || "",
+        templateHasMore: pagination.hasMore !== undefined ? Boolean(pagination.hasMore) : nextPage < totalPages || records.length >= page.data.templateLimit,
+        catalogVersion: result.catalogVersion || page.data.catalogVersion,
+        templateCategories: result.categories && result.categories.length
+          ? markServerCategoryOptions(
+            result.categories,
+            result.specialFilters,
+            page.data.templateCategoryKey,
+            page.data.templateScenarioCategory,
+            page.data.templateHotOnly,
+          )
+          : page.data.templateCategories,
         templateLoading: false,
         templateError: "",
       });
     }).catch(function (error) {
+      if (error && error.stale) return;
+      if (requestSerial !== page.templateRequestSerial) return;
       page.setData({
         templateLoading: false,
         templateError: error.message || "模板加载失败",

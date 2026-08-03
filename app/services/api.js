@@ -75,7 +75,7 @@ function request(options, authRetry) {
   var requestOptions = options || {};
   return new Promise(function (resolve, reject) {
     var token = session.getToken();
-    wx.request({
+    var requestTask = wx.request({
       url: endpoint(requestOptions.path, requestOptions.query),
       method: requestOptions.method || "GET",
       data: requestOptions.data || {},
@@ -110,6 +110,7 @@ function request(options, authRetry) {
         reject(new Error(error.errMsg || "网络请求失败"));
       },
     });
+    if (typeof requestOptions.onRequest === "function") requestOptions.onRequest(requestTask);
   });
 }
 

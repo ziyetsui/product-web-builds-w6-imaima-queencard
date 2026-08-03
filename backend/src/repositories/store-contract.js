@@ -7,6 +7,7 @@ const STORE_METHODS = [
   "createAsset", "createGeneratedAsset", "getAsset", "getGeneratedAsset", "findOwnedAsset", "findOwnedImageAsset", "listAssets", "listGeneratedAssets", "deleteAsset",
   "createReferenceAsset", "getReferenceAsset", "listReferenceAssets", "deleteReferenceAsset",
   "createCatalogVersion", "getCatalogVersion", "getActiveCatalogVersion", "activateCatalogVersion",
+  "importCatalogVersion",
   "syncTemplates", "listTemplates", "getTemplate",
   "createOrder", "getOrder", "getOrderByIdempotencyKey", "listOrders", "listAllOrders",
   "fulfillOrder", "fulfillMockOrder", "cancelOrder", "refundOrder", "recordPaymentFulfillment", "fulfillPayment",

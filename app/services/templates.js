@@ -1,6 +1,10 @@
 var env = require("../config/env.js");
 var api = require("./api.js");
 
+var CACHE_KEY = "ima_queencard_catalog_cache_v1";
+var requestSerial = 0;
+var pendingRequest = null;
+
 function buildQuery(query) {
   var parts = [];
   var key = "";
@@ -24,15 +28,43 @@ function normalizeQuery(query) {
   if (input.page) normalized.page = input.page;
   if (input.limit) normalized.limit = input.limit;
   if (input.q) normalized.q = input.q;
+  if (input.keyword) normalized.keyword = input.keyword;
+  if (input.tag) normalized.tag = input.tag;
+  if (input.tags) normalized.tags = input.tags;
   if (input.category) normalized.category = input.category;
   if (scenarioCategory) normalized.scenario_category = scenarioCategory;
   if (input.hotOnly) normalized.hot = "1";
   if (input.sort) normalized.sort = input.sort;
+  if (input.cursor) normalized.cursor = input.cursor;
   if (input.language) normalized.language = input.language;
   return normalized;
 }
 
 function normalizeRecord(record) {
+  if (record && (record.title || record.thumbnailUrl || record.referenceImages || record.previewImages)) {
+    return {
+      id: record.id,
+      title: record.title || "未命名模板",
+      subtitle: record.subtitle || record.prompt || "",
+      category: record.category || "",
+      scenarioCategory: record.scenarioCategory || record.scenario_category || "",
+      author: record.author || "",
+      source: record.source || "",
+      sourceId: record.sourceId || record.source_id || record.id,
+      sourceUrl: record.sourceUrl || record.source_url || "",
+      thumbnailUrl: record.thumbnailUrl || record.previewUrl || "",
+      previewUrl: record.previewUrl || record.thumbnailUrl || "",
+      referenceImages: Array.isArray(record.referenceImages) ? record.referenceImages : [],
+      previewImages: Array.isArray(record.previewImages) ? record.previewImages : [],
+      tags: Array.isArray(record.tags) ? record.tags : [],
+      prompt: record.prompt || record.subtitle || "",
+      useCase: record.useCase || record.use_case || record.category || "模板",
+      metrics: record.metrics || {},
+      createdAt: record.createdAt || null,
+      updatedAt: record.updatedAt || null,
+      seed: record.seed || null,
+    };
+  }
   var response = record.response_payload || {};
   var request = record.request_payload || {};
   var images = response.images || [];
@@ -66,7 +98,9 @@ function normalizeRecord(record) {
 
 function normalizeListPayload(payload) {
   var records = [];
-  var rawRecords = payload && payload.data;
+  var envelope = payload && payload.data && !Array.isArray(payload.data) ? payload.data : payload;
+  envelope = envelope || {};
+  var rawRecords = envelope && envelope.records ? envelope.records : envelope && envelope.data;
   var i = 0;
   if (Array.isArray(rawRecords)) {
     for (i = 0; i < rawRecords.length; i += 1) {
@@ -75,13 +109,54 @@ function normalizeListPayload(payload) {
   }
   return {
     records: records,
-    pagination: payload.pagination || {
+    catalogVersion: envelope.catalogVersion || "",
+    categories: Array.isArray(envelope.categories) ? envelope.categories : [],
+    specialFilters: Array.isArray(envelope.specialFilters) ? envelope.specialFilters : [],
+    pagination: envelope.pagination || {
       page: 1,
       limit: records.length,
       total: records.length,
       totalPages: 1,
     },
   };
+}
+
+function cacheQueryKey(query) {
+  var input = query || {};
+  var keys = Object.keys(input).sort();
+  var values = {};
+  keys.forEach(function (key) {
+    values[key] = input[key];
+  });
+  return JSON.stringify(values);
+}
+
+function staleError() {
+  var error = new Error("模板请求已过期");
+  error.stale = true;
+  return error;
+}
+
+function cachedResult(query) {
+  if (typeof wx === "undefined" || !wx.getStorageSync) return null;
+  var cached = wx.getStorageSync(CACHE_KEY);
+  if (!cached || !cached.catalogVersion || !cached.pages) return null;
+  var value = cached.pages[cacheQueryKey(query)];
+  return value ? value : null;
+}
+
+function saveCachedResult(query, result) {
+  if (typeof wx === "undefined" || !wx.setStorageSync || !result || !result.catalogVersion) return;
+  var current = wx.getStorageSync(CACHE_KEY);
+  if (!current || current.catalogVersion !== result.catalogVersion) current = { catalogVersion: result.catalogVersion, pages: {} };
+  current.pages[cacheQueryKey(query)] = result;
+  wx.setStorageSync(CACHE_KEY, current);
+}
+
+function cancelPending() {
+  requestSerial += 1;
+  if (pendingRequest && typeof pendingRequest.abort === "function") pendingRequest.abort();
+  pendingRequest = null;
 }
 
 function requestPublicTemplates(query) {
@@ -114,14 +189,27 @@ function requestPublicTemplates(query) {
 
 function listTemplates(query) {
   var normalizedQuery = normalizeQuery(query);
-  if (api.isConfigured()) {
-    return api.request({
+  var cached = cachedResult(normalizedQuery);
+  if (cached) return Promise.resolve(cached);
+  var serial = ++requestSerial;
+  var request = api.isConfigured()
+    ? api.request({
       path: "/templates",
       method: "GET",
       query: normalizedQuery,
-    });
-  }
-  return requestPublicTemplates(normalizedQuery);
+      onRequest: function (task) { pendingRequest = task; },
+    }).then(normalizeListPayload)
+    : requestPublicTemplates(normalizedQuery);
+  return request.then(function (result) {
+    if (serial !== requestSerial) throw staleError();
+    saveCachedResult(normalizedQuery, result);
+    pendingRequest = null;
+    return result;
+  }).catch(function (error) {
+    if (serial !== requestSerial) throw staleError();
+    pendingRequest = null;
+    throw error;
+  });
 }
 
 function getTemplate(id) {
@@ -142,6 +230,7 @@ function generateFromTemplate(id, input) {
 module.exports = {
   isConfigured: isConfigured,
   listTemplates: listTemplates,
+  cancelPending: cancelPending,
   getTemplate: getTemplate,
   generateFromTemplate: generateFromTemplate,
 };

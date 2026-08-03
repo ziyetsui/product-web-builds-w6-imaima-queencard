@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ima ima Queencard template catalog",
+  "type": "object",
+  "required": ["schemaVersion", "catalogVersion", "schema", "source", "counts", "checksum", "records"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "catalogVersion": { "type": "string", "minLength": 1 },
+    "schema": { "const": "catalog.schema.json" },
+    "source": { "type": "object", "required": ["ref", "commit", "inputs"] },
+    "counts": { "type": "object", "required": ["total", "beforeDedup", "bySource", "byCategory", "assetRefs"] },
+    "checksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "records": { "type": "array", "items": { "$ref": "#/$defs/record" } }
+  },
+  "$defs": {
+    "record": {
+      "type": "object",
+      "required": ["id", "title", "author", "category", "tags", "prompt", "referenceImages", "previewImages", "source", "metrics", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string" },
+        "author": { "type": "string" },
+        "category": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "prompt": { "type": "string" },
+        "referenceImages": { "type": "array", "items": { "type": "string" } },
+        "previewImages": { "type": "array", "items": { "type": "string" } },
+        "source": { "type": "string" },
+        "metrics": { "type": "object" },
+        "createdAt": { "type": ["string", "null"] },
+        "updatedAt": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

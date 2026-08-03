@@ -55,6 +55,7 @@ const requiredFiles = [
   "services/session.js",
   "services/templates.js",
   "test/api-auth.test.js",
+  "test/catalog-client.test.js",
   "docs/miniapp-backend-contract.md",
   "data/landing.js",
 ];
@@ -150,6 +151,7 @@ if (wxml.includes("href=") || wxml.includes("<a ")) {
 
 const resultPageSource = fs.readFileSync(path.join(root, "pages/result/index.js"), "utf8");
 const apiSource = fs.readFileSync(path.join(root, "services/api.js"), "utf8");
+const templateServiceSource = fs.readFileSync(path.join(root, "services/templates.js"), "utf8");
 const pricingPageSource = fs.readFileSync(path.join(root, "pages/pricing/index.js"), "utf8");
 const accountPageSource = fs.readFileSync(path.join(root, "pages/account/index.js"), "utf8");
 const billingPageSource = fs.readFileSync(path.join(root, "pages/billing/index.js"), "utf8");
@@ -180,6 +182,12 @@ if (/wx\.redirectTo\(\s*{\s*url:\s*["']\/pages\/generate\/index["']/.test(result
 if (!/wx\.requestPayment/.test(pricingPageSource) || !/mockPayOrder/.test(pricingPageSource)) {
   fail("pricing page must create orders, use wx.requestPayment when available, and support mock payment fallback");
 }
+
+["catalogVersion", "cancelPending", "stale"].forEach((pattern) => {
+  if (!templateServiceSource.includes(pattern)) {
+    fail(`services/templates.js must support version-aware cache and stale request handling: missing ${pattern}`);
+  }
+});
 
 ["patchAccountMe", "logout", "goBilling", "goAdmin"].forEach((pattern) => {
   if (!accountPageSource.includes(pattern)) {
@@ -237,6 +245,11 @@ if (/modelIndexFor\(page\.data\.models,\s*seed\.model\)/.test(generatePageSource
 });
 
 const indexPageSource = fs.readFileSync(path.join(root, "pages/index/index.js"), "utf8");
+["templateCursor", "templateLoading", "templateError", "markServerCategoryOptions", "templateHasMore", "热门高赞", "hotOnly"].forEach((pattern) => {
+  if (!indexPageSource.includes(pattern)) {
+    fail(`index page must support catalog discovery state: missing ${pattern}`);
+  }
+});
 ["openHistory", "openCredits"].forEach((pattern) => {
   if (!indexPageSource.includes(pattern)) {
     fail(`index page must expose ${pattern}`);

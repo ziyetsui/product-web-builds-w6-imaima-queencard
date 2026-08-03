@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "test": "node --test test/api-auth.test.js",
+    "test": "node --test test/*.test.js",
     "validate": "npm test && node tools/validate.js"
   }
 }

@@ -3,6 +3,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { assertSessionTokenHash } = require("./auth");
+const { queryCatalog } = require("./services/catalog-service");
 
 const mockFulfillmentIdentity = Symbol("mockFulfillmentIdentity");
 
@@ -148,6 +149,9 @@ function createMemoryStore(options = {}) {
   const tasks = new Map();
   const creditTransactions = [];
   const templates = new Map();
+  const catalogRecords = new Map();
+  const catalogVersions = new Map();
+  let activeCatalogVersionId = null;
   const orders = new Map();
   const paymentAudit = [];
 
@@ -563,50 +567,91 @@ function createMemoryStore(options = {}) {
     return paginateRecords(records, options);
   }
 
-  function syncTemplates(records = []) {
-    records.forEach((record) => {
-      templates.set(record.id, record);
-    });
+  function catalogVersionFromInput(input, active = false) {
+    const now = new Date().toISOString();
+    return {
+      id: input.id,
+      checksum: input.checksum || "",
+      source: input.source || "unknown",
+      recordCount: Number(input.recordCount || 0),
+      metadata: input.metadata || {},
+      active,
+      createdAt: input.createdAt || now,
+      activatedAt: active ? (input.activatedAt || now) : (input.activatedAt || null),
+    };
+  }
+
+  function createCatalogVersion(input) {
+    const existing = catalogVersions.get(input.id);
+    if (existing) return existing;
+    const saved = catalogVersionFromInput(input, false);
+    catalogVersions.set(saved.id, saved);
+    catalogRecords.set(saved.id, new Map());
+    return saved;
+  }
+
+  function getCatalogVersion(versionId) {
+    return catalogVersions.get(versionId) || null;
+  }
+
+  function getActiveCatalogVersion() {
+    return activeCatalogVersionId ? catalogVersions.get(activeCatalogVersionId) || null : null;
+  }
+
+  function activateCatalogVersion(versionId) {
+    const version = catalogVersions.get(versionId);
+    if (!version) throw new Error(`Catalog version not found: ${versionId}`);
+    for (const candidate of catalogVersions.values()) candidate.active = false;
+    version.active = true;
+    version.activatedAt = new Date().toISOString();
+    activeCatalogVersionId = versionId;
+    templates.clear();
+    for (const [id, record] of (catalogRecords.get(versionId) || new Map()).entries()) templates.set(id, record);
+    return version;
+  }
+
+  function importCatalogVersion(input) {
+    const records = Array.isArray(input.records) ? input.records : [];
+    const ids = new Set();
+    for (const record of records) {
+      if (!record || !record.id || ids.has(record.id)) throw new Error(`Duplicate catalog id: ${record && record.id}`);
+      ids.add(record.id);
+    }
+    const saved = catalogVersionFromInput(input, true);
+    const savedRecords = new Map(records.map((record) => [record.id, { ...record, catalogVersionId: saved.id }]));
+    catalogVersions.set(saved.id, saved);
+    catalogRecords.set(saved.id, savedRecords);
+    activeCatalogVersionId = saved.id;
+    for (const candidate of catalogVersions.values()) candidate.active = candidate.id === saved.id;
+    templates.clear();
+    for (const [id, record] of savedRecords.entries()) templates.set(id, record);
+    return saved;
+  }
+
+  function syncTemplates(records = [], input = {}) {
+    const target = input.catalogVersionId ? (catalogRecords.get(input.catalogVersionId) || new Map()) : templates;
+    records.forEach((record) => target.set(record.id, record));
+    if (input.catalogVersionId) {
+      catalogRecords.set(input.catalogVersionId, target);
+      if (activeCatalogVersionId === input.catalogVersionId) {
+        templates.clear();
+        for (const [id, record] of target.entries()) templates.set(id, record);
+      }
+    }
     return records.length;
   }
 
   function listTemplates(query = new URLSearchParams()) {
-    const page = positiveInt(query.get("page"), 1);
-    const limit = Math.min(positiveInt(query.get("limit"), 12), 100);
-    const q = String(query.get("q") || query.get("keyword") || "").trim().toLowerCase();
-    const category = String(query.get("category") || "").trim();
-    const scenarioCategory = String(query.get("scenario_category") || query.get("scenarioCategory") || "").trim();
-    const hotOnly = query.get("hot") === "1" || query.get("hotOnly") === "true";
-    const sort = String(query.get("sort") || "default").trim();
-    let records = Array.from(templates.values());
-    if (category) records = records.filter((record) => record.category === category);
-    if (scenarioCategory) records = records.filter((record) => record.scenarioCategory === scenarioCategory);
-    if (hotOnly) records = records.filter(isHotTemplate);
-    if (q) {
-      records = records.filter((record) => [
-        record.title,
-        record.subtitle,
-        record.prompt,
-        record.scenarioCategory,
-        record.author,
-      ].filter(Boolean).join("\n").toLowerCase().includes(q));
-    }
-    records = sortTemplates(records, sort);
-    const total = records.length;
-    const start = (page - 1) * limit;
-    return {
-      records: records.slice(start, start + limit),
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.max(1, Math.ceil(total / limit)),
-      },
-    };
+    const active = getActiveCatalogVersion();
+    const records = active
+      ? Array.from((catalogRecords.get(active.id) || new Map()).values())
+      : Array.from(templates.values());
+    return queryCatalog(records, query, active);
   }
 
   function getTemplate(id) {
-    return templates.get(id) || null;
+    const active = getActiveCatalogVersion();
+    return (active ? (catalogRecords.get(active.id) || new Map()).get(id) : templates.get(id)) || null;
   }
 
   return {
@@ -639,6 +684,11 @@ function createMemoryStore(options = {}) {
     createTask,
     getTask,
     listTasks,
+    createCatalogVersion,
+    getCatalogVersion,
+    getActiveCatalogVersion,
+    activateCatalogVersion,
+    importCatalogVersion,
     syncTemplates,
     listTemplates,
     getTemplate,
@@ -1291,47 +1341,55 @@ function createSqliteStore(options = {}) {
     try {
       const statement = db.prepare(`
         INSERT INTO templates (
-          id, title, subtitle, category, scenario_category, source, source_id,
-          source_url, thumbnail_url, preview_url, reference_images_json,
-          prompt, use_case, author, metrics_json, seed_json, updated_at
+          id, catalog_version_id, title, subtitle, category, scenario_category, tags_json,
+          source, source_id, source_url, thumbnail_url, preview_url, reference_images_json,
+          preview_images_json, prompt, use_case, author, metrics_json, seed_json, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
+          catalog_version_id = excluded.catalog_version_id,
           title = excluded.title,
           subtitle = excluded.subtitle,
           category = excluded.category,
           scenario_category = excluded.scenario_category,
+          tags_json = excluded.tags_json,
           source = excluded.source,
           source_id = excluded.source_id,
           source_url = excluded.source_url,
           thumbnail_url = excluded.thumbnail_url,
           preview_url = excluded.preview_url,
           reference_images_json = excluded.reference_images_json,
+          preview_images_json = excluded.preview_images_json,
           prompt = excluded.prompt,
           use_case = excluded.use_case,
           author = excluded.author,
           metrics_json = excluded.metrics_json,
           seed_json = excluded.seed_json,
+          created_at = excluded.created_at,
           updated_at = excluded.updated_at
       `);
       records.forEach((record) => {
         statement.run(
           record.id,
+          record.catalogVersionId || null,
           record.title || "",
           record.subtitle || "",
           record.category || "",
           record.scenarioCategory || record.scenario_category || "",
+          stringify(record.tags || []),
           record.source || "",
           record.sourceId || record.source_id || "",
           record.sourceUrl || record.source_url || "",
           record.thumbnailUrl || record.thumbnail_url || "",
           record.previewUrl || record.preview_url || "",
           stringify(record.referenceImages || record.reference_images || []),
+          stringify(record.previewImages || record.preview_images || []),
           record.prompt || "",
           record.useCase || record.use_case || "",
           record.author || "",
           stringify(record.metrics || null),
           stringify(record.seed || null),
+          record.createdAt || updatedAt,
           updatedAt,
         );
       });
@@ -1343,66 +1401,107 @@ function createSqliteStore(options = {}) {
     return records.length;
   }
 
+  function createCatalogVersion(input) {
+    const now = input.createdAt || new Date().toISOString();
+    db.prepare(`
+      INSERT INTO template_catalog_versions (id, checksum, source, record_count, active, metadata_json, created_at)
+      VALUES (?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET checksum = excluded.checksum, source = excluded.source,
+        record_count = excluded.record_count, metadata_json = excluded.metadata_json
+    `).run(input.id, input.checksum || "", input.source || "unknown", Number(input.recordCount || 0), stringify(input.metadata || {}), now);
+    return rowToCatalogVersion(db.prepare("SELECT * FROM template_catalog_versions WHERE id = ?").get(input.id));
+  }
+
+  function getCatalogVersion(versionId) {
+    return rowToCatalogVersion(db.prepare("SELECT * FROM template_catalog_versions WHERE id = ?").get(versionId));
+  }
+
+  function getActiveCatalogVersion() {
+    return rowToCatalogVersion(db.prepare("SELECT * FROM template_catalog_versions WHERE active = 1 LIMIT 1").get());
+  }
+
+  function activateCatalogVersion(versionId) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const found = db.prepare("SELECT id FROM template_catalog_versions WHERE id = ?").get(versionId);
+      if (!found) throw new Error(`Catalog version not found: ${versionId}`);
+      db.prepare("UPDATE template_catalog_versions SET active = 0, activated_at = NULL").run();
+      db.prepare("UPDATE template_catalog_versions SET active = 1, activated_at = ? WHERE id = ?").run(new Date().toISOString(), versionId);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    return getCatalogVersion(versionId);
+  }
+
+  function importCatalogVersion(input) {
+    const records = Array.isArray(input.records) ? input.records : [];
+    const ids = new Set();
+    for (const record of records) {
+      if (!record || !record.id || ids.has(record.id)) throw new Error(`Duplicate catalog id: ${record && record.id}`);
+      ids.add(record.id);
+    }
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO template_catalog_versions (id, checksum, source, record_count, active, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, 0, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET checksum = excluded.checksum, source = excluded.source,
+          record_count = excluded.record_count, metadata_json = excluded.metadata_json
+      `).run(input.id, input.checksum || "", input.source || "unknown", Number(input.recordCount || records.length), stringify(input.metadata || {}), now);
+      db.prepare("DELETE FROM templates WHERE catalog_version_id = ?").run(input.id);
+      const statement = db.prepare(`
+        INSERT INTO templates (
+          id, catalog_version_id, title, subtitle, category, scenario_category, tags_json,
+          source, source_id, source_url, thumbnail_url, preview_url, reference_images_json,
+          preview_images_json, prompt, use_case, author, metrics_json, seed_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET catalog_version_id = excluded.catalog_version_id,
+          title = excluded.title, subtitle = excluded.subtitle, category = excluded.category,
+          scenario_category = excluded.scenario_category, tags_json = excluded.tags_json,
+          source = excluded.source, source_id = excluded.source_id, source_url = excluded.source_url,
+          thumbnail_url = excluded.thumbnail_url, preview_url = excluded.preview_url,
+          reference_images_json = excluded.reference_images_json, preview_images_json = excluded.preview_images_json,
+          prompt = excluded.prompt, use_case = excluded.use_case, author = excluded.author,
+          metrics_json = excluded.metrics_json, seed_json = excluded.seed_json,
+          created_at = excluded.created_at, updated_at = excluded.updated_at
+      `);
+      for (const record of records) {
+        statement.run(
+          record.id, input.id, record.title || "", record.subtitle || "", record.category || "",
+          record.scenarioCategory || record.scenario_category || "", stringify(record.tags || []),
+          record.source || "", record.sourceId || record.source_id || "", record.sourceUrl || record.source_url || "",
+          record.thumbnailUrl || record.thumbnail_url || "", record.previewUrl || record.preview_url || "",
+          stringify(record.referenceImages || record.reference_images || []), stringify(record.previewImages || record.preview_images || []),
+          record.prompt || "", record.useCase || record.use_case || "", record.author || "",
+          stringify(record.metrics || null), stringify(record.seed || null), record.createdAt || now, record.updatedAt || now,
+        );
+      }
+      db.prepare("UPDATE template_catalog_versions SET active = 0, activated_at = NULL").run();
+      db.prepare("UPDATE template_catalog_versions SET active = 1, activated_at = ? WHERE id = ?").run(now, input.id);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    return getCatalogVersion(input.id);
+  }
+
   function listTemplates(query = new URLSearchParams()) {
-    const page = positiveInt(query.get("page"), 1);
-    const limit = Math.min(positiveInt(query.get("limit"), 12), 100);
-    const filters = [];
-    const values = [];
-    const sort = String(query.get("sort") || "default").trim();
-    const hotOnly = query.get("hot") === "1" || query.get("hotOnly") === "true";
-
-    const category = String(query.get("category") || "").trim();
-    if (category) {
-      filters.push("category = ?");
-      values.push(category);
-    }
-
-    const scenarioCategory = String(query.get("scenario_category") || query.get("scenarioCategory") || "").trim();
-    if (scenarioCategory) {
-      filters.push("scenario_category = ?");
-      values.push(scenarioCategory);
-    }
-
-    if (hotOnly) {
-      filters.push(`(
-        CAST(json_extract(metrics_json, '$.likes') AS INTEGER) >= 20000 OR
-        CAST(json_extract(metrics_json, '$.saves') AS INTEGER) >= 20000
-      )`);
-    }
-
-    const q = String(query.get("q") || query.get("keyword") || "").trim();
-    if (q) {
-      filters.push(`(
-        title LIKE ? OR subtitle LIKE ? OR prompt LIKE ? OR
-        scenario_category LIKE ? OR author LIKE ?
-      )`);
-      const like = `%${q}%`;
-      values.push(like, like, like, like, like);
-    }
-
-    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
-    const total = db.prepare(`SELECT COUNT(*) AS total FROM templates ${where}`).get(...values).total;
-    const rows = db.prepare(`
-      SELECT * FROM templates
-      ${where}
-      ORDER BY id ASC
-    `).all(...values);
-    const records = sortTemplates(rows.map(rowToTemplate), sort);
-    const start = (page - 1) * limit;
-
-    return {
-      records: records.slice(start, start + limit),
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.max(1, Math.ceil(total / limit)),
-      },
-    };
+    const active = getActiveCatalogVersion();
+    const rows = active
+      ? db.prepare("SELECT * FROM templates WHERE catalog_version_id = ?").all(active.id)
+      : db.prepare("SELECT * FROM templates WHERE catalog_version_id IS NULL").all();
+    return queryCatalog(rows.map(rowToTemplate), query, active);
   }
 
   function getTemplate(id) {
-    const row = db.prepare("SELECT * FROM templates WHERE id = ?").get(id);
+    const active = getActiveCatalogVersion();
+    const row = active
+      ? db.prepare("SELECT * FROM templates WHERE id = ? AND catalog_version_id = ?").get(id, active.id)
+      : db.prepare("SELECT * FROM templates WHERE id = ?").get(id);
     return row ? rowToTemplate(row) : null;
   }
 
@@ -1458,6 +1557,11 @@ function createSqliteStore(options = {}) {
     createTask,
     getTask,
     listTasks,
+    createCatalogVersion,
+    getCatalogVersion,
+    getActiveCatalogVersion,
+    activateCatalogVersion,
+    importCatalogVersion,
     syncTemplates,
     listTemplates,
     getTemplate,
@@ -1523,23 +1627,37 @@ function migrate(db) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS template_catalog_versions (
+      id TEXT PRIMARY KEY,
+      checksum TEXT NOT NULL,
+      source TEXT NOT NULL,
+      record_count INTEGER NOT NULL,
+      active INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      activated_at TEXT
+    );
     CREATE TABLE IF NOT EXISTS templates (
       id TEXT PRIMARY KEY,
+      catalog_version_id TEXT,
       title TEXT NOT NULL,
       subtitle TEXT,
       category TEXT,
       scenario_category TEXT,
+      tags_json TEXT NOT NULL DEFAULT '[]',
       source TEXT,
       source_id TEXT,
       source_url TEXT,
       thumbnail_url TEXT,
       preview_url TEXT,
       reference_images_json TEXT NOT NULL,
+      preview_images_json TEXT NOT NULL DEFAULT '[]',
       prompt TEXT,
       use_case TEXT,
       author TEXT,
       metrics_json TEXT,
       seed_json TEXT,
+      created_at TEXT,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS orders (
@@ -1590,6 +1708,12 @@ function migrate(db) {
   ensureColumn(db, "generation_tasks", "output_count", "INTEGER");
   ensureColumn(db, "generation_tasks", "aspect_ratio", "TEXT");
   ensureColumn(db, "generation_tasks", "resolution", "TEXT");
+  ensureColumn(db, "templates", "catalog_version_id", "TEXT");
+  ensureColumn(db, "templates", "tags_json", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(db, "templates", "preview_images_json", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(db, "templates", "created_at", "TEXT");
+  ensureColumn(db, "template_catalog_versions", "metadata_json", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(db, "template_catalog_versions", "activated_at", "TEXT");
   ensureColumn(db, "orders", "payment_mode", "TEXT");
   ensureColumn(db, "orders", "idempotency_key", "TEXT");
   ensureColumn(db, "orders", "request_fingerprint", "TEXT");
@@ -1804,24 +1928,42 @@ function rowToPaymentEvent(row) {
   };
 }
 
+function rowToCatalogVersion(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    checksum: row.checksum || "",
+    source: row.source || "",
+    recordCount: Number(row.record_count || 0),
+    metadata: parseJson(row.metadata_json, {}),
+    active: Boolean(row.active),
+    createdAt: row.created_at || null,
+    activatedAt: row.activated_at || null,
+  };
+}
+
 function rowToTemplate(row) {
   return {
     id: row.id,
+    catalogVersionId: row.catalog_version_id || null,
     title: row.title,
     subtitle: row.subtitle,
     category: row.category,
     scenarioCategory: row.scenario_category,
+    tags: parseJson(row.tags_json, []),
     source: row.source,
     sourceId: row.source_id,
     sourceUrl: row.source_url,
     thumbnailUrl: row.thumbnail_url,
     previewUrl: row.preview_url,
     referenceImages: parseJson(row.reference_images_json, []),
+    previewImages: parseJson(row.preview_images_json, []),
     prompt: row.prompt,
     useCase: row.use_case,
     author: row.author,
     metrics: parseJson(row.metrics_json, null),
     seed: parseJson(row.seed_json, null),
+    createdAt: row.created_at || row.updated_at,
     updatedAt: row.updated_at,
   };
 }

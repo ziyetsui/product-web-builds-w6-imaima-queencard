@@ -2,6 +2,7 @@ const crypto = require("node:crypto");
 
 const { assertSessionTokenHash } = require("../auth");
 const { withTransaction } = require("../db/migrate");
+const { queryCatalog } = require("../services/catalog-service");
 
 function id(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
@@ -1016,6 +1017,8 @@ function createPostgresStore(options = {}) {
   async function activateCatalogVersion(versionId) {
     return withTransaction(pool, async (client) => {
       const now = timestamp(clock);
+      const target = await client.query("SELECT * FROM template_catalog_versions WHERE id = $1", [versionId]);
+      if (!target.rowCount) throw new Error(`Catalog version not found: ${versionId}`);
       await client.query("UPDATE template_catalog_versions SET active = FALSE WHERE active = TRUE");
       const result = await client.query("UPDATE template_catalog_versions SET active = TRUE, activated_at = $1 WHERE id = $2 RETURNING *", [now, versionId]);
       return rowToCatalogVersion(result.rows[0]);
@@ -1036,28 +1039,56 @@ function createPostgresStore(options = {}) {
     });
   }
 
-  async function listTemplates(options = new URLSearchParams()) {
-    const { params, page, limit } = pageOf(options, 12);
-    const values = [];
-    const filters = [];
-    const active = await getActiveCatalogVersion();
-    if (active) { values.push(active.id); filters.push(`catalog_version_id = $${values.length}`); }
-    for (const [field, value] of [["category", params.get("category")], ["scenario_category", params.get("scenario_category") || params.get("scenarioCategory")]]) {
-      if (value) { values.push(value); filters.push(`${field} = $${values.length}`); }
+  async function importCatalogVersion(input) {
+    const records = Array.isArray(input.records) ? input.records : [];
+    const ids = new Set();
+    for (const record of records) {
+      if (!record || !record.id || ids.has(record.id)) throw new Error(`Duplicate catalog id: ${record && record.id}`);
+      ids.add(record.id);
     }
-    const q = String(params.get("q") || params.get("keyword") || "").trim();
-    if (q) { values.push(`%${q}%`); filters.push(`(title ILIKE $${values.length} OR subtitle ILIKE $${values.length} OR prompt ILIKE $${values.length} OR author ILIKE $${values.length})`); }
-    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
-    const rows = await pool.query(`SELECT * FROM templates ${where}`, values);
-    let records = rows.rows.map(rowToTemplate);
-    if (params.get("hot") === "1" || params.get("hotOnly") === "true") records = records.filter((record) => metric(record, "likes") >= 20000 || metric(record, "saves") >= 20000);
-    records = sortTemplates(records, params.get("sort") || "default");
-    const start = (page - 1) * limit;
-    return { records: records.slice(start, start + limit), pagination: pagination(page, limit, records.length) };
+    return withTransaction(pool, async (client) => {
+      const now = timestamp(clock);
+      await client.query(`
+        INSERT INTO template_catalog_versions (id, checksum, source, record_count, active, metadata)
+        VALUES ($1, $2, $3, $4, FALSE, $5)
+        ON CONFLICT (id) DO UPDATE SET checksum = EXCLUDED.checksum, source = EXCLUDED.source,
+          record_count = EXCLUDED.record_count, metadata = EXCLUDED.metadata
+      `, [input.id, input.checksum || "", input.source || "unknown", Number(input.recordCount || records.length), JSON.stringify(json(input.metadata))]);
+      await client.query("DELETE FROM templates WHERE catalog_version_id = $1", [input.id]);
+      for (const record of records) {
+        await client.query(`
+          INSERT INTO templates (id, catalog_version_id, title, subtitle, author, category, scenario_category, tags, prompt, reference_images, preview_images, source, source_id, source_url, thumbnail_url, preview_url, use_case, metrics, seed, metadata, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+          ON CONFLICT (id) DO UPDATE SET catalog_version_id = EXCLUDED.catalog_version_id, title = EXCLUDED.title,
+            subtitle = EXCLUDED.subtitle, author = EXCLUDED.author, category = EXCLUDED.category,
+            scenario_category = EXCLUDED.scenario_category, tags = EXCLUDED.tags, prompt = EXCLUDED.prompt,
+            reference_images = EXCLUDED.reference_images, preview_images = EXCLUDED.preview_images,
+            source = EXCLUDED.source, source_id = EXCLUDED.source_id, source_url = EXCLUDED.source_url,
+            thumbnail_url = EXCLUDED.thumbnail_url, preview_url = EXCLUDED.preview_url, use_case = EXCLUDED.use_case,
+            metrics = EXCLUDED.metrics, seed = EXCLUDED.seed, metadata = EXCLUDED.metadata,
+            created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at
+        `, [record.id, input.id, record.title || "", record.subtitle || "", record.author || "", record.category || "", record.scenarioCategory || record.scenario_category || "", JSON.stringify(record.tags || []), record.prompt || "", JSON.stringify(record.referenceImages || record.reference_images || []), JSON.stringify(record.previewImages || record.preview_images || []), record.source || "", record.sourceId || record.source_id || "", record.sourceUrl || record.source_url || "", record.thumbnailUrl || record.thumbnail_url || "", record.previewUrl || record.preview_url || "", record.useCase || record.use_case || "", JSON.stringify(record.metrics || null), JSON.stringify(record.seed || null), JSON.stringify(record.metadata || {}), record.createdAt || now, record.updatedAt || now]);
+      }
+      await client.query("UPDATE template_catalog_versions SET active = FALSE, activated_at = NULL WHERE active = TRUE");
+      await client.query("UPDATE template_catalog_versions SET active = TRUE, activated_at = $1 WHERE id = $2", [now, input.id]);
+      const result = await client.query("SELECT * FROM template_catalog_versions WHERE id = $1", [input.id]);
+      return rowToCatalogVersion(result.rows[0]);
+    });
+  }
+
+  async function listTemplates(options = new URLSearchParams()) {
+    const active = await getActiveCatalogVersion();
+    const rows = active
+      ? await pool.query("SELECT * FROM templates WHERE catalog_version_id = $1", [active.id])
+      : await pool.query("SELECT * FROM templates WHERE catalog_version_id IS NULL");
+    return queryCatalog(rows.rows.map(rowToTemplate), options, active);
   }
 
   async function getTemplate(templateId) {
-    const result = await pool.query("SELECT * FROM templates WHERE id = $1", [templateId]);
+    const result = await pool.query(`
+      SELECT * FROM templates
+      WHERE id = $1 AND (catalog_version_id IS NULL OR catalog_version_id = (SELECT id FROM template_catalog_versions WHERE active = TRUE LIMIT 1))
+    `, [templateId]);
     return rowToTemplate(result.rows[0]);
   }
 
@@ -1380,7 +1411,7 @@ function createPostgresStore(options = {}) {
     createTask, getTask, listTasks, claimTask, renewTaskLease, releaseTaskLease, reclaimExpiredTasks, updateTask,
     createAsset, createGeneratedAsset: createAsset, getAsset, getGeneratedAsset: getAsset, findOwnedAsset, findOwnedImageAsset, listAssets, listGeneratedAssets: listAssets, deleteAsset,
     createReferenceAsset, getReferenceAsset, listReferenceAssets, deleteReferenceAsset,
-    createCatalogVersion, getCatalogVersion, getActiveCatalogVersion, activateCatalogVersion, syncTemplates, listTemplates, getTemplate,
+    createCatalogVersion, getCatalogVersion, getActiveCatalogVersion, activateCatalogVersion, importCatalogVersion, syncTemplates, listTemplates, getTemplate,
     createOrder, getOrder, getOrderByIdempotencyKey, listOrders, listAllOrders, fulfillOrder, fulfillMockOrder, cancelOrder, refundOrder,
     recordPaymentFulfillment, fulfillPayment, getPaymentFulfillment, recordPaymentEvent, listPaymentAudit,
     recordAdminAudit, listAdminAudit,

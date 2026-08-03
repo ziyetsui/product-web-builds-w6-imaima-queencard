@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { queryCatalog } = require("./services/catalog-service");
 
 function firstText() {
   for (let index = 0; index < arguments.length; index += 1) {
@@ -44,6 +45,8 @@ function normalizeTemplate(record) {
     thumbnailUrl,
     previewUrl: thumbnailUrl,
     referenceImages: thumbnailUrl ? [thumbnailUrl] : [],
+    previewImages: thumbnailUrl ? [thumbnailUrl] : [],
+    tags: [],
     prompt,
     useCase: record.scenario_category || record.category || "模板",
     seed: {
@@ -212,6 +215,8 @@ function normalizeGithubCase(record, assetBaseUrl, caseMetrics) {
     thumbnailUrl: preview,
     previewUrl: preview,
     referenceImages,
+    previewImages: referenceImages,
+    tags: Array.isArray(record.topics) ? record.topics : [],
     prompt,
     useCase: record.category || "小红书模板",
     metrics: {
@@ -228,6 +233,8 @@ function normalizeGithubCase(record, assetBaseUrl, caseMetrics) {
       followersText: metric ? metric.followersText : "",
     },
     author: record.author || "",
+    createdAt: record.date ? new Date(record.date).toISOString() : null,
+    updatedAt: record.date ? new Date(record.date).toISOString() : null,
     seed: {
       templateId: record.id,
       prompt,
@@ -303,21 +310,16 @@ async function fetchGithubTemplateList(options) {
   const records = githubCaseFiles(options)
     .flatMap((casesFile) => loadGithubCases(casesFile))
     .map((record) => normalizeGithubCase(record, defaultAssetBaseUrl(options), metrics));
-  const filtered = sortGithubCases(filterGithubCases(records, query), query.get("sort") || "heat");
-  const page = Math.max(1, Number(query.get("page") || 1));
-  const limit = Math.max(1, Number(query.get("limit") || filtered.length || 1));
-  const start = (page - 1) * limit;
-  const pageRecords = filtered.slice(start, start + limit);
+  const result = queryCatalog(records, query, { id: "github-local" });
+  const pageRecords = result.records;
 
   return {
     rawRecords: pageRecords,
     records: pageRecords,
-    pagination: {
-      page,
-      limit,
-      total: filtered.length,
-      totalPages: Math.max(1, Math.ceil(filtered.length / limit)),
-    },
+    catalogVersion: result.catalogVersion,
+    categories: result.categories,
+    specialFilters: result.specialFilters,
+    pagination: result.pagination,
   };
 }
 
@@ -333,16 +335,17 @@ async function fetchRemoteTemplateList(options) {
   if (!response.ok || payload.success === false) {
     throw new Error(payload.error || payload.message || `Template API failed: ${response.status}`);
   }
-  const data = Array.isArray(payload.data) ? payload.data : [];
+  const envelope = payload.data && !Array.isArray(payload.data) ? payload.data : payload;
+  const data = Array.isArray(envelope.data) ? envelope.data : Array.isArray(envelope.records) ? envelope.records : [];
+  const records = data.map(normalizeTemplate);
+  const result = queryCatalog(records, query, { id: envelope.catalogVersion || "remote" });
   return {
     rawRecords: data,
-    records: data.map(normalizeTemplate),
-    pagination: payload.pagination || {
-      page: Number(query.get("page") || 1),
-      limit: Number(query.get("limit") || data.length),
-      total: data.length,
-      totalPages: 1,
-    },
+    records: result.records,
+    catalogVersion: result.catalogVersion,
+    categories: result.categories,
+    specialFilters: result.specialFilters,
+    pagination: envelope.pagination || result.pagination,
   };
 }
 

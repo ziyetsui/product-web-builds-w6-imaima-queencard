@@ -1,4 +1,5 @@
 const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
 const pathModule = require("node:path");
 const crypto = require("node:crypto");
 
@@ -7,6 +8,7 @@ const { serveAsset } = require("./assets");
 const { createImageProvider } = require("./providers");
 const { createSqliteStore } = require("./store");
 const { fetchTemplateById, fetchTemplateList } = require("./templates");
+const { importCatalog } = require("./services/catalog-service");
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -190,11 +192,15 @@ function publicTemplateAssets(template, env, request) {
   const referenceImages = Array.isArray(template.referenceImages)
     ? template.referenceImages.map((image) => publicAssetUrl(image, env, request))
     : [];
+  const previewImages = Array.isArray(template.previewImages)
+    ? template.previewImages.map((image) => publicAssetUrl(image, env, request))
+    : [];
   return {
     ...template,
     thumbnailUrl: publicAssetUrl(template.thumbnailUrl, env, request),
     previewUrl: publicAssetUrl(template.previewUrl, env, request),
     referenceImages,
+    previewImages,
     seed: template.seed ? {
       ...template.seed,
       referenceImages: Array.isArray(template.seed.referenceImages)
@@ -383,6 +389,24 @@ function createApp(options = {}) {
 
   async function ensureTemplatesSynced(request) {
     if (templatesSynced || !store.syncTemplates) return;
+    const remoteTemplateSource = getEnv(env, "MINIAPP_TEMPLATE_SOURCE", "") === "remote"
+      || Boolean(getEnv(env, "MINIAPP_TEMPLATE_API_BASE_URL", ""));
+    const configuredSnapshot = options.catalogSnapshot === false
+      ? null
+      : options.catalogSnapshot !== undefined
+        ? options.catalogSnapshot
+        : remoteTemplateSource ? null : pathModule.resolve(__dirname, "../catalog/catalog.snapshot.json");
+    if (configuredSnapshot && store.importCatalogVersion) {
+      const snapshot = typeof configuredSnapshot === "object"
+        ? configuredSnapshot
+        : fsSync.existsSync(configuredSnapshot) ? JSON.parse(fsSync.readFileSync(configuredSnapshot, "utf8")) : null;
+      if (snapshot) {
+        const active = store.getActiveCatalogVersion ? await store.getActiveCatalogVersion() : null;
+        if (!active || active.id !== snapshot.catalogVersion) await importCatalog(store, snapshot);
+        templatesSynced = true;
+        return;
+      }
+    }
     const syncQuery = new URLSearchParams({
       page: "1",
       limit: getEnv(env, "MINIAPP_TEMPLATE_SYNC_LIMIT", "10000"),
@@ -781,7 +805,10 @@ function createApp(options = {}) {
         return json({
           success: true,
           data: {
+            catalogVersion: data.catalogVersion || (store.getActiveCatalogVersion ? (await store.getActiveCatalogVersion())?.id : ""),
             records: data.records,
+            categories: data.categories || [],
+            specialFilters: data.specialFilters || [],
             pagination: data.pagination,
           },
         });
