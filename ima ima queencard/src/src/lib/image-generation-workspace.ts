@@ -8,6 +8,9 @@ export type GeneratedDraftKeyInput = {
 export type ComposerDraft = {
   prompt: string;
   referenceImages: string[];
+  patternId?: string;
+  patternVersion?: number;
+  patternValues?: Record<string, string | number>;
   model?: string;
   aspectRatio?: string;
   outputCount?: number;
@@ -25,6 +28,9 @@ export type ComposerSeedLike = {
   resolution?: string;
   aiEnhance?: boolean;
   fastMode?: boolean;
+  patternId?: string;
+  patternVersion?: number;
+  patternValues?: Record<string, string | number>;
 };
 
 export type PromptReuseMode = "append" | "overwrite";
@@ -70,6 +76,18 @@ function optionalNumber(value: unknown) {
     : undefined;
 }
 
+function normalizePatternValues(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const normalized: Record<string, string | number> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!/^[a-z][a-z0-9_]{1,31}$/.test(key)) continue;
+    if (typeof entry === "string" || (typeof entry === "number" && Number.isFinite(entry))) {
+      normalized[key] = entry;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeComposerDraft(value: unknown): ComposerDraft | null {
   if (!value || typeof value !== "object") return null;
   const draft = value as Record<string, unknown>;
@@ -77,6 +95,9 @@ function normalizeComposerDraft(value: unknown): ComposerDraft | null {
   return {
     prompt: typeof draft.prompt === "string" ? draft.prompt.slice(0, 2000) : "",
     referenceImages: normalizeReferenceImages(draft.referenceImages),
+    patternId: optionalString(draft.patternId),
+    patternVersion: optionalNumber(draft.patternVersion),
+    patternValues: normalizePatternValues(draft.patternValues),
     model: optionalString(draft.model),
     aspectRatio: optionalString(draft.aspectRatio),
     outputCount: optionalNumber(draft.outputCount),
@@ -130,7 +151,48 @@ export function mergeComposerDraftIntoSeed<TSeed extends ComposerSeedLike>(
     resolution: draft.resolution,
     aiEnhance: draft.aiEnhance,
     fastMode: draft.fastMode,
+    patternId: draft.patternId,
+    patternVersion: draft.patternVersion,
+    patternValues: normalizePatternValues(draft.patternValues),
   };
+}
+
+type PatternDraftContract = {
+  id: string;
+  version: number;
+  variables: Array<{
+    key: string;
+    type: "short_text" | "long_text" | "enum" | "number";
+    required: boolean;
+    minLength?: number;
+    maxLength?: number;
+    min?: number;
+    max?: number;
+    options?: Array<{ value: string; label: string }>;
+  }>;
+};
+
+function isRestorablePatternValue(variable: PatternDraftContract["variables"][number], value: unknown) {
+  if (variable.type === "number") {
+    return typeof value === "number" && Number.isFinite(value) && value >= (variable.min ?? -Infinity) && value <= (variable.max ?? Infinity);
+  }
+  if (typeof value !== "string") return false;
+  const length = Array.from(value).length;
+  if (length < (variable.minLength ?? 0) || length > (variable.maxLength ?? Infinity)) return false;
+  return variable.type !== "enum" || Boolean(variable.options?.some((option) => option.value === value));
+}
+
+export function restorePatternDraft(
+  pattern: PatternDraftContract,
+  draft: Pick<ComposerDraft, "patternId" | "patternVersion" | "patternValues">,
+) {
+  if (draft.patternId !== pattern.id) return { values: {}, patternUpdated: false };
+  const values: Record<string, string | number> = {};
+  for (const variable of pattern.variables) {
+    const value = draft.patternValues?.[variable.key];
+    if (isRestorablePatternValue(variable, value)) values[variable.key] = value!;
+  }
+  return { values, patternUpdated: draft.patternVersion !== pattern.version };
 }
 
 export function shouldAskPromptReuseChoice(

@@ -38,6 +38,10 @@ export interface ImageGenerationCreateInput {
   sourceNoteUrl?: string | null;
   sourceAuthorUrl?: string | null;
   prompt?: string;
+  patternId?: string;
+  patternVersion?: number;
+  patternValues?: Record<string, string | number>;
+  displayPrompt?: string;
   referenceImages?: string[];
   model?: string;
   capability?: ImageGenerationCapability;
@@ -47,6 +51,13 @@ export interface ImageGenerationCreateInput {
   aiEnhance?: boolean;
   fastMode?: boolean;
 }
+
+type GenerationPatternContext = {
+  patternId: string;
+  patternVersion: number;
+  patternValues: Record<string, string | number>;
+  displayPrompt: string;
+};
 
 export interface ImageGenerationListOptions {
   query?: string | null;
@@ -178,6 +189,29 @@ function providerModelFor(model: string) {
   }
 }
 
+function normalizePatternContext(input: ImageGenerationCreateInput): GenerationPatternContext | null {
+  const patternId = typeof input.patternId === "string" ? input.patternId.trim() : "";
+  const patternVersion = Number(input.patternVersion);
+  const displayPrompt = typeof input.displayPrompt === "string"
+    ? input.displayPrompt.trim().slice(0, 500)
+    : "";
+  if (!patternId || !Number.isInteger(patternVersion) || patternVersion < 1 || !displayPrompt) {
+    return null;
+  }
+
+  const patternValues: Record<string, string | number> = {};
+  if (input.patternValues && typeof input.patternValues === "object") {
+    for (const [key, value] of Object.entries(input.patternValues)) {
+      if (!/^[a-z][a-z0-9_]{1,31}$/.test(key)) continue;
+      if (typeof value === "string") patternValues[key] = value.slice(0, 300);
+      if (typeof value === "number" && Number.isFinite(value)) patternValues[key] = value;
+    }
+  }
+  if (Object.keys(patternValues).length === 0) return null;
+
+  return { patternId, patternVersion, patternValues, displayPrompt };
+}
+
 function normalizeCreateInput(input: ImageGenerationCreateInput) {
   const prompt = (input.prompt ?? "").trim();
   if (!prompt) {
@@ -220,6 +254,7 @@ function normalizeCreateInput(input: ImageGenerationCreateInput) {
     resolution: normalizeResolution(input.resolution),
     aiEnhance: Boolean(input.aiEnhance),
     fastMode: input.fastMode !== false,
+    patternContext: normalizePatternContext(input),
   };
 }
 
@@ -279,6 +314,7 @@ function publicAsset(asset: GeneratedAsset) {
 }
 
 function publicTask(task: GenerationTask, assets: GeneratedAsset[] = []) {
+  const patternContext = task.patternContext as GenerationPatternContext | null;
   return {
     taskId: task.id,
     status: task.status,
@@ -286,6 +322,10 @@ function publicTask(task: GenerationTask, assets: GeneratedAsset[] = []) {
     sourceCaseId: task.sourceCaseId,
     sourceCaseCategory: task.sourceCaseCategory,
     prompt: task.prompt,
+    patternId: patternContext?.patternId,
+    patternVersion: patternContext?.patternVersion,
+    patternValues: patternContext?.patternValues,
+    displayPrompt: patternContext?.displayPrompt,
     referenceImages: (task.referenceImages as string[]) ?? [],
     model: task.model,
     providerModel: task.providerModel,
@@ -355,6 +395,7 @@ export async function createImageGenerationTask(
     sourceAuthorUrl: normalized.sourceAuthorUrl,
     prompt: normalized.prompt,
     originalPrompt: normalized.aiEnhance ? normalized.prompt : null,
+    patternContext: normalized.patternContext,
     referenceImages: normalized.referenceImages,
     model: normalized.model,
     providerModel: normalized.providerModel,
@@ -507,6 +548,7 @@ export async function listImageGenerationTasks(
     const pattern = `%${query}%`;
     const searchFilter = or(
       ilike(generationTasks.prompt, pattern),
+      sql`${generationTasks.patternContext} ->> 'displayPrompt' ILIKE ${pattern}`,
       ilike(generationTasks.sourceCaseCategory, pattern),
       ilike(generationTasks.model, pattern),
       ilike(generationTasks.providerModel, pattern),
