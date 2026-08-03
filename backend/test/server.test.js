@@ -5,7 +5,6 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { createApp } = require("../src/app");
-const { createMiniappToken } = require("../src/auth");
 const { createMemoryStore, createSqliteStore } = require("../src/store");
 
 async function readJson(response) {
@@ -88,17 +87,21 @@ test("production payment provider blocks legacy mock-pay without granting credit
     NODE_ENV: "production",
     MINIAPP_DEV_LOGIN: "0",
     WECHAT_MINIAPP_APP_ID: "wx-production",
+    WECHAT_MINIAPP_APP_SECRET: "production-test-secret",
     MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
     MINIAPP_PAYMENT_MODE: "mock",
   };
   const store = createMemoryStore({ initialCredits: 10 });
-  const app = createApp({ env, store });
-  const token = createMiniappToken({
-    appid: "wx-production",
-    openid: "payment-user",
-    secret: "test-secret",
+  const app = createApp({
+    env,
+    store,
+    fetch: async () => Response.json({ openid: "payment-user" }),
   });
-  const authorization = `Bearer ${token}`;
+  const loginResponse = await readJson(await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
+    method: "POST",
+    body: JSON.stringify({ code: "production-test-code" }),
+  })));
+  const authorization = `Bearer ${loginResponse.data.token}`;
 
   const created = await readJson(await app.fetch(new Request("http://local/api/miniapp/orders", {
     method: "POST",

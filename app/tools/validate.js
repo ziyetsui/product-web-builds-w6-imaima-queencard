@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { runAuth401Fixture } = require("./fixtures/auth-401.js");
 
 const root = path.resolve(__dirname, "..");
 const requiredFiles = [
@@ -251,6 +252,32 @@ const indexPageSource = fs.readFileSync(path.join(root, "pages/index/index.js"),
 const envSource = fs.readFileSync(path.join(root, "config/env.js"), "utf8");
 if (/APP_SECRET|OPENAI_API_KEY|GPTPROTO_API_KEY|FIREBASE_PRIVATE_KEY/.test(envSource)) {
   fail("config/env.js must not contain server-side secrets");
+}
+
+const fixtureEvents = [];
+const fixtureSession = {
+  clearSession: () => fixtureEvents.push("clear"),
+};
+const fixtureResult = runAuth401Fixture({
+  session: fixtureSession,
+  navigate: (url) => fixtureEvents.push(`navigate:${url}`),
+});
+if (!fixtureResult.cleared || !fixtureResult.redirected
+  || fixtureEvents.join("|") !== "clear|navigate:/pages/account/index?auth=required") {
+  fail("401 auth fixture must clear local session and navigate to the account page");
+}
+
+const authApiSource = fs.readFileSync(path.join(root, "services/auth.js"), "utf8");
+if (!/loginWithWechatProfile/.test(authApiSource) || !/logout/.test(authApiSource)) {
+  fail("services/auth.js must expose login and logout lifecycle methods");
+}
+
+const apiRequestSource = fs.readFileSync(path.join(root, "services/api.js"), "utf8");
+if (!/SESSION_EXPIRED|AUTH_REQUIRED|ACCOUNT_DISABLED/.test(apiRequestSource)
+  || !/authRetry/.test(apiRequestSource)
+  || !/clearSession/.test(apiRequestSource)
+  || !/pages\/account\/index\?auth=required/.test(apiRequestSource)) {
+  fail("services/api.js must handle terminal auth responses without rendering raw 401 text");
 }
 
 if (process.exitCode) {

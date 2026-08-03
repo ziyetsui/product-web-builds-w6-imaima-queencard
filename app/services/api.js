@@ -21,17 +21,58 @@ function endpoint(path, query) {
   return env.API_BASE_URL.replace(/\/$/, "") + env.MINIAPP_API_PREFIX + path + buildQuery(query);
 }
 
-function request(options) {
+function isPublicRequest(options) {
+  if (options && options.protected === true) return false;
+  if (options && options.protected === false) return true;
+  var path = String(options && options.path || "");
+  return path === "/auth/wechat-login"
+    || path === "/pricing"
+    || path === "/templates"
+    || /^\/templates\/[^/]+$/.test(path);
+}
+
+function authRequiredError(code) {
+  var error = new Error("登录状态已失效，请重新登录");
+  error.code = code || "AUTH_REQUIRED";
+  error.statusCode = 401;
+  error.authRequired = true;
+  return error;
+}
+
+function redirectToAccount() {
+  var app = typeof getApp === "function" ? getApp() : null;
+  if (app && typeof app.handleAuthRequired === "function") {
+    app.handleAuthRequired();
+    return;
+  }
+  if (typeof wx !== "undefined" && wx.navigateTo) {
+    wx.navigateTo({ url: "/pages/account/index?auth=required" });
+  }
+}
+
+function terminalAuthFailure(payload) {
+  session.clearSession();
+  redirectToAccount();
+  return authRequiredError(payload && payload.code);
+}
+
+function loginForRetry() {
+  var auth = require("./auth.js");
+  return auth.loginWithWechatProfile({ source: "session-retry" }, { silent: true });
+}
+
+function request(options, authRetry) {
   if (!isConfigured()) {
     return Promise.reject(new Error("后端 API 未配置，请先设置 config/env.js 里的 API_BASE_URL"));
   }
 
+  var requestOptions = options || {};
   return new Promise(function (resolve, reject) {
     var token = session.getToken();
     wx.request({
-      url: endpoint(options.path, options.query),
-      method: options.method || "GET",
-      data: options.data || {},
+      url: endpoint(requestOptions.path, requestOptions.query),
+      method: requestOptions.method || "GET",
+      data: requestOptions.data || {},
       timeout: env.REQUEST_TIMEOUT,
       header: {
         "content-type": "application/json",
@@ -43,7 +84,22 @@ function request(options) {
           resolve(payload.data !== undefined ? payload.data : payload);
           return;
         }
-        reject(new Error(payload.error || payload.message || "请求失败：" + res.statusCode));
+        if (res.statusCode === 401) {
+          if (!isPublicRequest(requestOptions) && !authRetry) {
+            loginForRetry()
+              .then(function () {
+                return request(requestOptions, true);
+              })
+              .then(resolve)
+              .catch(function (error) {
+                reject(error && error.authRequired ? error : error || new Error("请求失败"));
+              });
+            return;
+          }
+          reject(terminalAuthFailure(payload));
+          return;
+        }
+        reject(new Error(payload.error || payload.message || "请求失败"));
       },
       fail: function (error) {
         reject(new Error(error.errMsg || "网络请求失败"));
@@ -59,7 +115,7 @@ function authHeader() {
   };
 }
 
-function uploadReferenceImage(filePath) {
+function uploadReferenceImage(filePath, authRetry) {
   if (!isConfigured()) {
     return Promise.reject(new Error("后端 API 未配置，请先设置 config/env.js 里的 API_BASE_URL"));
   }
@@ -86,7 +142,22 @@ function uploadReferenceImage(filePath) {
           resolve(payload.data || payload);
           return;
         }
-        reject(new Error(payload.error || payload.message || "上传失败：" + res.statusCode));
+        if (res.statusCode === 401 && !authRetry) {
+          loginForRetry()
+            .then(function () {
+              return uploadReferenceImage(filePath, true);
+            })
+            .then(resolve)
+            .catch(function (error) {
+              reject(error && error.authRequired ? error : error || new Error("上传失败"));
+            });
+          return;
+        }
+        if (res.statusCode === 401) {
+          reject(terminalAuthFailure(payload));
+          return;
+        }
+        reject(new Error(payload.error || payload.message || "上传失败"));
       },
       fail: function (error) {
         reject(new Error(error.errMsg || "图片上传失败"));
@@ -103,6 +174,16 @@ function loginWithWechat(code, profile) {
       code: code,
       profile: profile || {},
     },
+    protected: false,
+  });
+}
+
+function logout() {
+  if (!session.getToken()) return Promise.resolve(null);
+  return request({
+    path: "/auth/logout",
+    method: "POST",
+    protected: false,
   });
 }
 
@@ -268,6 +349,7 @@ module.exports = {
   request: request,
   authHeader: authHeader,
   loginWithWechat: loginWithWechat,
+  logout: logout,
   getMe: getMe,
   listPricingProducts: listPricingProducts,
   createOrder: createOrder,

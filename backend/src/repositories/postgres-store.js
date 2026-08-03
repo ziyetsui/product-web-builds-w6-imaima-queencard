@@ -513,7 +513,9 @@ function createPostgresStore(options = {}) {
 
   async function ensureUser(identity) {
     const createdAt = timestamp(clock);
-    const userId = identity.sub || `wechat:${identity.appid}:${identity.openid}`;
+    const userId = identity.appid && identity.openid
+      ? `wechat:${identity.appid}:${identity.openid}`
+      : identity.sub;
     await withTransaction(pool, async (client) => {
       const inserted = await client.query(`
         INSERT INTO miniapp_users (id, provider, appid, openid, unionid, name, balance, created_at, updated_at)

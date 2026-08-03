@@ -32,7 +32,12 @@ function getCurrentUser() {
 }
 
 function logout() {
-  session.clearSession();
+  return api.logout()
+    .catch(function () { return null; })
+    .then(function (result) {
+      session.clearSession();
+      return result;
+    });
 }
 
 module.exports = {

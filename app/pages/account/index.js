@@ -19,14 +19,24 @@ Page({
     loading: false,
     saving: false,
     loggingIn: false,
+    authRequired: false,
     error: "",
   },
 
-  onLoad: function () {
+  onLoad: function (options) {
+    if (options && options.auth === "required") {
+      this.setData({
+        authRequired: true,
+        loading: false,
+        error: "登录已失效，请重新登录",
+      });
+      return;
+    }
     this.loadAccount();
   },
 
   onShow: function () {
+    if (this.data.authRequired) return;
     this.loadBalance();
   },
 
@@ -116,6 +126,7 @@ Page({
       .then(function () {
         page.setData({
           loggingIn: false,
+          authRequired: false,
         });
         page.loadAccount();
       })
@@ -170,17 +181,20 @@ Page({
   },
 
   logout: function () {
-    auth.logout();
-    this.setData({
-      user: null,
-      userName: "未登录",
-      userRole: "点击同步微信资料登录",
-      nickname: "",
-      balance: 0,
-    });
-    wx.showToast({
-      title: "已退出",
-      icon: "success",
+    var page = this;
+    auth.logout().then(function () {
+      page.setData({
+        user: null,
+        userName: "未登录",
+        userRole: "点击同步微信资料登录",
+        nickname: "",
+        balance: 0,
+        error: "",
+      });
+      wx.showToast({
+        title: "已退出",
+        icon: "success",
+      });
     });
   },
 

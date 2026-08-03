@@ -143,6 +143,7 @@ function createMemoryStore(options = {}) {
   const initialCredits = Number(options.initialCredits || 10);
   const environment = String(options.environment || process.env.NODE_ENV || "development").toLowerCase();
   const users = new Map();
+  const sessions = new Map();
   const tasks = new Map();
   const creditTransactions = [];
   const templates = new Map();
@@ -150,7 +151,9 @@ function createMemoryStore(options = {}) {
   const paymentAudit = [];
 
   function ensureUser(identity) {
-    const id = identity.sub;
+    const id = identity.appid && identity.openid
+      ? `wechat:${identity.appid}:${identity.openid}`
+      : identity.sub;
     if (!users.has(id)) {
       users.set(id, {
         id,
@@ -160,6 +163,7 @@ function createMemoryStore(options = {}) {
         unionid: identity.unionid || null,
         name: "微信用户",
         balance: initialCredits,
+        status: "active",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -169,6 +173,61 @@ function createMemoryStore(options = {}) {
 
   function getUser(id) {
     return users.get(id) || null;
+  }
+
+  function createSession(input) {
+    const now = new Date().toISOString();
+    const saved = {
+      id: input.id || `session_${crypto.randomUUID()}`,
+      userId: input.userId,
+      tokenHash: input.tokenHash,
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+      lastUsedAt: null,
+      ipAddress: input.ipAddress || "",
+      userAgent: input.userAgent || "",
+      createdAt: now,
+      updatedAt: now,
+    };
+    sessions.set(saved.id, saved);
+    return saved;
+  }
+
+  function getSession(id) {
+    return sessions.get(id) || null;
+  }
+
+  function getSessionByTokenHash(tokenHash) {
+    return Array.from(sessions.values()).find((session) => session.tokenHash === tokenHash) || null;
+  }
+
+  function touchSession(id) {
+    const session = sessions.get(id);
+    if (!session) return null;
+    const now = new Date().toISOString();
+    session.lastUsedAt = now;
+    session.updatedAt = now;
+    return session;
+  }
+
+  function revokeSession(id) {
+    const session = sessions.get(id);
+    if (!session) return null;
+    const now = new Date().toISOString();
+    session.revokedAt = session.revokedAt || now;
+    session.updatedAt = now;
+    return session;
+  }
+
+  function revokeSessionByTokenHash(tokenHash) {
+    const session = getSessionByTokenHash(tokenHash);
+    return session ? revokeSession(session.id) : null;
+  }
+
+  function revokeAllSessions(userId) {
+    return Array.from(sessions.values())
+      .filter((session) => session.userId === userId && !session.revokedAt)
+      .map((session) => revokeSession(session.id)).length;
   }
 
   function getUserByIdentity(appid, openid) {
@@ -552,6 +611,13 @@ function createMemoryStore(options = {}) {
     ensureUser,
     getUser,
     getUserByIdentity,
+    createSession,
+    getSession,
+    getSessionByTokenHash,
+    touchSession,
+    revokeSession,
+    revokeSessionByTokenHash,
+    revokeAllSessions,
     updateUserProfile,
     listUsers,
     addCredits,
@@ -587,7 +653,9 @@ function createSqliteStore(options = {}) {
   migrate(db);
 
   function ensureUser(identity) {
-    const id = identity.sub;
+    const id = identity.appid && identity.openid
+      ? `wechat:${identity.appid}:${identity.openid}`
+      : identity.sub;
     const existing = getUser(id);
     if (existing) return existing;
 
@@ -617,6 +685,58 @@ function createSqliteStore(options = {}) {
   function getUserByIdentity(appid, openid) {
     const row = db.prepare("SELECT * FROM users WHERE appid = ? AND openid = ?").get(appid, openid);
     return row ? rowToUser(row) : null;
+  }
+
+  function createSession(input) {
+    const now = new Date().toISOString();
+    const sessionId = input.id || `session_${crypto.randomUUID()}`;
+    db.prepare(`
+      INSERT INTO sessions (id, user_id, token_hash, expires_at, revoked_at, last_used_at, ip_address, user_agent, created_at, updated_at)
+      VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
+    `).run(
+      sessionId,
+      input.userId,
+      input.tokenHash,
+      input.expiresAt,
+      input.ipAddress || "",
+      input.userAgent || "",
+      now,
+      now,
+    );
+    return getSession(sessionId);
+  }
+
+  function getSession(id) {
+    const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(id);
+    return row ? rowToSession(row) : null;
+  }
+
+  function getSessionByTokenHash(tokenHash) {
+    const row = db.prepare("SELECT * FROM sessions WHERE token_hash = ?").get(tokenHash);
+    return row ? rowToSession(row) : null;
+  }
+
+  function touchSession(id) {
+    const now = new Date().toISOString();
+    db.prepare("UPDATE sessions SET last_used_at = ?, updated_at = ? WHERE id = ?").run(now, now, id);
+    return getSession(id);
+  }
+
+  function revokeSession(id) {
+    const now = new Date().toISOString();
+    db.prepare("UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?), updated_at = ? WHERE id = ?").run(now, now, id);
+    return getSession(id);
+  }
+
+  function revokeSessionByTokenHash(tokenHash) {
+    const session = getSessionByTokenHash(tokenHash);
+    return session ? revokeSession(session.id) : null;
+  }
+
+  function revokeAllSessions(userId) {
+    const now = new Date().toISOString();
+    const result = db.prepare("UPDATE sessions SET revoked_at = COALESCE(revoked_at, ?), updated_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(now, now, userId);
+    return result.changes;
   }
 
   function updateUserProfile(userId, updates = {}) {
@@ -1309,6 +1429,13 @@ function createSqliteStore(options = {}) {
     ensureUser,
     getUser,
     getUserByIdentity,
+    createSession,
+    getSession,
+    getSessionByTokenHash,
+    touchSession,
+    revokeSession,
+    revokeSessionByTokenHash,
+    revokeAllSessions,
     updateUserProfile,
     listUsers,
     addCredits,
@@ -1349,6 +1476,19 @@ function migrate(db) {
       unionid TEXT,
       name TEXT NOT NULL,
       balance INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      last_used_at TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -1439,6 +1579,7 @@ function migrate(db) {
       created_at TEXT NOT NULL
     );
   `);
+  ensureColumn(db, "users", "status", "TEXT NOT NULL DEFAULT 'active'");
   ensureColumn(db, "generation_tasks", "prompt", "TEXT");
   ensureColumn(db, "generation_tasks", "topic", "TEXT");
   ensureColumn(db, "generation_tasks", "reference_images_json", "TEXT NOT NULL DEFAULT '[]'");
@@ -1560,6 +1701,22 @@ function rowToUser(row) {
     unionid: row.unionid,
     name: row.name,
     balance: row.balance,
+    status: row.status || "active",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToSession(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    tokenHash: row.token_hash,
+    expiresAt: row.expires_at,
+    revokedAt: row.revoked_at,
+    lastUsedAt: row.last_used_at,
+    ipAddress: row.ip_address || "",
+    userAgent: row.user_agent || "",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -15,7 +15,8 @@ Recommended binding flow:
 1. Mini program calls `wx.login()` and sends the temporary `code` to backend.
 2. Backend calls WeChat `auth.code2Session` with server-side AppID/AppSecret.
 3. Backend finds `wechat_openid_bindings.openid`.
-4. Return a backend-signed miniapp API token for `wechat:{appid}:{openid}`.
+4. Return an opaque, cryptographically random miniapp session token for
+   `wechat:{appid}:{openid}`; persist only its SHA-256 hash server-side.
 5. Optional later: allow account binding if a user wants to merge web and
    miniapp credits/history.
 
@@ -28,17 +29,16 @@ generation_tasks(id, owner_id, status, images_json, template_id, provider, provi
 templates(id, title, category, scenario_category, source, thumbnail_url, preview_url, reference_images_json, prompt, seed_json, updated_at)
 ```
 
-For standalone login, the miniapp token is not a web product bearer token. The
-`/api/miniapp/*` backend verifies the miniapp token, checks credits, persists
-generation tasks, and calls the configured image provider with server-side
-credentials.
+For standalone login, the miniapp session is independent from any web product
+account. The `/api/miniapp/*` backend looks up the SHA-256 session hash, checks
+expiry/revocation and account status, then checks credits, persists generation
+tasks, and calls the configured image provider with server-side credentials.
 
 Required backend environment:
 
 ```text
 WECHAT_MINIAPP_APP_ID=wx...
 WECHAT_MINIAPP_APP_SECRET=...
-MINIAPP_AUTH_TOKEN_SECRET=server-side-signing-secret
 MINIAPP_DB_PATH=./data/miniapp.sqlite
 MINIAPP_IMAGE_PROVIDER=preview
 OPENAI_IMAGE_API_KEY=optional
@@ -128,7 +128,7 @@ plus server-side execution metadata when available.
 Headers:
 
 ```text
-Authorization: Bearer miniapp-api-token
+Authorization: Bearer opaque-miniapp-session-token
 ```
 
 Request:
@@ -175,8 +175,8 @@ Response:
 {
   "success": true,
   "data": {
-    "token": "miniapp-api-token",
-      "user": {
+    "token": "opaque-miniapp-session-token",
+    "user": {
       "id": "wechat:wx-appid:openid",
       "provider": "wechat",
       "appid": "wx-appid",
@@ -193,7 +193,7 @@ Response:
 Headers:
 
 ```text
-Authorization: Bearer miniapp-api-token
+Authorization: Bearer opaque-miniapp-session-token
 ```
 
 Response:
@@ -202,7 +202,7 @@ Response:
 {
   "success": true,
   "data": {
-      "user": {
+    "user": {
       "id": "wechat:wx-appid:openid",
       "provider": "wechat",
       "appid": "wx-appid",
