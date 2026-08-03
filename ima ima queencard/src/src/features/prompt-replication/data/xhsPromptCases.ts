@@ -1,5 +1,9 @@
+import type { PatternValues } from "@/features/style-recreation/pattern-types";
+
 export type XhsPromptCase = {
   id: string;
+  patternId?: string;
+  suggestedPatternValues?: PatternValues;
   title: string;
   subtitle: string;
   category: string;
@@ -23,6 +27,8 @@ export type XhsPromptCase = {
 export const xhsPromptCases: XhsPromptCase[] = [
   {
     id: "20251009-27",
+    patternId: "wordplay-reveal-1",
+    suggestedPatternValues: { topic: "AI 创业", setup: "程序员加班", punchline: "模型又崩了" },
     title: "鸡，谁懂？",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -44,6 +50,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "6673eff2000000001e013a9f",
+    patternId: "wordplay-reveal-2",
+    suggestedPatternValues: { topic: "第一次当领导", setup: "新经理开晨会", punchline: "下属全是 AI" },
     title: "腿记",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -65,6 +73,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "20250509-52",
+    patternId: "wordplay-reveal-3",
+    suggestedPatternValues: { topic: "早睡计划", setup: "熬夜的人制定作息表", punchline: "计划写到了凌晨三点" },
     title: "用5天时间就能把作息调到22点",
     subtitle: "参考首图生成同结构新主题",
     category: "成长自律",
@@ -86,6 +96,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "68c5603c000000001d018c87",
+    patternId: "wordplay-reveal-4",
+    suggestedPatternValues: { topic: "情绪管理", setup: "失眠的人学习放松", punchline: "越放松越焦虑" },
     title: "睡眠差其实是“五脏有伤”",
     subtitle: "参考首图生成同结构新主题",
     category: "情绪疗愈",
@@ -107,6 +119,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "68c68166000000001d02859c",
+    patternId: "wordplay-reveal-5",
+    suggestedPatternValues: { topic: "远程办公", setup: "同事在线开会", punchline: "所有人都在假装网络卡" },
     title: "抽象谐音梗（76）",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -128,6 +142,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "66432778000000001e030ca6",
+    patternId: "visual-metaphor-emotion-1",
+    suggestedPatternValues: { topic: "自由职业焦虑", subject: "独立设计师", metaphor: "不断下沉的待办清单" },
     title: "据说只有高情商的人能刷到😎",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -149,6 +165,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "69cbb8ea000000002800a9a9",
+    patternId: "visual-metaphor-emotion-2",
+    suggestedPatternValues: { topic: "父母学会使用 AI", subject: "第一次用聊天机器人的爸爸", metaphor: "吞掉整个客厅的对话框" },
     title: "老爸沉迷小红书",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -170,6 +188,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "20260215-18",
+    patternId: "visual-metaphor-emotion-3",
+    suggestedPatternValues: { topic: "社交电量耗尽", subject: "聚会后的年轻人", metaphor: "不断逼近的巨大电量警告" },
     title: "当你认识一个神经兮兮的人",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -191,6 +211,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "685246990000000021019701",
+    patternId: "visual-metaphor-emotion-4",
+    suggestedPatternValues: { topic: "工作消息轰炸", subject: "下班路上的职场人", metaphor: "从天空坠落的红色通知气泡" },
     title: "哈哈哈哈哈哈哈哈，不好意思笑太大声了",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -212,6 +234,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "20251021-25",
+    patternId: "visual-metaphor-emotion-5",
+    suggestedPatternValues: { topic: "拖延症发作", subject: "准备交稿的创作者", metaphor: "吞噬桌面的巨大倒计时" },
     title: "鼠鼠我啊，闹了不少笑话",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -233,6 +257,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "65b23b6f000000001003c199",
+    patternId: "collectible-checklist-1",
+    suggestedPatternValues: { topic: "打工人下班自救", audience: "长期久坐的上班族", item_count: 6 },
     title: "经常上班的打工人，一定要检查一下",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -254,6 +280,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "6687df14000000000a0045ee",
+    patternId: "collectible-checklist-2",
+    suggestedPatternValues: { topic: "换季饮食指南", audience: "容易疲惫的年轻人", item_count: 7 },
     title: "人体食养地图🔥从头养到脚……",
     subtitle: "参考首图生成同结构新主题",
     category: "清单种草",
@@ -275,6 +303,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "68104066000000002300ddf2",
+    patternId: "collectible-checklist-3",
+    suggestedPatternValues: { topic: "父母第一次来新家", audience: "刚搬家的独居青年", item_count: 5 },
     title: "当爸妈五一进城看我，我开始疯狂了……",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -296,6 +326,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "68553b18000000000d0277f5",
+    patternId: "collectible-checklist-4",
+    suggestedPatternValues: { topic: "睡前快速放松", audience: "经常熬夜的人", item_count: 6 },
     title: "8个失眠快速入眠法！零成本秒睡！熬夜党狂喜",
     subtitle: "参考首图生成同结构新主题",
     category: "养生内调",
@@ -317,6 +349,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "69b85e5a000000001a033655",
+    patternId: "collectible-checklist-5",
+    suggestedPatternValues: { topic: "周末快乐补给", audience: "工作一周的打工人", item_count: 8 },
     title: "今日欢乐梗图来啦～",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -338,6 +372,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "642cd47a0000000012030388",
+    patternId: "narrative-resonance-1",
+    suggestedPatternValues: { topic: "重新开始", subject: "搬到新城市的年轻人", scene: "清晨第一班公交车" },
     title: "当代单身女现状",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -359,6 +395,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "6873fc80000000001c0345c5",
+    patternId: "narrative-resonance-2",
+    suggestedPatternValues: { topic: "独自吃饭的幸福", subject: "结束加班的女孩", scene: "街角亮灯的小餐馆" },
     title: "我要开动啦！！",
     subtitle: "参考首图生成同结构新主题",
     category: "搞笑漫画",
@@ -380,6 +418,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "68897178000000002303a615",
+    patternId: "narrative-resonance-3",
+    suggestedPatternValues: { topic: "慢慢恢复状态", subject: "刚结束忙碌项目的人", scene: "雨后的社区公园" },
     title: "上热下寒？5招拽回乱窜的火🔥",
     subtitle: "参考首图生成同结构新主题",
     category: "清单种草",
@@ -401,6 +441,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "670689e7000000002c029667",
+    patternId: "narrative-resonance-4",
+    suggestedPatternValues: { topic: "放下手机休息", subject: "眼睛疲惫的设计师", scene: "黄昏的窗边" },
     title: "拿什么拯救你，我那快瞎的眼睛❗️",
     subtitle: "参考首图生成同结构新主题",
     category: "清单种草",
@@ -422,6 +464,8 @@ export const xhsPromptCases: XhsPromptCase[] = [
   },
   {
     id: "660e6171000000001a010564",
+    patternId: "narrative-resonance-5",
+    suggestedPatternValues: { topic: "照顾自己的胃", subject: "独居的上班族", scene: "周日早晨的厨房" },
     title: "调理脾胃的7个小习惯，告别脾胃不适",
     subtitle: "参考首图生成同结构新主题",
     category: "清单种草",

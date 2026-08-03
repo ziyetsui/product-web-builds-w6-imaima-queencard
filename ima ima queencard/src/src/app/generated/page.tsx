@@ -65,8 +65,8 @@ import {
   type PromptReuseMode,
 } from "@/lib/image-generation-workspace";
 import { cn } from "@/lib/utils";
-
-const COMPOSER_DRAFT_VERSION = "prompt-format-v2";
+import { getPatternDisplayPrompt } from "@/features/style-recreation/pattern-registry";
+import type { PatternValues } from "@/features/style-recreation/pattern-types";
 
 type GeneratedAsset = {
   id: string;
@@ -85,6 +85,10 @@ type GeneratedTask = {
   sourceCaseId?: string | null;
   sourceCaseCategory?: string | null;
   prompt: string;
+  patternId?: string;
+  patternVersion?: number;
+  patternValues?: PatternValues;
+  displayPrompt?: string;
   referenceImages: string[];
   model: string;
   providerModel: string;
@@ -129,6 +133,34 @@ function parseJsonArray(value: string | null) {
   } catch {
     return [];
   }
+}
+
+function parsePatternValues(value: string | null): PatternValues | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const values = Object.fromEntries(
+      Object.entries(parsed).filter(([, entry]) =>
+        typeof entry === "string" || (typeof entry === "number" && Number.isFinite(entry))
+      )
+    ) as PatternValues;
+    return Object.keys(values).length > 0 ? values : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function visiblePromptFor(input: {
+  prompt?: string;
+  displayPrompt?: string;
+  patternId?: string;
+  patternValues?: PatternValues;
+}) {
+  return input.displayPrompt
+    || getPatternDisplayPrompt(input.patternId, input.patternValues)
+    || input.prompt
+    || "";
 }
 
 function parseNumber(value: string | null) {
@@ -181,6 +213,9 @@ function useGenerationPageSeed() {
         source,
         templateId: searchParams.get("template") ?? undefined,
         sourceCaseId: searchParams.get("source_case_id") ?? undefined,
+        patternId: searchParams.get("pattern_id") ?? undefined,
+        patternVersion: parseNumber(searchParams.get("pattern_version")),
+        patternValues: parsePatternValues(searchParams.get("pattern_values")),
         sourceCaseCategory: searchParams.get("source_case_category") ?? undefined,
         sourceNoteUrl: searchParams.get("source_note_url") ?? undefined,
         sourceAuthorUrl: searchParams.get("source_author_url") ?? undefined,
@@ -517,10 +552,14 @@ function composerSeedFor(task: GeneratedTask | null, seed: ImageGenerationSeed) 
       : task.referenceImages.slice(0, MAX_REFERENCE_IMAGES);
 
   return {
-    source: "regenerate",
+    source: task.patternId ? "prompt-library" : "regenerate",
+    templateId: seed.templateId,
     sourceCaseId: task.sourceCaseId ?? undefined,
+    patternId: task.patternId,
+    patternVersion: task.patternVersion,
+    patternValues: task.patternValues,
     sourceCaseCategory: task.sourceCaseCategory ?? undefined,
-    title: titleForPrompt(task.prompt),
+    title: titleForPrompt(visiblePromptFor(task)),
     prompt: task.prompt,
     referenceImages: continuationImages,
     model: task.model,
@@ -536,6 +575,9 @@ function draftFromSeed(seed: ImageGenerationSeed): ComposerDraft {
   return {
     prompt: seed.prompt ?? "",
     referenceImages: uniqueFirstThreeImages(seed.referenceImages ?? []),
+    patternId: seed.patternId,
+    patternVersion: seed.patternVersion,
+    patternValues: seed.patternValues,
     model: seed.model,
     aspectRatio: seed.aspectRatio,
     outputCount: seed.outputCount,
@@ -586,21 +628,18 @@ function GeneratedWorkbenchContent() {
   });
   const composerSeed = manualComposerSeed ?? composerSeedFor(task, seed);
   const activeComposerDraft = composerDraft ?? draftFromSeed(composerSeed);
-  const workspaceSeed = task
-    ? seed
-    : (mergeComposerDraftIntoSeed(
-        seed,
-        activeComposerDraft
-      ) as ImageGenerationSeed);
+  const syncedComposerSeed = mergeComposerDraftIntoSeed(
+    composerSeed,
+    activeComposerDraft
+  ) as ImageGenerationSeed;
+  const workspaceSeed = task ? seed : syncedComposerSeed;
   const workbenchState = stateFor({ isLoading, task, error, seed: workspaceSeed });
   const draftStorageKey = useMemo(
     () =>
       buildGeneratedDraftStorageKey({
         taskId,
         source: seed.source,
-        sourceCaseId: seed.sourceCaseId
-          ? `${seed.sourceCaseId}:${COMPOSER_DRAFT_VERSION}`
-          : COMPOSER_DRAFT_VERSION,
+        sourceCaseId: seed.sourceCaseId,
         templateId: seed.templateId,
       }),
     [seed.source, seed.sourceCaseId, seed.templateId, taskId]
@@ -775,8 +814,8 @@ function GeneratedWorkbenchContent() {
             <div className="relative mx-auto grid w-full max-w-[980px] gap-2">
               {pendingPromptQuote ? (
                 <PromptReuseChoice
-                  currentPrompt={activeComposerDraft.prompt}
-                  quotedPrompt={pendingPromptQuote.prompt}
+                  currentPrompt={visiblePromptFor(syncedComposerSeed)}
+                  quotedPrompt={visiblePromptFor(pendingPromptQuote)}
                   onChoose={(mode) => applyPromptQuote(pendingPromptQuote, mode)}
                   onCancel={() => setPendingPromptQuote(null)}
                 />
@@ -801,7 +840,7 @@ function GeneratedWorkbenchContent() {
                 />
               ) : (
                 <CollapsedComposerSummary
-                  seed={composerSeed}
+                  seed={syncedComposerSeed}
                   task={task}
                   onExpand={() => setComposerExpanded(true)}
                 />
@@ -827,7 +866,7 @@ function HistoryRail({
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
-  const title = task ? titleForPrompt(task.prompt) : seed.title ?? "图生图生成";
+  const title = task ? titleForPrompt(visiblePromptFor(task)) : seed.title ?? "图生图生成";
   const thumb = task?.assets[0]?.url ?? task?.referenceImages[0] ?? seed.referenceImages?.[0];
 
   return (
@@ -1316,7 +1355,7 @@ function SeedRecord({
             <MetaBadge icon={<Zap size={14} />} label={seed.fastMode === false ? "精细模式" : "快速模式"} />
           </div>
           <p className="mt-4 whitespace-pre-wrap font-manrope text-[16px] font-extrabold leading-8 text-charcoal">
-            {seed.prompt || "等待输入提示词"}
+            {visiblePromptFor(seed) || "等待输入提示词"}
           </p>
           {blocked ? (
               <Alert className="mt-5 rounded-[18px] border border-charcoal/18 bg-pumpkin/80 px-4 py-3 text-charcoal">
@@ -1369,7 +1408,7 @@ function GenerationRecord({
           </div>
 
           <h2 className="mt-3 truncate font-manrope text-[16px] font-black leading-snug text-charcoal md:text-[18px]">
-            {titleForPrompt(task.prompt)}
+            {titleForPrompt(visiblePromptFor(task))}
           </h2>
 
         </div>
@@ -1662,7 +1701,7 @@ function CollapsedComposerSummary({
 }) {
   const references = seed.referenceImages ?? [];
   const thumb = references[0] ?? task?.assets[0]?.url ?? task?.referenceImages[0];
-  const prompt = seed.prompt || task?.prompt || "继续输入想法，或上传参考图开始生成";
+  const prompt = visiblePromptFor(seed) || (task ? visiblePromptFor(task) : "") || "继续输入想法，或上传参考图开始生成";
 
   return (
     <button
@@ -1686,7 +1725,7 @@ function CollapsedComposerSummary({
         <p className="font-manrope text-[11px] font-black uppercase tracking-[0.14em] text-charcoal/45">
           上一步携带的参考图和提示词
         </p>
-        <p className="mt-1 line-clamp-2 font-manrope text-[14px] font-black leading-snug text-charcoal md:text-[15px]">
+        <p className="mt-1 whitespace-pre-wrap font-manrope text-[14px] font-black leading-snug text-charcoal md:text-[15px]">
           {prompt}
         </p>
       </div>

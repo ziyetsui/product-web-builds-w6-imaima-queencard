@@ -7,6 +7,7 @@ import {
   mergeQuotedPrompt,
   mergeComposerDraftIntoSeed,
   readRailCollapsedPreference,
+  restorePatternDraft,
   saveComposerDraft,
   shouldAskPromptReuseChoice,
   writeRailCollapsedPreference,
@@ -76,6 +77,42 @@ describe("generated workspace state helpers", () => {
       aiEnhance: true,
       fastMode: false,
     });
+  });
+
+  it("round-trips primitive Pattern values without changing manual drafts", () => {
+    const storage = memoryStorage();
+    saveComposerDraft(storage, "pattern", {
+      prompt: "compiled prompt",
+      referenceImages: ["one.png"],
+      patternId: "visual-metaphor-emotion-1",
+      patternVersion: 1,
+      patternValues: { topic: "创业", subject: "年轻人", pages: 4, ignored: true as never },
+    });
+    expect(loadComposerDraft(storage, "pattern")).toMatchObject({
+      patternId: "visual-metaphor-emotion-1",
+      patternVersion: 1,
+      patternValues: { topic: "创业", subject: "年轻人", pages: 4 },
+    });
+
+    const manual = { prompt: "manual", referenceImages: [] };
+    saveComposerDraft(storage, "manual", manual);
+    expect(loadComposerDraft(storage, "manual")).toEqual(manual);
+  });
+
+  it("migrates only same-key, same-type valid values when a Pattern version changes", () => {
+    const restored = restorePatternDraft(
+      {
+        id: "example",
+        version: 2,
+        variables: [
+          { key: "topic", type: "short_text", required: true, maxLength: 20 },
+          { key: "pages", type: "number", required: false, min: 3, max: 9 },
+          { key: "tone", type: "enum", required: false, options: [{ value: "温柔", label: "温柔" }] },
+        ],
+      },
+      { patternId: "example", patternVersion: 1, patternValues: { topic: "新主题", pages: "6", tone: "激烈", removed: "x" } },
+    );
+    expect(restored).toEqual({ values: { topic: "新主题" }, patternUpdated: true });
   });
 
   it("merges restored composer drafts into the workspace seed", () => {
