@@ -104,9 +104,9 @@
 
 **Red test:** prove imports preserve the union, reject duplicate conflicting ids and broken assets, calculate a stable checksum, and switch the active catalog only after a complete transaction. API tests cover `catalogVersion`, category, tags, keyword, deterministic `default/latest/hot/potential` sorts, and pagination without duplicated rows. Client validation covers version-aware caching and stale request cancellation.
 
-**Implementation contract:** normalize all current XHS/BO sources into `id,title,author,category,tags,prompt,referenceImages,previewImages,source,metrics,createdAt,updatedAt`. The index UI keeps existing style but renders server categories, correct counts, deterministic card sequences, loading/empty/error states, and infinite pagination. No checked-in asset is dropped.
+**Implementation contract:** normalize the latest Web catalog from `origin/feat/prompt-replication` plus all current mini-program records into `id,title,author,category,tags,prompt,referenceImages,previewImages,source,metrics,createdAt,updatedAt`. The verified Web source contains 2,155 BO records (332 爆款图文, 1,000 梗图, 823 公众号配图) and combines them with 122 XHS records for 2,277 records before cross-source deduplication. The index UI keeps existing style but renders server categories, correct counts, deterministic card sequences, loading/empty/error states, and infinite pagination. No checked-in asset or existing record is dropped.
 
-**Green verification:** build catalog twice and compare checksums; assert record count is at least the deduplicated union baseline; tests, validation, diff check.
+**Green verification:** build catalog twice and compare checksums; assert the generated catalog contains the complete 2,277-record Web union before any documented exact-id deduplication, validate every local asset reference, then run tests, validation, and diff check.
 
 **Commit:** `feat: add versioned template catalog`
 

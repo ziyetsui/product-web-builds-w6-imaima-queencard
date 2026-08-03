@@ -226,8 +226,10 @@ ingested. No current record is removed merely because a new source is added.
 - The mini-program caches the catalog version and refreshes only when it
   changes.
 
-The first acceptance target is at least the union of the existing 122 mini
-records and the 210 reconciled Web records after deduplication by stable id.
+The first acceptance target is the latest verified Web union: 2,155 BO records
+(332 爆款图文, 1,000 梗图, 823 公众号配图) plus the existing 122 XHS records,
+for 2,277 records before any documented exact-id deduplication. This replaces
+the earlier 122-mini-plus-210-Web minimum.
 
 ## 9. Generation and Model Registry
 
