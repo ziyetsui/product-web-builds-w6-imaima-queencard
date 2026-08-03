@@ -1,11 +1,23 @@
 # Zeabur Deployment
 
-This backend can run on Zeabur as a Docker service. Zeabur provides HTTPS for
-the generated public domain and can bind a custom domain later.
+The backend Docker service is defined under `backend`. Zeabur provides HTTPS
+for the generated public domain and can bind a custom domain later.
+
+The production entrypoint remains fail-closed until the PostgreSQL and S3
+adapters from Tasks 2 and 5 are wired. The settings below define the correct
+service and build context; they do not make the current foundation deployable.
 
 ## Required Zeabur Settings
 
-Deploy from the repository root so Zeabur can detect the root `Dockerfile`.
+Set the Zeabur service root to `backend`. Zeabur must discover
+`backend/Dockerfile` and use the `backend` directory as its Docker build
+context. The repository root has no Dockerfile.
+
+The equivalent local command, run from the repository root, is:
+
+```bash
+docker build -t ima-miniapp-backend backend
+```
 
 Expose the HTTP port Zeabur injects as `PORT`. The container already reads
 `process.env.PORT`.

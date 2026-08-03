@@ -1,6 +1,9 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const http = require("node:http");
 const { EventEmitter } = require("node:events");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
 
 const { createServer, installSignalHandlers } = require("../src/server");
@@ -51,7 +54,7 @@ function deferred() {
 }
 
 test("health returns 503 and dependency details while any runtime dependency is unready", async (t) => {
-  const runtime = createServer({
+  const runtime = await createServer({
     env: { NODE_ENV: "test", PORT: "0", MINIAPP_BACKEND_HOST: "127.0.0.1" },
     app: { fetch: () => Response.json({ success: true }) },
     dependencies: {
@@ -73,11 +76,17 @@ test("health returns 503 and dependency details while any runtime dependency is 
   assert.deepEqual(payload.data.dependencies.storage, { ready: false, driver: "local" });
 });
 
-test("fully configured production listens when its runtime adapters are injected", async (t) => {
+test("fully configured production listens when its runtime adapters are injected", async () => {
   const created = [];
-  const store = { ready: true, close() {} };
+  let storeCloseCalls = 0;
+  const store = {
+    ready: true,
+    close() {
+      storeCloseCalls += 1;
+    },
+  };
   const storage = { ready: true, close() {} };
-  const runtime = createServer({
+  const runtime = await createServer({
     env: productionEnv(),
     factories: {
       createStore() {
@@ -94,8 +103,6 @@ test("fully configured production listens when its runtime adapters are injected
     },
     logger: quietLogger(),
   });
-  t.after(() => runtime.shutdown());
-
   await runtime.listen();
   const response = await fetch(`${addressFor(runtime)}/health`);
   const payload = await response.json();
@@ -104,9 +111,11 @@ test("fully configured production listens when its runtime adapters are injected
   assert.equal(payload.success, true);
   assert.equal(payload.data.buildSha, "build-runtime-test");
   assert.deepEqual(created, ["store", "storage"]);
+  await runtime.shutdown();
+  assert.equal(storeCloseCalls, 1);
 });
 
-test("default production entrypoint fails closed until database and storage adapters land", () => {
+test("default production entrypoint fails closed until database and storage adapters land", async () => {
   const secrets = [
     "runtime-password",
     "runtime-storage-secret",
@@ -114,8 +123,8 @@ test("default production entrypoint fails closed until database and storage adap
     "runtime-wechat-secret",
   ];
 
-  assert.throws(
-    () => createServer({ env: productionEnv(), logger: quietLogger() }),
+  await assert.rejects(
+    createServer({ env: productionEnv(), logger: quietLogger() }),
     (error) => {
       assert.equal(error.code, "RUNTIME_DEPENDENCY_MISSING");
       assert.match(error.message, /database adapter/i);
@@ -126,9 +135,9 @@ test("default production entrypoint fails closed until database and storage adap
   );
 });
 
-test("production adapter initialization errors are typed and sanitized", () => {
-  assert.throws(
-    () => createServer({
+test("production adapter initialization errors are typed and sanitized", async () => {
+  await assert.rejects(
+    Promise.resolve().then(() => createServer({
       env: productionEnv({ GPTPROTO_API_KEY: "provider-api-key-secret" }),
       factories: {
         createStore() {
@@ -136,7 +145,7 @@ test("production adapter initialization errors are typed and sanitized", () => {
         },
       },
       logger: quietLogger(),
-    }),
+    })),
     (error) => {
       assert.equal(error.code, "RUNTIME_INIT_FAILED");
       assert.doesNotMatch(error.message, /runtime-password|provider-api-key-secret/);
@@ -146,9 +155,141 @@ test("production adapter initialization errors are typed and sanitized", () => {
   );
 });
 
+test("actual auto-created SQLite store closes once on direct shutdown and SIGTERM", async () => {
+  for (const mode of ["direct", "SIGTERM"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ima-runtime-shutdown-"));
+    const processRef = new EventEmitter();
+    processRef.exitCode = undefined;
+    const runtime = await createServer({
+      env: {
+        NODE_ENV: "test",
+        PORT: "0",
+        MINIAPP_BACKEND_HOST: "127.0.0.1",
+        MINIAPP_DB_PATH: path.join(root, "miniapp.sqlite"),
+      },
+      logger: quietLogger(),
+    });
+    const originalClose = runtime.dependencies.store.close.bind(runtime.dependencies.store);
+    let storeCloseCalls = 0;
+    runtime.dependencies.store.close = () => {
+      storeCloseCalls += 1;
+      return originalClose();
+    };
+    await runtime.listen();
+
+    if (mode === "direct") {
+      await runtime.shutdown(mode);
+    } else {
+      const removeHandlers = installSignalHandlers(runtime, processRef, quietLogger());
+      processRef.emit(mode, mode);
+      for (let attempt = 0; attempt < 100 && processRef.exitCode === undefined; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+      removeHandlers();
+      assert.equal(processRef.exitCode, 0);
+    }
+
+    assert.equal(storeCloseCalls, 1);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("failed construction rolls back every acquired resource in reverse order", async (t) => {
+  const scenarios = [
+    {
+      stage: "store",
+      wantCalls: ["database"],
+      wantEvents: ["start:database", "finish:database"],
+    },
+    {
+      stage: "storage",
+      wantCalls: ["store", "database"],
+      wantEvents: ["start:store", "finish:store", "start:database", "finish:database"],
+    },
+    {
+      stage: "image provider",
+      wantCalls: ["storage", "store", "database"],
+      wantEvents: [
+        "start:storage", "finish:storage",
+        "start:store", "finish:store",
+        "start:database", "finish:database",
+      ],
+    },
+    {
+      stage: "app",
+      wantCalls: ["image provider", "storage", "store", "database"],
+      wantEvents: [
+        "start:image provider", "finish:image provider",
+        "start:storage", "finish:storage",
+        "start:store", "finish:store",
+        "start:database", "finish:database",
+      ],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.stage, async () => {
+      const calls = [];
+      const events = [];
+      const resource = (name) => ({
+        async close() {
+          events.push(`start:${name}`);
+          await new Promise((resolve) => setImmediate(resolve));
+          events.push(`finish:${name}`);
+          calls.push(name);
+          if (name === scenario.wantCalls[0]) {
+            throw new Error(`${name} cleanup exposed runtime-storage-secret`);
+          }
+        },
+      });
+      const failAt = (stage) => {
+        if (scenario.stage === stage) {
+          throw new Error(`${stage} construction exposed provider-api-key-secret`);
+        }
+      };
+
+      await assert.rejects(
+        Promise.resolve().then(() => createServer({
+          env: productionEnv({ GPTPROTO_API_KEY: "provider-api-key-secret" }),
+          factories: {
+            createDatabase() {
+              return resource("database");
+            },
+            createStore() {
+              failAt("store");
+              return resource("store");
+            },
+            createStorage() {
+              failAt("storage");
+              return resource("storage");
+            },
+            createImageProvider() {
+              failAt("image provider");
+              return resource("image provider");
+            },
+            createApp() {
+              failAt("app");
+              return { fetch: () => Response.json({ success: true }) };
+            },
+          },
+          logger: quietLogger(),
+        })),
+        (error) => {
+          assert.equal(error.code, "RUNTIME_INIT_FAILED");
+          assert.doesNotMatch(error.message, /provider-api-key-secret|runtime-storage-secret/);
+          assert.match(error.message, /\[REDACTED_SECRET\]/);
+          return true;
+        },
+      );
+      assert.deepEqual(calls, scenario.wantCalls);
+      assert.deepEqual(events, scenario.wantEvents);
+    });
+  }
+});
+
 test("shutdown forces active HTTP connections closed after the configured timeout", async () => {
   const entered = deferred();
-  const runtime = createServer({
+  const runtime = await createServer({
     env: {
       NODE_ENV: "test",
       PORT: "0",
@@ -191,7 +332,7 @@ test("shutdown is idempotent and attempts every cleanup hook after failures", as
       throw new Error(`${name} failed`);
     },
   });
-  const runtime = createServer({
+  const runtime = await createServer({
     env: { NODE_ENV: "test", PORT: "0" },
     app: failing("app"),
     dependencies: {
@@ -214,10 +355,10 @@ test("shutdown is idempotent and attempts every cleanup hook after failures", as
   assert.deepEqual(calls, [
     "worker-one",
     "worker-two",
+    "app",
+    "store",
     "storage",
     "database",
-    "store",
-    "app",
   ]);
 
   const third = runtime.shutdown("third");
@@ -229,7 +370,7 @@ test("shutdown is idempotent and attempts every cleanup hook after failures", as
 test("runtime responses and logs redact configured secrets from unexpected errors", async (t) => {
   const secret = "runtime-api-v3-secret";
   const errors = [];
-  const runtime = createServer({
+  const runtime = await createServer({
     env: {
       NODE_ENV: "test",
       PORT: "0",

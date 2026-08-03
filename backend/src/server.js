@@ -46,6 +46,22 @@ async function stopResourceGroups(groups) {
   if (errors.length) throw new AggregateError(errors, "One or more runtime cleanup hooks failed");
 }
 
+function trackResource(resources, resource) {
+  for (const candidate of asResourceList(resource)) {
+    if (candidate && !resources.includes(candidate)) resources.push(candidate);
+  }
+  return resource;
+}
+
+async function rollbackResources(resources) {
+  try {
+    await stopResourceGroups([...resources].reverse());
+    return [];
+  } catch (error) {
+    return error instanceof AggregateError ? error.errors : [error];
+  }
+}
+
 function closeHttpServer(server, timeoutMs, sockets) {
   if (!server.listening) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -169,18 +185,19 @@ function createRequestHandler({ app, config, dependencies, listenOptions, logger
   };
 }
 
-function createDependencies(config, sourceEnv, options = {}) {
+async function createDependencies(config, sourceEnv, options, acquiredResources) {
   const runtimeEnv = toRuntimeEnv(config, sourceEnv);
   const provided = options.dependencies || {};
   const factories = options.factories || {};
   let database = provided.database || null;
   if (!database && typeof factories.createDatabase === "function") {
-    database = factories.createDatabase({ config: config.database, env: runtimeEnv });
+    database = await factories.createDatabase({ config: config.database, env: runtimeEnv });
   }
+  trackResource(acquiredResources, database);
 
   let store = provided.store || null;
   if (!store && typeof factories.createStore === "function") {
-    store = factories.createStore({ config: config.database, database, env: runtimeEnv });
+    store = await factories.createStore({ config: config.database, database, env: runtimeEnv });
   }
   if (!store && config.database.driver === "sqlite" && !options.app) {
     store = createSqliteStore({
@@ -188,11 +205,13 @@ function createDependencies(config, sourceEnv, options = {}) {
       initialCredits: runtimeEnv.MINIAPP_INITIAL_CREDITS || "10",
     });
   }
+  trackResource(acquiredResources, store);
 
   let storage = provided.storage || null;
   if (!storage && typeof factories.createStorage === "function") {
-    storage = factories.createStorage({ config: config.storage, env: runtimeEnv });
+    storage = await factories.createStorage({ config: config.storage, env: runtimeEnv });
   }
+  trackResource(acquiredResources, storage);
 
   const missing = [];
   if (config.database.driver !== "sqlite" && !database && !store) missing.push("database adapter");
@@ -205,7 +224,7 @@ function createDependencies(config, sourceEnv, options = {}) {
   }
   let imageProvider = provided.imageProvider || null;
   if (!imageProvider && typeof factories.createImageProvider === "function") {
-    imageProvider = factories.createImageProvider({
+    imageProvider = await factories.createImageProvider({
       config: config.generation,
       env: runtimeEnv,
       fetch: options.fetch || fetch,
@@ -217,6 +236,7 @@ function createDependencies(config, sourceEnv, options = {}) {
       fetch: options.fetch || fetch,
     });
   }
+  trackResource(acquiredResources, imageProvider);
   return {
     ...provided,
     database,
@@ -227,25 +247,43 @@ function createDependencies(config, sourceEnv, options = {}) {
   };
 }
 
-function createServer(options = {}) {
+async function createServer(options = {}) {
   const sourceEnv = options.env || process.env;
   const config = options.config || loadConfig(sourceEnv);
   const logger = loggerFor(options.logger);
   const listenOptions = getListenOptions(config);
   const sanitizeError = (error) => sanitizedErrorMessage(error, config, sourceEnv);
+  const acquiredResources = [];
   let dependencies;
   let app;
   try {
-    dependencies = createDependencies(config, sourceEnv, options);
-    app = options.app || createApp({
-      env: dependencies.runtimeEnv,
-      store: dependencies.store,
-      imageProvider: dependencies.imageProvider,
-      fetch: options.fetch,
-    });
+    dependencies = await createDependencies(config, sourceEnv, options, acquiredResources);
+    trackResource(acquiredResources, dependencies.workers);
+    trackResource(acquiredResources, dependencies.worker);
+    if (options.app) {
+      app = options.app;
+    } else if (typeof (options.factories || {}).createApp === "function") {
+      app = await options.factories.createApp({
+        config,
+        env: dependencies.runtimeEnv,
+        dependencies,
+        fetch: options.fetch || fetch,
+      });
+    } else {
+      app = createApp({
+        env: dependencies.runtimeEnv,
+        store: dependencies.store,
+        imageProvider: dependencies.imageProvider,
+        fetch: options.fetch,
+      });
+    }
   } catch (error) {
-    if (error && error.code === "RUNTIME_DEPENDENCY_MISSING") throw error;
-    const runtimeError = new Error(sanitizeError(error));
+    const cleanupErrors = await rollbackResources(acquiredResources);
+    if (error && error.code === "RUNTIME_DEPENDENCY_MISSING" && cleanupErrors.length === 0) throw error;
+    const cleanupMessage = cleanupErrors.length
+      ? `; cleanup failures: ${cleanupErrors.map(sanitizeError).join("; ")}`
+      : "";
+    const runtimeError = new Error(`${sanitizeError(error)}${cleanupMessage}`);
     runtimeError.name = "RuntimeInitializationError";
     runtimeError.code = "RUNTIME_INIT_FAILED";
     throw runtimeError;
@@ -297,10 +335,11 @@ function createServer(options = {}) {
       try {
         await stopResourceGroups([
           [dependencies.workers, dependencies.worker].flatMap(asResourceList),
+          app,
+          options.app ? dependencies.store : null,
+          dependencies.imageProvider,
           dependencies.storage,
           dependencies.database,
-          dependencies.store,
-          options.app || app,
         ]);
       } catch (error) {
         if (error instanceof AggregateError) errors.push(...error.errors);
@@ -348,17 +387,16 @@ function installSignalHandlers(runtime, processRef = process, loggerInput = cons
 }
 
 if (require.main === module) {
-  try {
-    const runtime = createServer();
-    installSignalHandlers(runtime);
-    runtime.listen().catch((error) => {
-      console.error(`Failed to start backend: ${sanitizedErrorMessage(error, runtime.config)}`);
+  (async () => {
+    try {
+      const runtime = await createServer();
+      installSignalHandlers(runtime);
+      await runtime.listen();
+    } catch (error) {
+      console.error(`Failed to start backend: ${sanitizedErrorMessage(error)}`);
       process.exitCode = 1;
-    });
-  } catch (error) {
-    console.error(`Failed to start backend: ${sanitizedErrorMessage(error)}`);
-    process.exitCode = 1;
-  }
+    }
+  })();
 }
 
 module.exports = {
