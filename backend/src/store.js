@@ -35,6 +35,63 @@ function developmentMockIdentity(environment, order, input) {
   return { expected, completed: completedMockOrder };
 }
 
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!value || typeof value !== "object") return value;
+  return Object.keys(value).sort().reduce((result, key) => {
+    result[key] = canonical(value[key]);
+    return result;
+  }, {});
+}
+
+function stableJson(value) {
+  return JSON.stringify(canonical(value));
+}
+
+function fingerprint(value) {
+  return crypto.createHash("sha256").update(stableJson(value)).digest("hex");
+}
+
+function normalizeJsonInput(value, fallback) {
+  if (value == null) return fallback;
+  if (typeof value === "object") return value;
+  return parseJson(value, fallback);
+}
+
+function orderRequest(input) {
+  return {
+    userId: input.userId,
+    idempotencyKey: input.idempotencyKey || "",
+    productId: input.productId,
+    channel: input.channel || "wechat",
+    status: input.status || "pending",
+    paymentStatus: input.paymentStatus || "created",
+    paymentMode: input.paymentMode || "manual",
+    amountCents: Number(input.amountCents || 0),
+    currency: input.currency || "CNY",
+    credits: Number(input.credits || 0),
+    productSnapshot: normalizeJsonInput(input.productSnapshot, {}),
+    metadata: normalizeJsonInput(input.metadata, {}),
+  };
+}
+
+function markOrderCreation(order, created) {
+  if (!order) return order;
+  const marked = { ...order };
+  Object.defineProperty(marked, "created", { value: created, enumerable: false });
+  return marked;
+}
+
+function orderIdempotencyConflict() {
+  const error = new Error("Order idempotency conflict");
+  error.status = 409;
+  return error;
+}
+
+function mockGrantTransactionId(orderIdValue) {
+  return `mock-grant:${orderIdValue}`;
+}
+
 function metricNumber(record, key) {
   const metrics = record.metrics || {};
   const value = Number(metrics[key] || 0);
@@ -194,10 +251,25 @@ function createMemoryStore(options = {}) {
   }
 
   function createOrder(order) {
+    const id = order.id || orderId();
+    const idempotencyKey = order.idempotencyKey || null;
+    const requestFingerprint = fingerprint(orderRequest(order));
+    const byKey = idempotencyKey
+      ? Array.from(orders.values()).find((saved) => saved.userId === order.userId && saved.idempotencyKey === idempotencyKey)
+      : null;
+    const byId = orders.get(id) || null;
+    const existing = byKey || byId;
+    if (existing) {
+      if (existing.userId === order.userId && existing.requestFingerprint === requestFingerprint) {
+        return markOrderCreation(existing, false);
+      }
+      throw orderIdempotencyConflict();
+    }
     const createdAt = order.createdAt || new Date().toISOString();
     const saved = {
-      id: order.id || orderId(),
+      id,
       userId: order.userId,
+      idempotencyKey: idempotencyKey || "",
       productId: order.productId,
       channel: order.channel || "wechat",
       status: order.status || "pending",
@@ -222,8 +294,9 @@ function createMemoryStore(options = {}) {
       canceledAt: null,
       adminNote: "",
     };
+    Object.defineProperty(saved, "requestFingerprint", { value: requestFingerprint, enumerable: false });
     orders.set(saved.id, saved);
-    return saved;
+    return markOrderCreation(saved, true);
   }
 
   function getOrder(id) {
@@ -669,40 +742,64 @@ function createSqliteStore(options = {}) {
 
   function createOrder(order) {
     const id = order.id || orderId();
-    const createdAt = order.createdAt || new Date().toISOString();
-    db.prepare(`
-      INSERT INTO orders (
-        id, user_id, product_id, channel, status, payment_status, payment_mode,
-        amount_cents, currency, credits, product_json, payment_params_json,
-        external_payment_id, credits_granted, credits_revoked, created_at,
-        updated_at, paid_at, fulfilled_at, refunded_at, canceled_at, admin_note
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      order.userId,
-      order.productId,
-      order.channel || "wechat",
-      order.status || "pending",
-      order.paymentStatus || "created",
-      order.paymentMode || "manual",
-      Number(order.amountCents || 0),
-      order.currency || "CNY",
-      Number(order.credits || 0),
-      stringify(order.productSnapshot || null),
-      stringify(order.paymentParams || null),
-      order.externalPaymentId || "",
-      0,
-      0,
-      createdAt,
-      createdAt,
-      null,
-      null,
-      null,
-      null,
-      "",
-    );
-    return getOrder(id);
+    const idempotencyKey = order.idempotencyKey || null;
+    const requestFingerprint = fingerprint(orderRequest(order));
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const byKey = idempotencyKey
+        ? db.prepare("SELECT * FROM orders WHERE user_id = ? AND idempotency_key = ?").get(order.userId, idempotencyKey)
+        : null;
+      const byId = db.prepare("SELECT * FROM orders WHERE id = ?").get(id);
+      const existing = byKey || byId;
+      if (existing) {
+        if (existing.user_id === order.userId && existing.request_fingerprint === requestFingerprint) {
+          db.exec("COMMIT");
+          return markOrderCreation(rowToOrder(existing), false);
+        }
+        throw orderIdempotencyConflict();
+      }
+
+      const createdAt = order.createdAt || new Date().toISOString();
+      db.prepare(`
+        INSERT INTO orders (
+          id, user_id, idempotency_key, request_fingerprint, product_id, channel, status, payment_status, payment_mode,
+          amount_cents, currency, credits, product_json, payment_params_json,
+          external_payment_id, credits_granted, credits_revoked, created_at,
+          updated_at, paid_at, fulfilled_at, refunded_at, canceled_at, admin_note
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        order.userId,
+        idempotencyKey,
+        requestFingerprint,
+        order.productId,
+        order.channel || "wechat",
+        order.status || "pending",
+        order.paymentStatus || "created",
+        order.paymentMode || "manual",
+        Number(order.amountCents || 0),
+        order.currency || "CNY",
+        Number(order.credits || 0),
+        stringify(order.productSnapshot || null),
+        stringify(order.paymentParams || null),
+        order.externalPaymentId || "",
+        0,
+        0,
+        createdAt,
+        createdAt,
+        null,
+        null,
+        null,
+        null,
+        "",
+      );
+      db.exec("COMMIT");
+      return markOrderCreation(getOrder(id), true);
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   function getOrder(id) {
@@ -784,15 +881,63 @@ function createSqliteStore(options = {}) {
   }
 
   function fulfillMockOrder(id, input = {}) {
-    const order = getOrder(id);
-    if (!order) return null;
-    const identity = developmentMockIdentity(environment, order, input);
-    if (identity.completed) return { order, fulfilled: false };
-    return fulfillOrder(id, {
-      paidAt: input.paidAt,
-      reason: input.reason,
-      [mockFulfillmentIdentity]: identity.expected,
-    });
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const order = getOrder(id);
+      if (!order) {
+        db.exec("COMMIT");
+        return null;
+      }
+      const identity = developmentMockIdentity(environment, order, input);
+      if (identity.completed) {
+        db.exec("COMMIT");
+        return { order, fulfilled: false };
+      }
+
+      const userRow = db.prepare("SELECT balance FROM users WHERE id = ?").get(order.userId);
+      if (!userRow) throw new Error("User not found");
+      const now = new Date().toISOString();
+      const credits = positiveInt(order.credits, 0);
+      const balanceAfter = Number(userRow.balance) + credits;
+      const userUpdate = db.prepare("UPDATE users SET balance = ?, updated_at = ? WHERE id = ?").run(balanceAfter, now, order.userId);
+      if (userUpdate.changes !== 1) throw new Error("User not found");
+      if (credits > 0) {
+        db.prepare(`
+          INSERT INTO credit_transactions (id, user_id, amount, reason, balance_after, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(mockGrantTransactionId(order.id), order.userId, credits, input.reason || `order:${order.id}`, balanceAfter, now);
+      }
+      const orderUpdate = db.prepare(`
+        UPDATE orders
+        SET status = ?, payment_status = ?, paid_at = COALESCE(paid_at, ?),
+            fulfilled_at = ?, credits_granted = ?, updated_at = ?,
+            mock_fulfillment_key = ?, mock_event_id = ?,
+            mock_provider_transaction_id = ?, external_payment_id = ?
+        WHERE id = ? AND status = 'pending' AND payment_status = 'mock_pending' AND fulfilled_at IS NULL
+      `).run(
+        "paid",
+        "fulfilled",
+        input.paidAt || now,
+        now,
+        credits,
+        now,
+        identity.expected,
+        identity.expected,
+        identity.expected,
+        identity.expected,
+        order.id,
+      );
+      if (orderUpdate.changes !== 1) {
+        const error = new Error("Development mock payment required");
+        error.status = 409;
+        throw error;
+      }
+      db.exec("COMMIT");
+      return { order: getOrder(id), fulfilled: true };
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   function cancelOrder(id, input = {}) {
@@ -1194,6 +1339,7 @@ function createSqliteStore(options = {}) {
 
 function migrate(db) {
   db.exec(`
+    PRAGMA busy_timeout = 5000;
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -1256,6 +1402,8 @@ function migrate(db) {
     CREATE TABLE IF NOT EXISTS orders (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
+      idempotency_key TEXT,
+      request_fingerprint TEXT,
       product_id TEXT NOT NULL,
       channel TEXT NOT NULL,
       status TEXT NOT NULL,
@@ -1299,6 +1447,8 @@ function migrate(db) {
   ensureColumn(db, "generation_tasks", "aspect_ratio", "TEXT");
   ensureColumn(db, "generation_tasks", "resolution", "TEXT");
   ensureColumn(db, "orders", "payment_mode", "TEXT");
+  ensureColumn(db, "orders", "idempotency_key", "TEXT");
+  ensureColumn(db, "orders", "request_fingerprint", "TEXT");
   ensureColumn(db, "orders", "payment_params_json", "TEXT");
   ensureColumn(db, "orders", "external_payment_id", "TEXT");
   ensureColumn(db, "orders", "mock_fulfillment_key", "TEXT");
@@ -1311,6 +1461,7 @@ function migrate(db) {
   ensureColumn(db, "orders", "refunded_at", "TEXT");
   ensureColumn(db, "orders", "canceled_at", "TEXT");
   ensureColumn(db, "orders", "admin_note", "TEXT");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS orders_user_idempotency_key_unique ON orders (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL");
 }
 
 function ensureColumn(db, table, column, definition) {
@@ -1453,6 +1604,7 @@ function rowToOrder(row) {
   return {
     id: row.id,
     userId: row.user_id,
+    idempotencyKey: row.idempotency_key || "",
     productId: row.product_id,
     channel: row.channel,
     status: row.status,

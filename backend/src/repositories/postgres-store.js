@@ -1162,8 +1162,28 @@ function createPostgresStore(options = {}) {
       throw err("Verified WeChat payment required", 409);
     }
     if (verificationMode === "mock") {
+      const expected = `mock:${orderId}`;
       const imported = Boolean(order.metadata.legacyId) || order.metadata.paymentVerification === "not-verified";
-      if (["production", "prod"].includes(environment) || order.paymentMode !== "mock" || input.provider !== "mock" || input.paymentMode !== "mock" || imported) {
+      const pendingMockOrder = order.paymentMode === "mock"
+        && order.status === "pending"
+        && order.paymentStatus === "mock_pending"
+        && !order.fulfilledAt
+        && !order.paymentVerified;
+      const completedMockOrder = order.paymentMode === "mock"
+        && order.status === "paid"
+        && order.paymentStatus === "fulfilled"
+        && Boolean(order.fulfilledAt)
+        && order.paymentVerified;
+      const deterministicIdentity = input.fulfillmentKey === expected
+        && input.eventId === expected
+        && input.providerTransactionId === expected;
+      if (["production", "prod"].includes(environment)
+        || order.paymentMode !== "mock"
+        || input.provider !== "mock"
+        || input.paymentMode !== "mock"
+        || imported
+        || !deterministicIdentity
+        || (!pendingMockOrder && !completedMockOrder)) {
         throw err("Development mock payment required", 409);
       }
     }
@@ -1235,14 +1255,15 @@ function createPostgresStore(options = {}) {
   }
 
   async function fulfillMockOrder(orderId, input = {}) {
+    const expected = `mock:${orderId}`;
     if (["production", "prod"].includes(environment)
       || input.provider !== "mock"
       || input.paymentMode !== "mock"
       || input.paymentVerified !== true
       || input.status !== "FULFILLED"
-      || !input.fulfillmentKey
-      || !input.eventId
-      || !input.providerTransactionId) {
+      || input.fulfillmentKey !== expected
+      || input.eventId !== expected
+      || input.providerTransactionId !== expected) {
       throw err("Development mock payment required", 409);
     }
     const fulfilled = await fulfillPaymentEvent({ ...input, orderId }, "mock");

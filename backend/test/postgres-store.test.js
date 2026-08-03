@@ -647,13 +647,14 @@ test("provider transaction or event replay cannot fulfill a different order", as
 test("development mock fulfillment is explicit, idempotent, and rejects production or unsafe orders", async () => {
   const { pool, store } = await setup({ environment: "development" });
   const user = await store.ensureUser({ sub: "mock-payment-user", appid: "wx-mock-payment", openid: "mock-payment-openid" });
-  const mockOrder = await store.createOrder({ id: "mock-safe-order", userId: user.id, productId: "credits-5", paymentMode: "mock", amountCents: 500, credits: 5 });
+  const mockOrder = await store.createOrder({ id: "mock-safe-order", userId: user.id, productId: "credits-5", status: "pending", paymentStatus: "mock_pending", paymentMode: "mock", amountCents: 500, credits: 5 });
+  const mockIdentity = `mock:${mockOrder.id}`;
   const input = {
-    fulfillmentKey: "mock-safe-order",
+    fulfillmentKey: mockIdentity,
     provider: "mock",
     paymentMode: "mock",
-    eventId: "mock-safe-event",
-    providerTransactionId: "mock-safe-transaction",
+    eventId: mockIdentity,
+    providerTransactionId: mockIdentity,
     status: "FULFILLED",
     paymentVerified: true,
   };
@@ -673,6 +674,68 @@ test("development mock fulfillment is explicit, idempotent, and rejects producti
   const productionStore = createPostgresStore({ pool, environment: "production" });
   await assert.rejects(productionStore.fulfillMockOrder(mockOrder.id, input), /development mock payment required/i);
   await assert.rejects(store.fulfillPayment({ orderId: mockOrder.id, ...input }), /verified wechat payment required/i);
+  assert.equal((await store.getUser(user.id)).balance, 15);
+  await pool.end();
+});
+
+test("PostgreSQL mock fulfillment requires the exact order tuple and persisted pending state", async () => {
+  const { pool, store } = await setup({ environment: "development" });
+  const user = await store.ensureUser({ sub: "mock-boundary-user", appid: "wx-mock-boundary", openid: "mock-boundary-openid" });
+  const pending = await store.createOrder({ id: "mock-boundary-pending", userId: user.id, productId: "credits-5", status: "pending", paymentStatus: "mock_pending", paymentMode: "mock", amountCents: 500, credits: 5 });
+  const identity = `mock:${pending.id}`;
+
+  await assert.rejects(
+    store.fulfillMockOrder(pending.id, {
+      fulfillmentKey: "arbitrary-key",
+      provider: "mock",
+      paymentMode: "mock",
+      eventId: "arbitrary-event",
+      providerTransactionId: "arbitrary-transaction",
+      status: "FULFILLED",
+      paymentVerified: true,
+    }),
+    (error) => error.status === 409 && /development mock payment required/i.test(error.message),
+  );
+
+  const first = await store.fulfillMockOrder(pending.id, {
+    fulfillmentKey: identity,
+    provider: "mock",
+    paymentMode: "mock",
+    eventId: identity,
+    providerTransactionId: identity,
+    status: "FULFILLED",
+    paymentVerified: true,
+  });
+  const replay = await store.fulfillMockOrder(pending.id, {
+    fulfillmentKey: identity,
+    provider: "mock",
+    paymentMode: "mock",
+    eventId: identity,
+    providerTransactionId: identity,
+    status: "FULFILLED",
+    paymentVerified: true,
+  });
+  assert.equal(first.fulfilled, true);
+  assert.equal(replay.fulfilled, false);
+  assert.equal((await store.getUser(user.id)).balance, 15);
+
+  const completedMismatch = { fulfillmentKey: identity, provider: "mock", paymentMode: "mock", eventId: identity, providerTransactionId: "mock:other", status: "FULFILLED", paymentVerified: true };
+  await assert.rejects(store.fulfillMockOrder(pending.id, completedMismatch), (error) => error.status === 409);
+
+  const inconsistent = await store.createOrder({ id: "mock-boundary-inconsistent", userId: user.id, productId: "credits-5", status: "paid", paymentStatus: "fulfilled", paymentMode: "mock", amountCents: 500, credits: 5 });
+  const inconsistentIdentity = `mock:${inconsistent.id}`;
+  await assert.rejects(
+    store.fulfillMockOrder(inconsistent.id, {
+      fulfillmentKey: inconsistentIdentity,
+      provider: "mock",
+      paymentMode: "mock",
+      eventId: inconsistentIdentity,
+      providerTransactionId: inconsistentIdentity,
+      status: "FULFILLED",
+      paymentVerified: true,
+    }),
+    (error) => error.status === 409 && /development mock payment required/i.test(error.message),
+  );
   assert.equal((await store.getUser(user.id)).balance, 15);
   await pool.end();
 });

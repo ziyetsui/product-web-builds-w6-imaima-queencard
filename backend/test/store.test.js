@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -64,6 +65,54 @@ function completeMockIdentity(orderId) {
 }
 
 for (const adapter of mockAdapters) {
+  test(`${adapter.name} order creation replays by owner and immutable request fingerprint`, () => {
+    const store = adapter.create({ environment: "test", initialCredits: 10 });
+    try {
+      const owner = store.ensureUser({ sub: `${adapter.name}-order-owner`, appid: "wx-order-replay", openid: `${adapter.name}-owner` });
+      const otherOwner = store.ensureUser({ sub: `${adapter.name}-order-other`, appid: "wx-order-replay", openid: `${adapter.name}-other` });
+      const request = {
+        id: `${adapter.name}-order-first`,
+        userId: owner.id,
+        idempotencyKey: `${adapter.name}-order-key`,
+        productId: "credits-5",
+        channel: "wechat",
+        status: "pending",
+        paymentStatus: "mock_pending",
+        paymentMode: "mock",
+        amountCents: 500,
+        currency: "CNY",
+        credits: 5,
+        productSnapshot: { id: "credits-5", amountCents: 500, credits: 5 },
+        metadata: { source: "adapter-replay-test" },
+      };
+
+      const first = store.createOrder(request);
+      const replay = store.createOrder({
+        ...request,
+        id: `${adapter.name}-order-retry`,
+        productSnapshot: { credits: 5, amountCents: 500, id: "credits-5" },
+      });
+
+      assert.equal(first.created, true);
+      assert.equal(replay.created, false);
+      assert.equal(replay.id, first.id);
+      assert.equal(Object.keys(first).includes("created"), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(JSON.parse(JSON.stringify(replay)), "created"), false);
+      assert.equal(store.listOrders(owner.id).pagination.total, 1);
+      assert.throws(
+        () => store.createOrder({ ...request, id: `${adapter.name}-order-mismatch`, amountCents: 600 }),
+        (error) => error.status === 409 && error.message === "Order idempotency conflict",
+      );
+      assert.throws(
+        () => store.createOrder({ ...request, id: first.id, userId: otherOwner.id, idempotencyKey: `${adapter.name}-other-key` }),
+        (error) => error.status === 409 && error.message === "Order idempotency conflict",
+      );
+      assert.equal(store.listOrders(otherOwner.id).pagination.total, 0);
+    } finally {
+      store.close();
+    }
+  });
+
   test(`${adapter.name} mock fulfillment is intrinsically disabled in production`, () => {
     const store = adapter.create({ environment: "production", initialCredits: 10 });
     try {
@@ -126,6 +175,128 @@ for (const adapter of mockAdapters) {
     }
   });
 }
+
+function startSqliteMockWorker(dbPath, orderId) {
+  const modulePath = require.resolve("../src/store");
+  const script = `
+    const { createSqliteStore } = require(${JSON.stringify(modulePath)});
+    process.stdout.write("ready\\n");
+    process.stdin.once("data", () => {
+      let store;
+      try {
+        store = createSqliteStore({ dbPath: process.argv[1], environment: "test" });
+        const identity = "mock:" + process.argv[2];
+        const result = store.fulfillMockOrder(process.argv[2], {
+          fulfillmentKey: identity,
+          provider: "mock",
+          paymentMode: "mock",
+          eventId: identity,
+          providerTransactionId: identity,
+          status: "FULFILLED",
+          paymentVerified: true,
+        });
+        process.stdout.write(JSON.stringify({ fulfilled: result.fulfilled }) + "\\n");
+      } catch (error) {
+        process.stdout.write(JSON.stringify({ error: error.message, status: error.status || 500 }) + "\\n");
+        process.exitCode = 1;
+      } finally {
+        if (store) store.close();
+      }
+    });
+  `;
+  const child = spawn(process.execPath, ["-e", script, dbPath, orderId], {
+    cwd: path.resolve(__dirname, ".."),
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let buffer = "";
+  let readyResolve;
+  let resultResolve;
+  let resultReject;
+  const ready = new Promise((resolve) => { readyResolve = resolve; });
+  const result = new Promise((resolve, reject) => {
+    resultResolve = resolve;
+    resultReject = reject;
+  });
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk.toString();
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines.filter(Boolean)) {
+      if (line === "ready") readyResolve();
+      else {
+        const parsed = JSON.parse(line);
+        if (parsed.error) resultReject(new Error(`${parsed.error} (${parsed.status})`));
+        else resultResolve(parsed);
+      }
+    }
+  });
+  let errorOutput = "";
+  child.stderr.on("data", (chunk) => {
+    errorOutput += chunk.toString();
+  });
+  child.on("error", resultReject);
+  child.on("close", (code) => {
+    if (code !== 0) resultReject(new Error(`SQLite worker exited with ${code}: ${errorOutput}`));
+  });
+  return { child, ready, result };
+}
+
+test("sqlite mock fulfillment is exactly once across two processes", async () => {
+  const dbPath = tempDbPath();
+  const setupStore = createSqliteStore({ dbPath, environment: "test", initialCredits: 10 });
+  const { order, user } = createMockOrder(setupStore, "two-process");
+  setupStore.close();
+
+  const workers = [
+    startSqliteMockWorker(dbPath, order.id),
+    startSqliteMockWorker(dbPath, order.id),
+  ];
+  await Promise.all(workers.map((worker) => worker.ready));
+  workers.forEach((worker) => worker.child.stdin.end("go\n"));
+  const results = await Promise.all(workers.map((worker) => worker.result));
+
+  const reopened = createSqliteStore({ dbPath, environment: "test", initialCredits: 10 });
+  try {
+    assert.deepEqual(results.map((result) => result.fulfilled).sort(), [false, true]);
+    assert.equal(reopened.getUser(user.id).balance, 15);
+    assert.equal(reopened.listCreditTransactions(user.id).records.filter((record) => record.amount === 5).length, 1);
+    assert.equal(reopened.getOrder(order.id).mockFulfillmentKey, `mock:${order.id}`);
+  } finally {
+    reopened.close();
+  }
+});
+
+test("sqlite order identity survives a store reopen", () => {
+  const dbPath = tempDbPath();
+  const firstStore = createSqliteStore({ dbPath, environment: "test", initialCredits: 10 });
+  const user = firstStore.ensureUser({ sub: "sqlite-reopen-order-user", appid: "wx-reopen", openid: "sqlite-reopen" });
+  const request = {
+    id: "sqlite-reopen-order",
+    userId: user.id,
+    idempotencyKey: "sqlite-reopen-key",
+    productId: "credits-5",
+    amountCents: 500,
+    credits: 5,
+    productSnapshot: { id: "credits-5", amountCents: 500 },
+    metadata: { source: "reopen-test" },
+  };
+  const first = firstStore.createOrder(request);
+  firstStore.close();
+
+  const reopened = createSqliteStore({ dbPath, environment: "test", initialCredits: 10 });
+  try {
+    const replay = reopened.createOrder({
+      ...request,
+      id: "sqlite-reopen-order-retry",
+      productSnapshot: { amountCents: 500, id: "credits-5" },
+    });
+    assert.equal(replay.created, false);
+    assert.equal(replay.id, first.id);
+    assert.equal(reopened.listOrders(user.id).pagination.total, 1);
+  } finally {
+    reopened.close();
+  }
+});
 
 test("sqlite store persists users, credit charges, and generation tasks", () => {
   const dbPath = tempDbPath();

@@ -6,7 +6,7 @@ const test = require("node:test");
 
 const { createApp } = require("../src/app");
 const { createMiniappToken } = require("../src/auth");
-const { createMemoryStore } = require("../src/store");
+const { createMemoryStore, createSqliteStore } = require("../src/store");
 
 async function readJson(response) {
   return response.json();
@@ -116,6 +116,48 @@ test("production payment provider blocks legacy mock-pay without granting credit
   assert.equal(store.getUser("wechat:wx-production:payment-user").balance, 10);
   app.close();
 });
+
+for (const adapter of ["memory", "sqlite"]) {
+  test(`${adapter} HTTP order retry returns 200 and writes one create audit`, async () => {
+    const store = adapter === "memory"
+      ? createMemoryStore({ environment: "test", initialCredits: 10 })
+      : createSqliteStore({ environment: "test", initialCredits: 10, dbPath: tempDbPath() });
+    const app = createApp({
+      env: {
+        NODE_ENV: "test",
+        MINIAPP_DEV_LOGIN: "1",
+        MINIAPP_PAYMENT_MODE: "mock",
+        WECHAT_MINIAPP_APP_ID: "wx-order-http",
+        MINIAPP_AUTH_TOKEN_SECRET: "order-http-test-secret",
+      },
+      store,
+    });
+    try {
+      const authorization = await login(app);
+      async function createOrder(payload) {
+        const response = await app.fetch(new Request("http://local/api/miniapp/orders", {
+          method: "POST",
+          headers: { authorization, "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        }));
+        return { response, payload: await readJson(response) };
+      }
+
+      const first = await createOrder({ orderId: `${adapter}-http-retry`, productId: "credits_20" });
+      const replay = await createOrder({ orderId: `${adapter}-http-retry`, productId: "credits_20" });
+      const mismatch = await createOrder({ orderId: `${adapter}-http-retry`, productId: "credits_60" });
+
+      assert.equal(first.response.status, 201);
+      assert.equal(replay.response.status, 200);
+      assert.equal(replay.payload.data.order.id, first.payload.data.order.id);
+      assert.equal(mismatch.response.status, 409);
+      const audit = await store.listPaymentAudit(new URLSearchParams({ orderId: first.payload.data.order.id, type: "create" }));
+      assert.equal(audit.pagination.total, 1);
+    } finally {
+      app.close();
+    }
+  });
+}
 
 test("supports standalone login, balance, templates, generation task and result", async () => {
   const app = createApp({
