@@ -670,10 +670,19 @@ function createApp(options = {}) {
         const { user } = await getCurrentUser(request, env, store);
         const order = await store.getOrder(decodeURIComponent(mockPayMatch[1]));
         if (!order || order.userId !== user.id) return json({ success: false, error: "Order not found" }, 404);
-        if (paymentMode(env) !== "mock") {
+        const production = ["production", "prod"].includes(String(getEnv(env, "NODE_ENV")).toLowerCase());
+        if (production || paymentMode(env) !== "mock" || order.paymentMode !== "mock") {
           return json({ success: false, error: "Mock payment is disabled" }, 403);
         }
-        const result = await store.fulfillOrder(order.id, {
+        const mockIdentity = `mock:${order.id}`;
+        const result = await store.fulfillMockOrder(order.id, {
+          fulfillmentKey: mockIdentity,
+          provider: "mock",
+          paymentMode: "mock",
+          eventId: mockIdentity,
+          providerTransactionId: mockIdentity,
+          status: "FULFILLED",
+          paymentVerified: true,
           paidAt: new Date().toISOString(),
           reason: `order:${order.id}`,
         });

@@ -26,6 +26,7 @@ test("real PostgreSQL migration, trigger, binding, accounting, and concurrency",
     });
     const migrations = await migrateDatabase({ pool: testPool });
     assert.equal(migrations.some((entry) => entry.version === 1 && entry.applied), true);
+    assert.equal(migrations.some((entry) => entry.version === 2 && entry.applied), true);
 
     const storeA = createPostgresStore({ pool: testPool, initialCredits: 10 });
     const storeB = createPostgresStore({ pool: testPool, initialCredits: 10 });
@@ -63,6 +64,32 @@ test("real PostgreSQL migration, trigger, binding, accounting, and concurrency",
     ]);
     assert.equal(charges.filter((entry) => entry.status === "fulfilled").length, 1);
     assert.equal(charges.filter((entry) => entry.status === "rejected").length, 1);
+
+    const rollbackUser = await storeA.ensureUser({ sub: "real-rollback-user", appid: "wx-real-pg", openid: "real-rollback-openid" });
+    await assert.rejects(storeA.createCreditHold({
+      id: "real-rollback-hold",
+      userId: rollbackUser.id,
+      taskId: "real-rollback-task",
+      idempotencyKey: "real-rollback-key",
+      credits: 1,
+      packageAllocation: [{ packageId: "missing-real-package", credits: 1 }],
+    }), /insufficient credits/i);
+    assert.equal((await storeA.getUser(rollbackUser.id)).balance, 10);
+    assert.equal((await testPool.query("SELECT COUNT(*)::int AS count FROM credit_holds WHERE idempotency_key = $1", ["real-rollback-key"])).rows[0].count, 0);
+
+    const paymentUserA = await storeA.ensureUser({ sub: "real-payment-user-a", appid: "wx-real-pg", openid: "real-payment-openid-a" });
+    const paymentUserB = await storeB.ensureUser({ sub: "real-payment-user-b", appid: "wx-real-pg", openid: "real-payment-openid-b" });
+    const paymentOrderA = await storeA.createOrder({ id: "real-payment-order-a", userId: paymentUserA.id, productId: "credits-5", paymentMode: "wechat", amountCents: 500, credits: 5 });
+    const paymentOrderB = await storeB.createOrder({ id: "real-payment-order-b", userId: paymentUserB.id, productId: "credits-5", paymentMode: "wechat", amountCents: 500, credits: 5 });
+    const paymentIdentity = { provider: "wechat", eventId: "real-payment-event", providerTransactionId: "real-provider-transaction", status: "FULFILLED", paymentVerified: true };
+    const originalFulfillment = await storeA.fulfillPayment({ ...paymentIdentity, fulfillmentKey: "real-payment-key-a", orderId: paymentOrderA.id });
+    const replayFulfillment = await storeB.fulfillPayment({ ...paymentIdentity, fulfillmentKey: "real-payment-key-b", orderId: paymentOrderA.id });
+    assert.equal(replayFulfillment.id, originalFulfillment.id);
+    await assert.rejects(
+      storeB.fulfillPayment({ ...paymentIdentity, fulfillmentKey: "real-payment-key-c", eventId: "real-payment-event-c", orderId: paymentOrderB.id }),
+      (error) => error.status === 409,
+    );
+    assert.equal((await storeB.getUser(paymentUserB.id)).balance, 10);
 
     const state = await testPool.query(`
       SELECT u.balance, COALESCE(SUM(p.remaining_credits), 0)::int AS available,

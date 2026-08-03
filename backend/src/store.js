@@ -236,6 +236,17 @@ function createMemoryStore(options = {}) {
     return { order, fulfilled: true };
   }
 
+  function fulfillMockOrder(id, input = {}) {
+    const order = getOrder(id);
+    if (!order) return null;
+    if (order.paymentMode !== "mock" || input.provider !== "mock" || input.paymentMode !== "mock" || input.paymentVerified !== true) {
+      const error = new Error("Development mock payment required");
+      error.status = 409;
+      throw error;
+    }
+    return fulfillOrder(id, input);
+  }
+
   function cancelOrder(id, input = {}) {
     const order = orders.get(id);
     if (!order) return null;
@@ -434,6 +445,7 @@ function createMemoryStore(options = {}) {
     listOrders,
     listAllOrders,
     fulfillOrder,
+    fulfillMockOrder,
     cancelOrder,
     refundOrder,
     recordPaymentEvent,
@@ -708,6 +720,17 @@ function createSqliteStore(options = {}) {
       throw error;
     }
     return { order: getOrder(id), fulfilled: true };
+  }
+
+  function fulfillMockOrder(id, input = {}) {
+    const order = getOrder(id);
+    if (!order) return null;
+    if (order.paymentMode !== "mock" || input.provider !== "mock" || input.paymentMode !== "mock" || input.paymentVerified !== true) {
+      const error = new Error("Development mock payment required");
+      error.status = 409;
+      throw error;
+    }
+    return fulfillOrder(id, input);
   }
 
   function cancelOrder(id, input = {}) {
@@ -1089,6 +1112,7 @@ function createSqliteStore(options = {}) {
     listOrders,
     listAllOrders,
     fulfillOrder,
+    fulfillMockOrder,
     cancelOrder,
     refundOrder,
     recordPaymentEvent,

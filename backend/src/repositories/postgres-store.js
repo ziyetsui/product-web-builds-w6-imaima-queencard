@@ -30,6 +30,62 @@ function iso(value) {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (!value || typeof value !== "object") return value;
+  return Object.keys(value).sort().reduce((result, key) => {
+    result[key] = canonical(value[key]);
+    return result;
+  }, {});
+}
+
+function stableJson(value) {
+  return JSON.stringify(canonical(value));
+}
+
+function fingerprint(value) {
+  return crypto.createHash("sha256").update(stableJson(value)).digest("hex");
+}
+
+function packageRequest(input) {
+  const initialCredits = Number(input.initialCredits || 0);
+  return {
+    userId: input.userId,
+    initialCredits,
+    remainingCredits: input.remainingCredits == null ? initialCredits : Number(input.remainingCredits),
+    frozenCredits: Number(input.frozenCredits || 0),
+    transType: input.transType || "SYSTEM_ADJUST",
+    orderNo: input.orderNo || "",
+    status: input.status || "ACTIVE",
+    expiredAt: iso(input.expiredAt),
+    metadata: parseJson(input.metadata, {}),
+  };
+}
+
+function packageMatchesRequest(row, expected, requestFingerprint) {
+  return row.user_id === expected.userId && row.request_fingerprint === requestFingerprint;
+}
+
+function holdRequest(input) {
+  return {
+    userId: input.userId,
+    taskId: input.taskId || "",
+    idempotencyKey: input.idempotencyKey,
+    credits: Number(input.credits),
+    packageAllocation: Array.isArray(input.packageAllocation)
+      ? input.packageAllocation.map((allocation) => ({ packageId: allocation.packageId, credits: Number(allocation.credits) }))
+      : [],
+  };
+}
+
+function holdMatchesRequest(row, expected, requestFingerprint) {
+  return row.user_id === expected.userId
+    && (row.task_id || "") === expected.taskId
+    && row.idempotency_key === expected.idempotencyKey
+    && Number(row.credits) === expected.credits
+    && row.request_fingerprint === requestFingerprint;
+}
+
 function positiveInt(value, fallback = 1) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -364,6 +420,7 @@ function createPostgresStore(options = {}) {
   if (!pool || typeof pool.query !== "function") throw new TypeError("createPostgresStore requires a PostgreSQL pool");
   const clock = options.clock || (() => new Date());
   const initialCredits = Number(options.initialCredits || 10);
+  const environment = String(options.environment || process.env.NODE_ENV || "development").toLowerCase();
   const inFlight = new Map();
 
   function singleFlight(key, operation) {
@@ -530,26 +587,33 @@ function createPostgresStore(options = {}) {
 
   async function createCreditPackageOnce(input) {
     const createdAt = timestamp(clock);
-    const initial = Number(input.initialCredits || 0);
-    const remaining = input.remainingCredits == null ? initial : Number(input.remainingCredits);
-    const frozen = Number(input.frozenCredits || 0);
+    const expected = packageRequest(input);
+    const requestFingerprint = fingerprint(expected);
+    const initial = expected.initialCredits;
+    const remaining = expected.remainingCredits;
+    const frozen = expected.frozenCredits;
     const packageId = input.id || id("package");
     if (remaining < 0 || frozen < 0 || remaining + frozen > initial) throw err("Invalid credit package allocation", 400);
     const result = await withTransaction(pool, async (client) => {
       const replay = await client.query("SELECT * FROM credit_packages WHERE id = $1", [packageId]);
-      if (replay.rowCount) return replay.rows[0];
+      if (replay.rowCount) {
+        if (!packageMatchesRequest(replay.rows[0], expected, requestFingerprint)) throw err("Credit package idempotency conflict", 409);
+        return replay.rows[0];
+      }
       const inserted = await client.query(`
-        INSERT INTO credit_packages (id, user_id, initial_credits, remaining_credits, frozen_credits, trans_type, order_no, status, expired_at, metadata, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+        INSERT INTO credit_packages (id, user_id, initial_credits, remaining_credits, frozen_credits, trans_type, order_no, status, expired_at, metadata, request_fingerprint, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
         ON CONFLICT (id) DO NOTHING
         RETURNING *
-      `, [packageId, input.userId, initial, remaining, frozen, input.transType || "SYSTEM_ADJUST", input.orderNo || null, input.status || "ACTIVE", input.expiredAt || null, JSON.stringify(json(input.metadata)), createdAt]);
+      `, [packageId, expected.userId, initial, remaining, frozen, expected.transType, expected.orderNo || null, expected.status, expected.expiredAt, JSON.stringify(expected.metadata), requestFingerprint, createdAt]);
       if (!inserted.rowCount) {
         const existing = await client.query("SELECT * FROM credit_packages WHERE id = $1", [packageId]);
+        if (!existing.rowCount || !packageMatchesRequest(existing.rows[0], expected, requestFingerprint)) throw err("Credit package idempotency conflict", 409);
         return existing.rows[0];
       }
+      if (!packageMatchesRequest(inserted.rows[0], expected, requestFingerprint)) throw err("Credit package idempotency conflict", 409);
       if (Number(remaining) > 0) {
-        await changeUserBalance(client, input.userId, remaining, createdAt);
+        await changeUserBalance(client, expected.userId, remaining, createdAt);
       }
       return inserted.rows[0];
     });
@@ -557,7 +621,8 @@ function createPostgresStore(options = {}) {
   }
 
   function createCreditPackage(input) {
-    return singleFlight(input.id ? `package:${input.id}` : null, () => createCreditPackageOnce(input));
+    const expected = packageRequest(input);
+    return singleFlight(input.id ? `package:${expected.userId}:${input.id}:${fingerprint(expected)}` : null, () => createCreditPackageOnce(input));
   }
 
   async function listCreditPackages(userId, options = new URLSearchParams()) {
@@ -574,36 +639,46 @@ function createPostgresStore(options = {}) {
 
   async function createCreditHoldOnce(input) {
     const createdAt = timestamp(clock);
+    const expected = holdRequest(input);
+    const requestFingerprint = fingerprint(expected);
+    const holdId = input.id || id("hold");
     return withTransaction(pool, async (client) => {
+      const replay = await client.query("SELECT * FROM credit_holds WHERE idempotency_key = $1", [expected.idempotencyKey]);
+      if (replay.rowCount) {
+        if (!holdMatchesRequest(replay.rows[0], expected, requestFingerprint)) throw err("Credit hold idempotency conflict", 409);
+        return rowToHold(replay.rows[0]);
+      }
       const inserted = await client.query(`
-        INSERT INTO credit_holds (id, user_id, task_id, idempotency_key, credits, package_allocation, created_at)
-        VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, $6)
+        INSERT INTO credit_holds (id, user_id, task_id, idempotency_key, credits, package_allocation, request_fingerprint, created_at)
+        VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, $6, $7)
         ON CONFLICT (idempotency_key) DO NOTHING RETURNING *
-      `, [input.id || id("hold"), input.userId, input.taskId || null, input.idempotencyKey, Number(input.credits), createdAt]);
+      `, [holdId, expected.userId, expected.taskId || null, expected.idempotencyKey, expected.credits, requestFingerprint, createdAt]);
       if (!inserted.rowCount) {
-        const existing = await client.query("SELECT * FROM credit_holds WHERE idempotency_key = $1", [input.idempotencyKey]);
+        const existing = await client.query("SELECT * FROM credit_holds WHERE idempotency_key = $1", [expected.idempotencyKey]);
+        if (!existing.rowCount || !holdMatchesRequest(existing.rows[0], expected, requestFingerprint)) throw err("Credit hold idempotency conflict", 409);
         return rowToHold(existing.rows[0]);
       }
-      await changeUserBalance(client, input.userId, -Number(input.credits), createdAt);
-      const allocations = Array.isArray(input.packageAllocation) ? input.packageAllocation : [];
-      let remainingToAllocate = Number(input.credits);
+      if (!holdMatchesRequest(inserted.rows[0], expected, requestFingerprint)) throw err("Credit hold idempotency conflict", 409);
+      await changeUserBalance(client, expected.userId, -expected.credits, createdAt);
+      const allocations = expected.packageAllocation;
+      let remainingToAllocate = expected.credits;
       const selected = allocations.length ? allocations : (await client.query(`
         SELECT id, remaining_credits FROM credit_packages
         WHERE user_id = $1 AND status = 'ACTIVE' AND (expired_at IS NULL OR expired_at > $2) AND remaining_credits > 0
         ORDER BY expired_at NULLS LAST, created_at ASC, id ASC FOR UPDATE
-      `, [input.userId, createdAt])).rows.map((row) => ({ packageId: row.id, credits: Math.min(Number(row.remaining_credits), remainingToAllocate) }));
+      `, [expected.userId, createdAt])).rows.map((row) => ({ packageId: row.id, credits: Math.min(Number(row.remaining_credits), remainingToAllocate) }));
       const normalized = [];
       for (const allocation of selected) {
         const amount = Math.min(Number(allocation.credits), remainingToAllocate);
         if (amount <= 0) continue;
-        const locked = await client.query("SELECT remaining_credits, frozen_credits FROM credit_packages WHERE id = $1 AND user_id = $2 FOR UPDATE", [allocation.packageId, input.userId]);
+        const locked = await client.query("SELECT remaining_credits, frozen_credits FROM credit_packages WHERE id = $1 AND user_id = $2 FOR UPDATE", [allocation.packageId, expected.userId]);
         if (!locked.rowCount || Number(locked.rows[0].remaining_credits) < amount) throw err("Insufficient credits", 402);
         const nextRemaining = Number(locked.rows[0].remaining_credits) - amount;
         const nextFrozen = Number(locked.rows[0].frozen_credits) + amount;
         const updated = await client.query(`
           UPDATE credit_packages SET remaining_credits = $1, frozen_credits = $2, status = 'ACTIVE', updated_at = $3
           WHERE id = $4 AND user_id = $5 AND remaining_credits >= $6 RETURNING id
-        `, [nextRemaining, nextFrozen, createdAt, allocation.packageId, input.userId, amount]);
+        `, [nextRemaining, nextFrozen, createdAt, allocation.packageId, expected.userId, amount]);
         if (!updated.rowCount) throw err("Insufficient credits", 402);
         normalized.push({ packageId: allocation.packageId, credits: amount });
         remainingToAllocate -= amount;
@@ -618,7 +693,8 @@ function createPostgresStore(options = {}) {
   }
 
   function createCreditHold(input) {
-    return singleFlight(`hold:${input.idempotencyKey}`, () => createCreditHoldOnce(input));
+    const expected = holdRequest(input);
+    return singleFlight(`hold:${expected.userId}:${expected.idempotencyKey}:${fingerprint(expected)}`, () => createCreditHoldOnce(input));
   }
 
   async function getCreditHold(holdId) {
@@ -1018,13 +1094,58 @@ function createPostgresStore(options = {}) {
     return queryOrders(filters.length ? `WHERE ${filters.join(" AND ")}` : "", values, options);
   }
 
-  async function fulfillVerifiedOrder(client, orderId, input) {
+  async function findPaymentIdentity(client, input, lock = false) {
+    const result = await client.query(`
+      SELECT * FROM payment_fulfillments
+      WHERE fulfillment_key = $1
+         OR (provider = $2 AND provider_transaction_id = $3)
+         OR (provider = $2 AND event_id = $4)
+      ${lock ? "FOR UPDATE" : ""}
+    `, [input.fulfillmentKey, input.provider, input.providerTransactionId || null, input.eventId || null]);
+    return [...new Map(result.rows.map((row) => [row.id, row])).values()];
+  }
+
+  function validatedPaymentReplay(rows, input, verificationMode = null) {
+    if (rows.length !== 1) throw err("Payment fulfillment identity conflict", 409);
+    const fulfillment = rowToPaymentFulfillment(rows[0]);
+    const matches = fulfillment.orderId === (input.orderId || null)
+      && fulfillment.provider === input.provider
+      && fulfillment.eventId === (input.eventId || "")
+      && fulfillment.providerTransactionId === (input.providerTransactionId || "");
+    const verified = !verificationMode
+      || (fulfillment.status === "FULFILLED"
+        && fulfillment.metadata.paymentVerified === true
+        && fulfillment.metadata.verificationMode === verificationMode);
+    if (!matches || !verified) throw err("Payment fulfillment identity conflict", 409);
+    return fulfillment;
+  }
+
+  async function lockPaymentOrder(client, orderId, input, verificationMode) {
     const found = await client.query("SELECT * FROM miniapp_orders WHERE id = $1 FOR UPDATE", [orderId]);
     if (!found.rowCount) return null;
     const order = rowToOrder(found.rows[0]);
-    if (order.fulfilledAt) return { order, fulfilled: false };
     if (order.status === "canceled" || order.status === "refunded") throw err("Order cannot be fulfilled", 409);
-    if (order.paymentMode !== "wechat" || input.provider !== "wechat") throw err("Verified WeChat payment required", 409);
+    if (verificationMode === "wechat" && (order.paymentMode !== "wechat" || input.provider !== "wechat")) {
+      throw err("Verified WeChat payment required", 409);
+    }
+    if (verificationMode === "mock") {
+      const imported = Boolean(order.metadata.legacyId) || order.metadata.paymentVerification === "not-verified";
+      if (["production", "prod"].includes(environment) || order.paymentMode !== "mock" || input.provider !== "mock" || input.paymentMode !== "mock" || imported) {
+        throw err("Development mock payment required", 409);
+      }
+    }
+    if (order.fulfilledAt) {
+      const verification = verificationMode === "mock" ? "mock-verified" : "verified";
+      if (!order.paymentVerified || order.externalPaymentId !== input.providerTransactionId || order.metadata.paymentEventId !== input.eventId || order.metadata.paymentVerification !== verification) {
+        throw err("Payment fulfillment identity conflict", 409);
+      }
+    }
+    return order;
+  }
+
+  async function fulfillPaymentOrder(client, order, input, verificationMode) {
+    if (!order) return null;
+    if (order.fulfilledAt) return { order, fulfilled: false };
     const now = timestamp(clock);
     const credits = positiveInt(order.credits, 0);
     let balanceAfter = Number((await client.query("SELECT balance FROM miniapp_users WHERE id = $1", [order.userId])).rows[0]?.balance);
@@ -1032,8 +1153,9 @@ function createPostgresStore(options = {}) {
     if (credits > 0) {
       await client.query("INSERT INTO credit_packages (id, user_id, initial_credits, remaining_credits, trans_type, order_no, metadata, created_at, updated_at) VALUES ($1, $2, $3, $3, 'ORDER_PAY', $4, $5, $6, $6)", [`order_${order.id}`, order.userId, credits, order.id, JSON.stringify({ orderId: order.id, paymentEventId: input.eventId }), now]);
       balanceAfter = await changeUserBalance(client, order.userId, credits, now);
-      await insertTransaction(client, { userId: order.userId, transType: "ORDER_PAY", credits, balanceAfter, orderNo: order.id, reason: `verified-payment:${input.eventId}`, metadata: { provider: input.provider, providerTransactionId: input.providerTransactionId }, createdAt: now });
+      await insertTransaction(client, { userId: order.userId, transType: "ORDER_PAY", credits, balanceAfter, orderNo: order.id, reason: `${verificationMode}-payment:${input.eventId}`, metadata: { provider: input.provider, providerTransactionId: input.providerTransactionId }, createdAt: now });
     }
+    const paymentVerification = verificationMode === "mock" ? "mock-verified" : "verified";
     await client.query(`
       UPDATE miniapp_orders
       SET status = 'paid', payment_status = 'fulfilled', payment_verified = TRUE,
@@ -1041,13 +1163,57 @@ function createPostgresStore(options = {}) {
           external_payment_id = COALESCE(external_payment_id, $3),
           metadata = $4, updated_at = $1
       WHERE id = $5
-    `, [input.paidAt || now, credits, input.providerTransactionId, JSON.stringify({ ...order.metadata, paymentVerification: "verified", paymentEventId: input.eventId }), order.id]);
+    `, [input.paidAt || now, credits, input.providerTransactionId, JSON.stringify({ ...order.metadata, paymentVerification, paymentEventId: input.eventId }), order.id]);
     const updated = await client.query("SELECT * FROM miniapp_orders WHERE id = $1", [order.id]);
     return { order: rowToOrder(updated.rows[0]), fulfilled: true };
   }
 
   async function fulfillOrder() {
     throw err("Verified payment event required", 409);
+  }
+
+  async function fulfillPaymentEvent(input, verificationMode) {
+    return withTransaction(pool, async (client) => {
+      const order = await lockPaymentOrder(client, input.orderId, input, verificationMode);
+      if (!order) return { fulfillment: null, result: null };
+      const existing = await findPaymentIdentity(client, input, true);
+      if (existing.length) {
+        const fulfillment = validatedPaymentReplay(existing, input, verificationMode);
+        return { fulfillment, result: await fulfillPaymentOrder(client, order, input, verificationMode) };
+      }
+
+      const createdAt = timestamp(clock);
+      const fulfillmentId = input.id || id("fulfillment");
+      const metadata = { ...json(input.metadata), paymentVerified: true, verificationMode };
+      const inserted = await client.query(`
+        INSERT INTO payment_fulfillments (id, fulfillment_key, order_id, provider, event_id, event_type, provider_order_id, provider_transaction_id, status, metadata, fulfilled_at, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'FULFILLED', $9, $10, $10, $10)
+        ON CONFLICT DO NOTHING RETURNING *
+      `, [fulfillmentId, input.fulfillmentKey, input.orderId, input.provider, input.eventId, input.eventType || null, input.providerOrderId || null, input.providerTransactionId, JSON.stringify(metadata), createdAt]);
+      let fulfillment;
+      if (inserted.rowCount && inserted.rows[0].id === fulfillmentId) {
+        fulfillment = rowToPaymentFulfillment(inserted.rows[0]);
+      } else {
+        fulfillment = validatedPaymentReplay(await findPaymentIdentity(client, input, true), input, verificationMode);
+      }
+      const result = await fulfillPaymentOrder(client, order, input, verificationMode);
+      return { fulfillment, result };
+    });
+  }
+
+  async function fulfillMockOrder(orderId, input = {}) {
+    if (["production", "prod"].includes(environment)
+      || input.provider !== "mock"
+      || input.paymentMode !== "mock"
+      || input.paymentVerified !== true
+      || input.status !== "FULFILLED"
+      || !input.fulfillmentKey
+      || !input.eventId
+      || !input.providerTransactionId) {
+      throw err("Development mock payment required", 409);
+    }
+    const fulfilled = await fulfillPaymentEvent({ ...input, orderId }, "mock");
+    return fulfilled.result;
   }
 
   async function cancelOrder(orderId, input = {}) {
@@ -1082,46 +1248,27 @@ function createPostgresStore(options = {}) {
   }
 
   async function recordPaymentFulfillment(input) {
-    const createdAt = timestamp(clock);
-    const result = await pool.query(`
-      INSERT INTO payment_fulfillments (id, fulfillment_key, order_id, provider, event_id, event_type, provider_order_id, provider_transaction_id, status, error_message, metadata, fulfilled_at, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
-      ON CONFLICT (fulfillment_key) DO NOTHING RETURNING *
-    `, [input.id || id("fulfillment"), input.fulfillmentKey, input.orderId || null, input.provider || "unknown", input.eventId || null, input.eventType || null, input.providerOrderId || null, input.providerTransactionId || null, input.status || "PENDING", input.errorMessage || null, JSON.stringify(json(input.metadata)), input.fulfilledAt || (input.status === "FULFILLED" ? createdAt : null), createdAt]);
-    if (!result.rowCount) {
-      const existing = await pool.query("SELECT * FROM payment_fulfillments WHERE fulfillment_key = $1", [input.fulfillmentKey]);
-      return rowToPaymentFulfillment(existing.rows[0]);
-    }
-    return rowToPaymentFulfillment(result.rows[0]);
+    const normalized = { ...input, provider: input.provider || "unknown" };
+    return withTransaction(pool, async (client) => {
+      const existing = await findPaymentIdentity(client, normalized, true);
+      if (existing.length) return validatedPaymentReplay(existing, normalized);
+      const createdAt = timestamp(clock);
+      const fulfillmentId = input.id || id("fulfillment");
+      const result = await client.query(`
+        INSERT INTO payment_fulfillments (id, fulfillment_key, order_id, provider, event_id, event_type, provider_order_id, provider_transaction_id, status, error_message, metadata, fulfilled_at, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+        ON CONFLICT DO NOTHING RETURNING *
+      `, [fulfillmentId, input.fulfillmentKey, input.orderId || null, normalized.provider, input.eventId || null, input.eventType || null, input.providerOrderId || null, input.providerTransactionId || null, input.status || "PENDING", input.errorMessage || null, JSON.stringify(json(input.metadata)), input.fulfilledAt || (input.status === "FULFILLED" ? createdAt : null), createdAt]);
+      if (result.rowCount && result.rows[0].id === fulfillmentId) return rowToPaymentFulfillment(result.rows[0]);
+      return validatedPaymentReplay(await findPaymentIdentity(client, normalized, true), normalized);
+    });
   }
 
   async function fulfillPayment(input) {
-    if (input.paymentVerified !== true || input.provider !== "wechat" || input.status !== "FULFILLED" || !input.orderId || !input.eventId || !input.providerTransactionId) {
+    if (input.paymentVerified !== true || input.provider !== "wechat" || input.status !== "FULFILLED" || !input.fulfillmentKey || !input.orderId || !input.eventId || !input.providerTransactionId) {
       throw err("Verified WeChat payment required", 409);
     }
-    return withTransaction(pool, async (client) => {
-      const existing = await client.query("SELECT * FROM payment_fulfillments WHERE fulfillment_key = $1 FOR UPDATE", [input.fulfillmentKey]);
-      if (existing.rowCount) {
-        const fulfillment = rowToPaymentFulfillment(existing.rows[0]);
-        if (fulfillment.orderId !== input.orderId || fulfillment.provider !== input.provider || fulfillment.eventId !== input.eventId || fulfillment.providerTransactionId !== input.providerTransactionId) {
-          throw err("Payment fulfillment key conflict", 409);
-        }
-        await fulfillVerifiedOrder(client, input.orderId, input);
-        return fulfillment;
-      }
-      const createdAt = timestamp(clock);
-      const result = await client.query(`
-        INSERT INTO payment_fulfillments (id, fulfillment_key, order_id, provider, event_id, event_type, provider_order_id, provider_transaction_id, status, metadata, fulfilled_at, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'FULFILLED', $9, $10, $10, $10)
-        ON CONFLICT (fulfillment_key) DO NOTHING RETURNING *
-      `, [input.id || id("fulfillment"), input.fulfillmentKey, input.orderId, input.provider, input.eventId, input.eventType || null, input.providerOrderId || null, input.providerTransactionId, JSON.stringify({ ...json(input.metadata), paymentVerified: true }), createdAt]);
-      if (!result.rowCount) {
-        const replay = await client.query("SELECT * FROM payment_fulfillments WHERE fulfillment_key = $1", [input.fulfillmentKey]);
-        return rowToPaymentFulfillment(replay.rows[0]);
-      }
-      await fulfillVerifiedOrder(client, input.orderId, input);
-      return rowToPaymentFulfillment(result.rows[0]);
-    });
+    return (await fulfillPaymentEvent(input, "wechat")).fulfillment;
   }
 
   async function getPaymentFulfillment(key) {
@@ -1176,7 +1323,7 @@ function createPostgresStore(options = {}) {
     createAsset, createGeneratedAsset: createAsset, getAsset, getGeneratedAsset: getAsset, findOwnedAsset, findOwnedImageAsset, listAssets, listGeneratedAssets: listAssets, deleteAsset,
     createReferenceAsset, getReferenceAsset, listReferenceAssets, deleteReferenceAsset,
     createCatalogVersion, getCatalogVersion, getActiveCatalogVersion, activateCatalogVersion, syncTemplates, listTemplates, getTemplate,
-    createOrder, getOrder, getOrderByIdempotencyKey, listOrders, listAllOrders, fulfillOrder, cancelOrder, refundOrder,
+    createOrder, getOrder, getOrderByIdempotencyKey, listOrders, listAllOrders, fulfillOrder, fulfillMockOrder, cancelOrder, refundOrder,
     recordPaymentFulfillment, fulfillPayment, getPaymentFulfillment, recordPaymentEvent, listPaymentAudit,
     recordAdminAudit, listAdminAudit,
     isReady: () => true,

@@ -61,8 +61,9 @@ test("legacy migration is dry-run by default and preserves ids and unverified pa
   const applied = await migrateSqliteToPostgres({ dbPath, pool, apply: true });
   assert.equal(applied.applied, true);
   assert.equal(applied.reconciled, true);
-  const importedUser = (await pool.query("SELECT id, balance FROM miniapp_users WHERE id = $1", [user.id])).rows[0];
-  assert.deepEqual(importedUser, { id: user.id, balance: 8 });
+  const importedUser = (await pool.query("SELECT id, balance, updated_at FROM miniapp_users WHERE id = $1", [user.id])).rows[0];
+  assert.deepEqual({ id: importedUser.id, balance: importedUser.balance }, { id: user.id, balance: 8 });
+  assert.equal(new Date(importedUser.updated_at).toISOString(), new Date(plan.snapshot.users[0].updated_at).toISOString());
   const importedOrder = (await pool.query("SELECT id, payment_verified, metadata FROM miniapp_orders WHERE id = $1", ["legacy-order-1"])).rows[0];
   assert.equal(importedOrder.payment_verified, false);
   assert.equal(importedOrder.metadata.legacyId, "legacy-order-1");
@@ -71,6 +72,13 @@ test("legacy migration is dry-run by default and preserves ids and unverified pa
 
   const reconciled = await readImportedReconciliation(pool);
   assert.equal(reconcileMigration(plan.expected, reconciled), true);
+  await pool.query("UPDATE miniapp_users SET updated_at = $1 WHERE id = $2", ["2030-01-01T00:00:00.000Z", user.id]);
+  await assert.rejects(
+    readImportedReconciliation(pool).then((actual) => reconcileMigration(plan.expected, actual)),
+    /reconciliation mismatch/i,
+  );
+  await pool.query("UPDATE miniapp_users SET updated_at = $1 WHERE id = $2", [plan.snapshot.users[0].updated_at, user.id]);
+  assert.equal(reconcileMigration(plan.expected, await readImportedReconciliation(pool)), true);
   await pool.query("UPDATE generation_tasks SET prompt = $1 WHERE id = $2", ["corrupted target prompt", "legacy-task-1"]);
   await assert.rejects(
     readImportedReconciliation(pool).then((actual) => reconcileMigration(plan.expected, actual)),
@@ -81,7 +89,7 @@ test("legacy migration is dry-run by default and preserves ids and unverified pa
 
 test("legacy checksum covers transaction, task assets and request, template assets and prompt, order payment fields, and audits", () => {
   const snapshot = {
-    users: [{ id: "u1", provider: "wechat", appid: "wx", openid: "o1", unionid: null, name: "User", balance: 8, created_at: "2026-01-01T00:00:00.000Z" }],
+    users: [{ id: "u1", provider: "wechat", appid: "wx", openid: "o1", unionid: null, name: "User", balance: 8, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:30.000Z" }],
     transactions: [{ id: "tx1", user_id: "u1", amount: -2, reason: "generation", balance_after: 8, created_at: "2026-01-01T00:01:00.000Z" }],
     tasks: [{ id: "task1", owner_id: "u1", status: "completed", images_json: '["image-a"]', prompt: "task prompt", reference_images_json: '["reference-a"]', raw_provider_result_json: '{"request":"request-a"}', created_at: "2026-01-01T00:02:00.000Z", updated_at: "2026-01-01T00:03:00.000Z" }],
     templates: [{ id: "template1", title: "Template", prompt: "template prompt", reference_images_json: '["template-reference-a"]', preview_url: "preview-a", updated_at: "2026-01-01T00:04:00.000Z" }],
@@ -90,6 +98,7 @@ test("legacy checksum covers transaction, task assets and request, template asse
   };
   const baseline = legacyReconciliation(snapshot).checksum;
   const corruptions = [
+    (copy) => { copy.users[0].updated_at = "2026-01-02T00:00:30.000Z"; },
     (copy) => { copy.transactions[0].amount = -3; },
     (copy) => { copy.tasks[0].images_json = '["image-b"]'; },
     (copy) => { copy.tasks[0].raw_provider_result_json = '{"request":"request-b"}'; },

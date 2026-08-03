@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const { newDb } = require("pg-mem");
 
 const migrationPath = require.resolve("../../migrations/001_initial.sql");
+const identityMigrationPath = require.resolve("../../migrations/002_payment_and_retry_identity.sql");
 
 function createPgMemPool() {
   const db = newDb({ autoCreateForeignKeyIndices: true });
@@ -38,6 +39,7 @@ async function applyPgMemSchema(pool) {
     "CHECK (TRUE)",
   );
   await pool.query(supportedSchema);
+  await pool.query(fs.readFileSync(identityMigrationPath, "utf8"));
 }
 
 module.exports = {

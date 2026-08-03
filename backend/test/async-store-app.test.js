@@ -2,7 +2,9 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const { createApp } = require("../src/app");
+const { createPostgresStore } = require("../src/repositories/postgres-store");
 const { createMemoryStore } = require("../src/store");
+const { applyPgMemSchema, createPgMemPool } = require("./support/pg-mem");
 
 function asyncStoreFrom(store, overrides = {}) {
   const wrapped = {};
@@ -181,4 +183,45 @@ test("async store rejections are converted into the route error response", async
   assert.equal(response.status, 503);
   assert.deepEqual(payload, { success: false, error: "database temporarily unavailable" });
   await app.close();
+});
+
+test("development mock-pay completes a PostgreSQL mock order and rejects non-mock orders", async () => {
+  const { pool } = createPgMemPool();
+  await applyPgMemSchema(pool);
+  const store = createPostgresStore({ pool, environment: "test", initialCredits: 10 });
+  const app = createApp({ env: testEnv(), store });
+  const authorization = await login(app);
+
+  const created = await body(await app.fetch(new Request("http://local/api/miniapp/orders", {
+    method: "POST",
+    headers: { authorization, "content-type": "application/json" },
+    body: JSON.stringify({ productId: "credits_20" }),
+  })));
+  const firstResponse = await app.fetch(new Request(`http://local/api/miniapp/orders/${created.data.order.id}/mock-pay`, {
+    method: "POST",
+    headers: { authorization },
+  }));
+  const first = await body(firstResponse);
+  const replay = await body(await app.fetch(new Request(`http://local/api/miniapp/orders/${created.data.order.id}/mock-pay`, {
+    method: "POST",
+    headers: { authorization },
+  })));
+
+  assert.equal(firstResponse.status, 200);
+  assert.equal(first.data.order.paymentMode, "mock");
+  assert.equal(first.data.order.creditsGranted, 20);
+  assert.equal(first.data.idempotent, false);
+  assert.equal(replay.data.order.id, first.data.order.id);
+  assert.equal(replay.data.idempotent, true);
+  assert.equal((await store.getUser(created.data.order.userId)).balance, 30);
+
+  const manual = await store.createOrder({ id: "http-manual-order", userId: created.data.order.userId, productId: "credits_20", paymentMode: "manual", amountCents: 1200, credits: 20 });
+  const manualResponse = await app.fetch(new Request(`http://local/api/miniapp/orders/${manual.id}/mock-pay`, {
+    method: "POST",
+    headers: { authorization },
+  }));
+  assert.equal(manualResponse.status, 403);
+  assert.equal((await store.getUser(created.data.order.userId)).balance, 30);
+  await app.close();
+  await pool.end();
 });

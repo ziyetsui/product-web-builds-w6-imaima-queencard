@@ -209,6 +209,7 @@ async function createDependencies(config, sourceEnv, options, acquiredResources)
     store = createPostgresStore({
       pool: database,
       initialCredits: runtimeEnv.MINIAPP_INITIAL_CREDITS || "10",
+      environment: config.server.environment,
     });
   }
   if (!store && config.database.driver === "sqlite" && !options.app) {

@@ -7,13 +7,14 @@ const { migrateDatabase } = require("../src/db/migrate");
 const { assertStoreContract } = require("../src/repositories/store-contract");
 const { applyPgMemSchema, createPgMemPool } = require("./support/pg-mem");
 
-async function setup() {
+async function setup(options = {}) {
   const { pool } = createPgMemPool();
   await applyPgMemSchema(pool);
   const store = createPostgresStore({
     pool,
     clock: () => new Date("2026-08-03T00:00:00.000Z"),
     initialCredits: 10,
+    environment: options.environment || "test",
   });
   assertStoreContract(store);
   return { pool, store };
@@ -34,7 +35,8 @@ async function creditState(pool, userId) {
 }
 
 test("initial schema declares the production invariants", () => {
-  const sql = fs.readFileSync(require.resolve("../migrations/001_initial.sql"), "utf8");
+  const migrationDirectory = require("node:path").resolve(__dirname, "../migrations");
+  const sql = fs.readdirSync(migrationDirectory).sort().map((file) => fs.readFileSync(require("node:path").join(migrationDirectory, file), "utf8")).join("\n");
   for (const table of [
     "miniapp_users", "miniapp_sessions", "credit_packages", "credit_holds", "credit_transactions",
     "generation_tasks", "generated_assets", "reference_assets", "template_catalog_versions", "templates",
@@ -46,6 +48,9 @@ test("initial schema declares the production invariants", () => {
   assert.match(sql, /CHECK \(remaining_credits \+ frozen_credits <= initial_credits\)/);
   assert.match(sql, /credit_transactions_immutable/);
   assert.match(sql, /generation_tasks_lease_idx/);
+  assert.match(sql, /request_fingerprint/);
+  assert.match(sql, /UNIQUE INDEX[^;]+payment_fulfillments[^;]+provider_transaction_id/is);
+  assert.match(sql, /UNIQUE INDEX[^;]+payment_fulfillments[^;]+event_id/is);
 });
 
 test("postgres repository contract persists identity, sessions, credits, tasks, assets, catalog, orders, and audits", async () => {
@@ -252,8 +257,13 @@ test("pg-mem repository tests use driver parameter binding instead of SQL substi
   await pool.end();
 });
 
-test("migration runner submits the raw production migration unchanged", async () => {
-  const raw = fs.readFileSync(require.resolve("../migrations/001_initial.sql"), "utf8");
+test("migration runner submits every raw production migration unchanged", async () => {
+  const path = require("node:path");
+  const migrationDirectory = path.resolve(__dirname, "../migrations");
+  const rawMigrations = fs.readdirSync(migrationDirectory)
+    .filter((file) => /^\d+_.+\.sql$/.test(file))
+    .sort()
+    .map((file) => fs.readFileSync(path.join(migrationDirectory, file), "utf8"));
   const queries = [];
   const client = {
     async query(sql) {
@@ -267,7 +277,7 @@ test("migration runner submits the raw production migration unchanged", async ()
 
   await migrateDatabase({ pool });
 
-  assert.equal(queries.includes(raw), true);
+  for (const raw of rawMigrations) assert.equal(queries.includes(raw), true);
 });
 
 test("package grants are retry-safe and charges and revokes consume package remainder", async () => {
@@ -515,5 +525,188 @@ test("verified payment fulfillment is atomic, replay-safe, and refunds its remai
   assert.equal(state.balance, 10);
   assert.equal(state.available, 10);
   assert.equal(state.packages.find((row) => row.order_no === order.id).remaining_credits, 0);
+  await pool.end();
+});
+
+test("provider transaction replay with another fulfillment key returns the original fulfillment", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "payment-replay-user", appid: "wx-payment-replay", openid: "payment-replay-openid" });
+  const order = await store.createOrder({
+    id: "payment-replay-order",
+    userId: user.id,
+    productId: "credits-5",
+    paymentMode: "wechat",
+    amountCents: 500,
+    credits: 5,
+  });
+  const payment = {
+    orderId: order.id,
+    provider: "wechat",
+    eventId: "payment-replay-event",
+    providerTransactionId: "payment-replay-transaction",
+    status: "FULFILLED",
+    paymentVerified: true,
+  };
+
+  const original = await store.fulfillPayment({ ...payment, fulfillmentKey: "payment-replay-key-a" });
+  const replay = await store.fulfillPayment({ ...payment, fulfillmentKey: "payment-replay-key-b" });
+
+  assert.equal(replay.id, original.id);
+  assert.equal(replay.orderId, order.id);
+  assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM payment_fulfillments WHERE provider = $1 AND provider_transaction_id = $2", ["wechat", payment.providerTransactionId])).rows[0].count, 1);
+  assert.equal((await store.getUser(user.id)).balance, 15);
+  await pool.end();
+});
+
+test("provider transaction or event replay cannot fulfill a different order", async () => {
+  const { pool, store } = await setup();
+  const firstUser = await store.ensureUser({ sub: "payment-owner-a", appid: "wx-payment-owner", openid: "payment-owner-a" });
+  const secondUser = await store.ensureUser({ sub: "payment-owner-b", appid: "wx-payment-owner", openid: "payment-owner-b" });
+  const firstOrder = await store.createOrder({ id: "payment-order-a", userId: firstUser.id, productId: "credits-5", paymentMode: "wechat", amountCents: 500, credits: 5 });
+  const secondOrder = await store.createOrder({ id: "payment-order-b", userId: secondUser.id, productId: "credits-5", paymentMode: "wechat", amountCents: 500, credits: 5 });
+  await store.fulfillPayment({ fulfillmentKey: "payment-key-a", orderId: firstOrder.id, provider: "wechat", eventId: "provider-event-a", providerTransactionId: "provider-transaction-a", status: "FULFILLED", paymentVerified: true });
+
+  await assert.rejects(
+    store.fulfillPayment({ fulfillmentKey: "payment-key-b", orderId: secondOrder.id, provider: "wechat", eventId: "provider-event-b", providerTransactionId: "provider-transaction-a", status: "FULFILLED", paymentVerified: true }),
+    (error) => error.status === 409 && /payment fulfillment identity conflict/i.test(error.message),
+  );
+  await assert.rejects(
+    store.fulfillPayment({ fulfillmentKey: "payment-key-c", orderId: secondOrder.id, provider: "wechat", eventId: "provider-event-a", providerTransactionId: "provider-transaction-c", status: "FULFILLED", paymentVerified: true }),
+    (error) => error.status === 409 && /payment fulfillment identity conflict/i.test(error.message),
+  );
+
+  assert.equal((await store.getUser(firstUser.id)).balance, 15);
+  assert.equal((await store.getUser(secondUser.id)).balance, 10);
+  assert.equal((await store.getOrder(secondOrder.id)).creditsGranted, 0);
+  await pool.end();
+});
+
+test("development mock fulfillment is explicit, idempotent, and rejects production or unsafe orders", async () => {
+  const { pool, store } = await setup({ environment: "development" });
+  const user = await store.ensureUser({ sub: "mock-payment-user", appid: "wx-mock-payment", openid: "mock-payment-openid" });
+  const mockOrder = await store.createOrder({ id: "mock-safe-order", userId: user.id, productId: "credits-5", paymentMode: "mock", amountCents: 500, credits: 5 });
+  const input = {
+    fulfillmentKey: "mock-safe-order",
+    provider: "mock",
+    paymentMode: "mock",
+    eventId: "mock-safe-event",
+    providerTransactionId: "mock-safe-transaction",
+    status: "FULFILLED",
+    paymentVerified: true,
+  };
+  const first = await store.fulfillMockOrder(mockOrder.id, input);
+  const replay = await store.fulfillMockOrder(mockOrder.id, input);
+  assert.equal(first.order.id, mockOrder.id);
+  assert.equal(first.fulfilled, true);
+  assert.equal(replay.order.id, mockOrder.id);
+  assert.equal(replay.fulfilled, false);
+  assert.equal((await store.getUser(user.id)).balance, 15);
+
+  const manual = await store.createOrder({ id: "mock-manual-order", userId: user.id, productId: "credits-5", paymentMode: "manual", amountCents: 500, credits: 5 });
+  const imported = await store.createOrder({ id: "mock-imported-order", userId: user.id, productId: "credits-5", paymentMode: "mock", amountCents: 500, credits: 5, metadata: { legacyId: "legacy-mock", paymentVerification: "not-verified" } });
+  await assert.rejects(store.fulfillMockOrder(manual.id, { ...input, fulfillmentKey: "mock-manual", eventId: "mock-manual-event", providerTransactionId: "mock-manual-transaction" }), /development mock payment required/i);
+  await assert.rejects(store.fulfillMockOrder(imported.id, { ...input, fulfillmentKey: "mock-imported", eventId: "mock-imported-event", providerTransactionId: "mock-imported-transaction" }), /development mock payment required/i);
+
+  const productionStore = createPostgresStore({ pool, environment: "production" });
+  await assert.rejects(productionStore.fulfillMockOrder(mockOrder.id, input), /development mock payment required/i);
+  await assert.rejects(store.fulfillPayment({ orderId: mockOrder.id, ...input }), /verified wechat payment required/i);
+  assert.equal((await store.getUser(user.id)).balance, 15);
+  await pool.end();
+});
+
+test("package and hold retries reject owner or immutable payload collisions without mutation", async () => {
+  const { pool, store } = await setup();
+  const firstUser = await store.ensureUser({ sub: "retry-owner-a", appid: "wx-retry-owner", openid: "retry-owner-a" });
+  const secondUser = await store.ensureUser({ sub: "retry-owner-b", appid: "wx-retry-owner", openid: "retry-owner-b" });
+
+  const packageResults = await Promise.allSettled([
+    store.createCreditPackage({ id: "shared-package-id", userId: firstUser.id, initialCredits: 2, transType: "SYSTEM_ADJUST", metadata: { reason: "first" } }),
+    store.createCreditPackage({ id: "shared-package-id", userId: secondUser.id, initialCredits: 3, transType: "SYSTEM_ADJUST", metadata: { reason: "second" } }),
+  ]);
+  assert.equal(packageResults.filter((result) => result.status === "fulfilled").length, 1);
+  const packageRejection = packageResults.find((result) => result.status === "rejected").reason;
+  assert.equal(packageRejection.status, 409);
+  assert.equal(packageRejection.message, "Credit package idempotency conflict");
+
+  const savedPackage = (await pool.query("SELECT user_id, remaining_credits FROM credit_packages WHERE id = $1", ["shared-package-id"])).rows[0];
+  const packageOwner = savedPackage.user_id === firstUser.id ? firstUser : secondUser;
+  const packageNonOwner = savedPackage.user_id === firstUser.id ? secondUser : firstUser;
+  assert.equal((await store.getUser(packageOwner.id)).balance, 10 + Number(savedPackage.remaining_credits));
+  assert.equal((await store.getUser(packageNonOwner.id)).balance, 10);
+
+  const holdResults = await Promise.allSettled([
+    store.createCreditHold({ id: "shared-hold-a", userId: firstUser.id, taskId: "task-a", idempotencyKey: "shared-hold-key", credits: 1 }),
+    store.createCreditHold({ id: "shared-hold-b", userId: secondUser.id, taskId: "task-b", idempotencyKey: "shared-hold-key", credits: 2 }),
+  ]);
+  assert.equal(holdResults.filter((result) => result.status === "fulfilled").length, 1);
+  const holdRejection = holdResults.find((result) => result.status === "rejected").reason;
+  assert.equal(holdRejection.status, 409);
+  assert.equal(holdRejection.message, "Credit hold idempotency conflict");
+  const savedHold = (await pool.query("SELECT user_id, credits FROM credit_holds WHERE idempotency_key = $1", ["shared-hold-key"])).rows[0];
+  const holdOwnerBalance = (await store.getUser(savedHold.user_id)).balance;
+  const expectedOwnerBalance = savedHold.user_id === packageOwner.id ? 10 + Number(savedPackage.remaining_credits) - Number(savedHold.credits) : 10 - Number(savedHold.credits);
+  assert.equal(holdOwnerBalance, expectedOwnerBalance);
+
+  const payloadUser = await store.ensureUser({ sub: "retry-payload-owner", appid: "wx-retry-owner", openid: "retry-payload-owner" });
+  const payloadResults = await Promise.allSettled([
+    store.createCreditHold({ id: "payload-hold-a", userId: payloadUser.id, taskId: "payload-task", idempotencyKey: "payload-hold-key", credits: 1 }),
+    store.createCreditHold({ id: "payload-hold-b", userId: payloadUser.id, taskId: "payload-task", idempotencyKey: "payload-hold-key", credits: 2 }),
+  ]);
+  assert.equal(payloadResults.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(payloadResults.find((result) => result.status === "rejected").reason.status, 409);
+  const payloadHold = (await pool.query("SELECT credits FROM credit_holds WHERE idempotency_key = $1", ["payload-hold-key"])).rows[0];
+  assert.equal((await store.getUser(payloadUser.id)).balance, 10 - Number(payloadHold.credits));
+  await pool.end();
+});
+
+test("same-owner package and hold retries require identical immutable payloads", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "retry-same-owner", appid: "wx-retry-same-owner", openid: "retry-same-owner" });
+  await store.createCreditPackage({ id: "same-owner-package", userId: user.id, initialCredits: 1, transType: "SYSTEM_ADJUST", metadata: { reason: "original" } });
+  await assert.rejects(
+    store.createCreditPackage({ id: "same-owner-package", userId: user.id, initialCredits: 2, transType: "SYSTEM_ADJUST", metadata: { reason: "changed" } }),
+    (error) => error.status === 409 && error.message === "Credit package idempotency conflict",
+  );
+  assert.equal((await store.getUser(user.id)).balance, 11);
+
+  await store.createCreditPackage({ id: "hold-allocation-a", userId: user.id, initialCredits: 1, transType: "SYSTEM_ADJUST" });
+  await store.createCreditPackage({ id: "hold-allocation-b", userId: user.id, initialCredits: 1, transType: "SYSTEM_ADJUST" });
+  await store.createCreditHold({
+    id: "same-owner-hold",
+    userId: user.id,
+    taskId: "same-owner-task",
+    idempotencyKey: "same-owner-hold-key",
+    credits: 1,
+    packageAllocation: [{ packageId: "hold-allocation-a", credits: 1 }],
+  });
+  await assert.rejects(
+    store.createCreditHold({
+      id: "same-owner-hold-replay",
+      userId: user.id,
+      taskId: "same-owner-task",
+      idempotencyKey: "same-owner-hold-key",
+      credits: 1,
+      packageAllocation: [{ packageId: "hold-allocation-b", credits: 1 }],
+    }),
+    (error) => error.status === 409 && error.message === "Credit hold idempotency conflict",
+  );
+  assert.equal((await store.getUser(user.id)).balance, 12);
+  assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM credit_holds WHERE idempotency_key = $1", ["same-owner-hold-key"])).rows[0].count, 1);
+  await pool.end();
+});
+
+test("package replay validates the original request after its remainder changes", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "retry-spent-package", appid: "wx-retry-spent", openid: "retry-spent-package" });
+  const request = { id: "retry-spent-package", userId: user.id, initialCredits: 2, transType: "SYSTEM_ADJUST", metadata: { source: "retry-test" } };
+  const created = await store.createCreditPackage(request);
+  await store.charge(user.id, 1, "spend-before-retry");
+
+  const replay = await store.createCreditPackage(request);
+
+  assert.equal(replay.id, created.id);
+  assert.equal(replay.remainingCredits, 1);
+  assert.equal((await store.getUser(user.id)).balance, 11);
+  assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM credit_packages WHERE id = $1", [request.id])).rows[0].count, 1);
   await pool.end();
 });

@@ -69,6 +69,7 @@ function legacyContent(snapshot) {
     users: normalizedRows(snapshot.users, (row) => ({
       id: String(row.id), provider: row.provider || "wechat", appid: row.appid || "", openid: row.openid || "",
       unionid: row.unionid || null, name: row.name || "微信用户", balance: Number(row.balance || 0), createdAt: normalizedTime(row.created_at),
+      updatedAt: normalizedTime(row.updated_at || row.created_at),
     })),
     transactions: normalizedRows(snapshot.transactions, (row) => ({
       id: String(row.id), userId: String(row.user_id), credits: Number(row.amount), balanceAfter: Number(row.balance_after || 0),
@@ -111,7 +112,7 @@ function importedContent(snapshot) {
   return {
     users: normalizedRows(snapshot.users, (row) => ({
       id: String(row.id), provider: row.provider, appid: row.appid, openid: row.openid, unionid: row.unionid || null,
-      name: row.name, balance: Number(row.balance || 0), createdAt: normalizedTime(row.created_at),
+      name: row.name, balance: Number(row.balance || 0), createdAt: normalizedTime(row.created_at), updatedAt: normalizedTime(row.updated_at),
     })),
     transactions: normalizedRows(snapshot.transactions, (row) => ({
       id: String(row.id), userId: String(row.user_id), credits: Number(row.credits), balanceAfter: Number(row.balance_after || 0),
@@ -200,7 +201,7 @@ function reconcileMigration(expected, actual) {
 
 async function importedSnapshot(client) {
   const [users, transactions, tasks, templates, orders, paymentAudit] = await Promise.all([
-    client.query("SELECT id, provider, appid, openid, unionid, name, balance, created_at FROM miniapp_users ORDER BY id"),
+    client.query("SELECT id, provider, appid, openid, unionid, name, balance, created_at, updated_at FROM miniapp_users ORDER BY id"),
     client.query("SELECT id, user_id, credits, balance_after, reason, created_at FROM credit_transactions ORDER BY id"),
     client.query("SELECT id, owner_id, status, images, template_id, provider, provider_task_id, mode, prompt, topic, reference_images, model, output_count, aspect_ratio, resolution, raw_provider_result, created_at, updated_at FROM generation_tasks ORDER BY id"),
     client.query("SELECT id, title, subtitle, category, scenario_category, source, source_id, source_url, thumbnail_url, preview_url, reference_images, prompt, use_case, author, metrics, seed, updated_at FROM templates ORDER BY id"),
@@ -231,9 +232,9 @@ async function importSnapshot(client, snapshot, expected) {
     const metadata = { legacyId: row.id, legacyRow: row };
     await client.query(`
       INSERT INTO miniapp_users (id, provider, appid, openid, unionid, name, balance, metadata, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, $10), $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, $11), COALESCE($10, $9, $11))
       ON CONFLICT (id) DO UPDATE SET balance = EXCLUDED.balance, metadata = EXCLUDED.metadata, updated_at = EXCLUDED.updated_at
-    `, [row.id, row.provider || "wechat", row.appid || "", row.openid || "", row.unionid || null, row.name || "微信用户", Number(row.balance || 0), JSON.stringify(metadata), row.created_at || null, now]);
+    `, [row.id, row.provider || "wechat", row.appid || "", row.openid || "", row.unionid || null, row.name || "微信用户", Number(row.balance || 0), JSON.stringify(metadata), row.created_at || null, row.updated_at || null, now]);
     await client.query("INSERT INTO credit_packages (id, user_id, initial_credits, remaining_credits, trans_type, metadata, created_at, updated_at) VALUES ($1, $2, $3, $3, 'LEGACY_MIGRATION', $4, $5, $5) ON CONFLICT (id) DO NOTHING", [`legacy_package_${row.id}`, row.id, Number(row.balance || 0), JSON.stringify(metadata), row.created_at || now]);
   }
   for (const row of snapshot.transactions) {
