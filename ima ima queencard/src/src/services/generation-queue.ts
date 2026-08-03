@@ -3,6 +3,7 @@ import {
   asc,
   desc,
   eq,
+  gt,
   inArray,
   lt,
   lte,
@@ -17,6 +18,7 @@ import {
 } from "@/db";
 import {
   buildGenerationScopes,
+  type GenerationFailure,
   type GenerationLeaseToken,
 } from "@/services/generation-task-policy";
 
@@ -29,6 +31,10 @@ export type GenerationQueueOptions = Readonly<{
     taskId: string;
     scopeKey: string;
   }) => void;
+  onPermanentFailure?: (
+    transaction: GenerationQueueTransaction,
+    taskId: string
+  ) => Promise<void>;
 }>;
 
 export type ClaimedGenerationTask = Readonly<{
@@ -41,6 +47,15 @@ export type ClaimNextParams = Readonly<{
   now: Date;
   config: GenerationWorkerConfig;
 }>;
+
+export type GenerationQueueTransaction = Parameters<
+  Parameters<GenerationQueueDatabase["transaction"]>[0]
+>[0];
+
+export type FinalizeGenerationTask = (
+  transaction: GenerationQueueTransaction,
+  task: GenerationTask
+) => Promise<void>;
 
 class PermitCapacityMiss extends Error {
   constructor(
@@ -229,5 +244,228 @@ export function createGenerationQueue(
 
       return null;
     },
+
+    async renewLease(
+      lease: GenerationLeaseToken,
+      now: Date,
+      leaseMs: number
+    ): Promise<boolean> {
+      const leaseExpiresAt = new Date(now.getTime() + leaseMs);
+      return database.transaction(async (transaction) => {
+        const [task] = await transaction
+          .update(generationTasks)
+          .set({ leaseExpiresAt, heartbeatAt: now, updatedAt: now })
+          .where(validLeaseWhere(lease, now))
+          .returning({ id: generationTasks.id });
+        if (!task) return false;
+
+        const permits = await transaction
+          .update(generationConcurrencyLeases)
+          .set({ expiresAt: leaseExpiresAt, heartbeatAt: now })
+          .where(permitLeaseWhere(lease))
+          .returning({ scopeKey: generationConcurrencyLeases.scopeKey });
+        if (permits.length !== 3) {
+          throw new Error(
+            `Generation task ${lease.taskId} must hold exactly three permits`
+          );
+        }
+        return true;
+      });
+    },
+
+    async scheduleRetry(
+      lease: GenerationLeaseToken,
+      failure: GenerationFailure,
+      nextAttemptAt: Date,
+      now: Date,
+      error?: unknown
+    ): Promise<boolean> {
+      return transitionFromRunning(database, lease, now, {
+        status: "retry_scheduled",
+        nextAttemptAt,
+        failureCategory: failure.category,
+        errorCode: errorCode(error),
+        errorMessage: safeErrorMessage(error),
+        lastErrorAt: now,
+        updatedAt: now,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+      });
+    },
+
+    async markPermanentFailure(
+      lease: GenerationLeaseToken,
+      failure: GenerationFailure,
+      now: Date,
+      error?: unknown
+    ): Promise<boolean> {
+      return transitionFromRunning(database, lease, now, {
+        status: "permanently_failed",
+        failureCategory: failure.category,
+        errorCode: errorCode(error),
+        errorMessage: safeErrorMessage(error),
+        lastErrorAt: now,
+        completedAt: now,
+        updatedAt: now,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        heartbeatAt: null,
+      }, options.onPermanentFailure
+        ? (transaction) => options.onPermanentFailure!(transaction, lease.taskId)
+        : undefined);
+    },
+
+    async withValidLeaseForFinalize(
+      lease: GenerationLeaseToken,
+      now: Date,
+      finalize: FinalizeGenerationTask
+    ): Promise<boolean> {
+      return database.transaction(async (transaction) => {
+        const [task] = await transaction
+          .select()
+          .from(generationTasks)
+          .where(validLeaseWhere(lease, now))
+          .for("update")
+          .limit(1);
+        if (!task) return false;
+
+        await finalize(transaction, task);
+        await transaction
+          .delete(generationConcurrencyLeases)
+          .where(permitLeaseWhere(lease));
+        return true;
+      });
+    },
+
+    async releasePermits(lease: GenerationLeaseToken): Promise<void> {
+      await database.transaction(async (transaction) => {
+        await transaction
+          .delete(generationConcurrencyLeases)
+          .where(permitLeaseWhere(lease));
+      });
+    },
+
+    async recoverExpired(now: Date): Promise<number> {
+      const expired = await database
+        .select({ id: generationTasks.id })
+        .from(generationTasks)
+        .where(
+          and(
+            eq(generationTasks.status, "running"),
+            lte(generationTasks.leaseExpiresAt, now)
+          )
+        )
+        .orderBy(asc(generationTasks.leaseExpiresAt))
+        .limit(100);
+
+      let recovered = 0;
+      for (const candidate of expired) {
+        const didRecover = await database.transaction(async (transaction) => {
+          const [task] = await transaction
+            .select()
+            .from(generationTasks)
+            .where(
+              and(
+                eq(generationTasks.id, candidate.id),
+                eq(generationTasks.status, "running"),
+                lte(generationTasks.leaseExpiresAt, now)
+              )
+            )
+            .for("update", { skipLocked: true })
+            .limit(1);
+          if (!task) return false;
+
+          const exhausted = task.attemptCount >= task.maxAttempts;
+          if (exhausted) {
+            await options.onPermanentFailure?.(transaction, task.id);
+          }
+          await transaction
+            .update(generationTasks)
+            .set({
+              status: exhausted ? "permanently_failed" : "retry_scheduled",
+              version: task.version + 1,
+              nextAttemptAt: now,
+              failureCategory: "transient",
+              errorCode: "LEASE_EXPIRED",
+              errorMessage: "Generation worker lease expired",
+              lastErrorAt: now,
+              completedAt: exhausted ? now : null,
+              leaseOwner: null,
+              leaseExpiresAt: null,
+              heartbeatAt: null,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(generationTasks.id, task.id),
+                eq(generationTasks.version, task.version),
+                eq(generationTasks.status, "running")
+              )
+            );
+          await transaction
+            .delete(generationConcurrencyLeases)
+            .where(eq(generationConcurrencyLeases.taskId, task.id));
+          return true;
+        });
+        if (didRecover) recovered += 1;
+      }
+      return recovered;
+    },
   };
+}
+
+export type GenerationQueue = ReturnType<typeof createGenerationQueue>;
+
+function validLeaseWhere(lease: GenerationLeaseToken, now: Date) {
+  return and(
+    eq(generationTasks.id, lease.taskId),
+    eq(generationTasks.version, lease.taskVersion),
+    eq(generationTasks.leaseOwner, lease.leaseOwner),
+    eq(generationTasks.status, "running"),
+    gt(generationTasks.leaseExpiresAt, now)
+  );
+}
+
+function permitLeaseWhere(lease: GenerationLeaseToken) {
+  return and(
+    eq(generationConcurrencyLeases.taskId, lease.taskId),
+    eq(generationConcurrencyLeases.taskVersion, lease.taskVersion),
+    eq(generationConcurrencyLeases.leaseOwner, lease.leaseOwner)
+  );
+}
+
+function safeErrorMessage(error: unknown) {
+  if (!(error instanceof Error)) return "Image generation failed";
+  return error.message.slice(0, 1_000);
+}
+
+function errorCode(error: unknown) {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code.length <= 120) return code;
+  }
+  return "PROVIDER_FAILED";
+}
+
+async function transitionFromRunning(
+  database: GenerationQueueDatabase,
+  lease: GenerationLeaseToken,
+  now: Date,
+  values: Partial<typeof generationTasks.$inferInsert>,
+  beforeTransition?: (transaction: GenerationQueueTransaction) => Promise<void>
+) {
+  return database.transaction(async (transaction) => {
+    const [task] = await transaction
+      .update(generationTasks)
+      .set(values)
+      .where(validLeaseWhere(lease, now))
+      .returning({ id: generationTasks.id });
+    if (!task) return false;
+    await beforeTransition?.(transaction);
+    await transaction
+      .delete(generationConcurrencyLeases)
+      .where(permitLeaseWhere(lease));
+    return true;
+  });
 }

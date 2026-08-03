@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { PgDialect } from "drizzle-orm/pg-core";
 import { sql, type SQL } from "drizzle-orm";
 import { describe, expect, it } from "vitest";

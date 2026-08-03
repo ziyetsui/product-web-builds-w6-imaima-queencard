@@ -243,4 +243,96 @@ describePostgres("generation queue PostgreSQL contention", () => {
     expect(blockedTaskPermits).toEqual([]);
     expect(availableTaskPermits).toHaveLength(3);
   });
+
+  it("renews the task and its three permits in one transaction", async () => {
+    const taskId = await insertTask("renew", { userId: "user_renew" });
+    const queue = createGenerationQueue(createDatabase());
+    const claimed = await queue.claimNext({
+      workerId: "worker_renew",
+      now: NOW,
+      config,
+    });
+    expect(claimed).not.toBeNull();
+
+    const heartbeatAt = new Date(NOW.getTime() + 30_000);
+    await expect(
+      queue.renewLease(claimed!.lease, heartbeatAt, config.leaseMs)
+    ).resolves.toBe(true);
+
+    const [renewedTask] = await fixtureDatabase
+      .select()
+      .from(generationTasks)
+      .where(eq(generationTasks.id, taskId));
+    const permits = await fixtureDatabase
+      .select()
+      .from(generationConcurrencyLeases)
+      .where(eq(generationConcurrencyLeases.taskId, taskId));
+    const expectedExpiry = new Date(heartbeatAt.getTime() + config.leaseMs);
+    expect(renewedTask).toMatchObject({
+      heartbeatAt,
+      leaseExpiresAt: expectedExpiry,
+    });
+    expect(permits).toHaveLength(3);
+    expect(permits.every((permit) =>
+      permit.heartbeatAt.getTime() === heartbeatAt.getTime() &&
+      permit.expiresAt.getTime() === expectedExpiry.getTime()
+    )).toBe(true);
+  });
+
+  it("allows only one recovery scanner to reschedule an expired lease", async () => {
+    const taskId = await insertTask("recover", { userId: "user_recover" });
+    const queue = createGenerationQueue(createDatabase());
+    const claimed = await queue.claimNext({
+      workerId: "worker_crashed",
+      now: NOW,
+      config,
+    });
+    expect(claimed).not.toBeNull();
+
+    const recoveryAt = new Date(NOW.getTime() + config.leaseMs + 1);
+    const recovered = await Promise.all(
+      [createDatabase(), createDatabase()].map((database) =>
+        createGenerationQueue(database).recoverExpired(recoveryAt)
+      )
+    );
+    expect(recovered.reduce((sum, count) => sum + count, 0)).toBe(1);
+
+    const [taskAfterRecovery] = await fixtureDatabase
+      .select()
+      .from(generationTasks)
+      .where(eq(generationTasks.id, taskId));
+    const permits = await fixtureDatabase
+      .select()
+      .from(generationConcurrencyLeases)
+      .where(eq(generationConcurrencyLeases.taskId, taskId));
+    expect(taskAfterRecovery).toMatchObject({
+      status: "retry_scheduled",
+      version: 2,
+      leaseOwner: null,
+      errorCode: "LEASE_EXPIRED",
+    });
+    expect(permits).toEqual([]);
+  });
+
+  it("permanently fails an exhausted expired task", async () => {
+    const taskId = await insertTask("exhausted", {
+      userId: "user_exhausted",
+      maxAttempts: 1,
+    });
+    const queue = createGenerationQueue(createDatabase());
+    await queue.claimNext({ workerId: "worker_crashed", now: NOW, config });
+
+    const recoveryAt = new Date(NOW.getTime() + config.leaseMs + 1);
+    await expect(queue.recoverExpired(recoveryAt)).resolves.toBe(1);
+    const [taskAfterRecovery] = await fixtureDatabase
+      .select()
+      .from(generationTasks)
+      .where(eq(generationTasks.id, taskId));
+    expect(taskAfterRecovery).toMatchObject({
+      status: "permanently_failed",
+      version: 2,
+      leaseOwner: null,
+      completedAt: recoveryAt,
+    });
+  });
 });
