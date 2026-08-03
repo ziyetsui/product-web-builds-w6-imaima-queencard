@@ -1002,7 +1002,7 @@ function createApp(options = {}) {
   return {
     fetch: handle,
     close() {
-      if (store.close) store.close();
+      if (store.close) return store.close();
     },
   };
 }

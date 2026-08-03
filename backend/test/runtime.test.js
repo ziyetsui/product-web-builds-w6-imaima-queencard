@@ -115,6 +115,90 @@ test("fully configured production listens when its runtime adapters are injected
   assert.equal(storeCloseCalls, 1);
 });
 
+test("shutdown waits for the internally owned asynchronous store close exactly once", async () => {
+  const closeStarted = deferred();
+  const allowCloseToFinish = deferred();
+  let closeCalls = 0;
+  let closeFinished = false;
+  const runtime = await createServer({
+    env: productionEnv(),
+    factories: {
+      createStore() {
+        return {
+          ready: true,
+          close() {
+            closeCalls += 1;
+            closeStarted.resolve();
+            return allowCloseToFinish.promise.then(() => {
+              closeFinished = true;
+            });
+          },
+        };
+      },
+      createStorage() {
+        return { ready: true, close() {} };
+      },
+    },
+    dependencies: {
+      workers: { ready: true, stop() {} },
+    },
+    logger: quietLogger(),
+  });
+
+  const shutdown = runtime.shutdown("deferred-store-close");
+  await closeStarted.promise;
+  const beforeRelease = await Promise.race([
+    shutdown.then(() => "resolved"),
+    new Promise((resolve) => setImmediate(() => resolve("pending"))),
+  ]);
+  allowCloseToFinish.resolve();
+  await shutdown;
+
+  assert.equal(beforeRelease, "pending");
+  assert.equal(closeFinished, true);
+  assert.equal(closeCalls, 1);
+});
+
+test("asynchronous store close rejection follows sanitized aggregate shutdown", async () => {
+  const secret = "async-store-close-secret";
+  let closeCalls = 0;
+  const runtime = await createServer({
+    env: productionEnv({ STORAGE_SECRET_ACCESS_KEY: secret }),
+    factories: {
+      createStore() {
+        return {
+          ready: true,
+          close() {
+            closeCalls += 1;
+            return new Promise((resolve, reject) => {
+              setImmediate(() => reject(new Error(`store close exposed ${secret}`)));
+            });
+          },
+        };
+      },
+      createStorage() {
+        return { ready: true, close() {} };
+      },
+    },
+    dependencies: {
+      workers: { ready: true, stop() {} },
+    },
+    logger: quietLogger(),
+  });
+
+  const result = await runtime.shutdown("rejecting-store-close").then(
+    () => ({ status: "resolved", error: null }),
+    (error) => ({ status: "rejected", error }),
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.status, "rejected");
+  assert.equal(result.error.name, "AggregateError");
+  assert.equal(result.error.errors.length, 1);
+  assert.doesNotMatch(runtime.sanitizeError(result.error), new RegExp(secret));
+  assert.equal(closeCalls, 1);
+});
+
 test("default production entrypoint fails closed until database and storage adapters land", async () => {
   const secrets = [
     "runtime-password",
