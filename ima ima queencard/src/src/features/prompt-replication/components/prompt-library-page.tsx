@@ -854,7 +854,11 @@ function CaseImageCarousel({
   }, []);
 
   return (
-    <div className="case-card-gallery bg-canvas-pink p-3">
+    <div
+      className={`case-card-gallery bg-canvas-pink p-3 ${
+        usesImageBackdrop ? "case-card-gallery--landscape" : ""
+      }`}
+    >
       <div className="case-image-card-shell">
         <div
           ref={frameRef}
@@ -923,13 +927,15 @@ function CaseImageCarousel({
         </div>
       </div>
 
-      <BrandedCarouselControls
-        count={images.length}
-        selectedIndex={selectedIndex}
-        ariaLabel={`${item.title} 图集分页`}
-        onPrevious={(event) => stepImage(-1, event)}
-        onNext={(event) => stepImage(1, event)}
-      />
+      {images.length > 1 ? (
+        <BrandedCarouselControls
+          count={images.length}
+          selectedIndex={selectedIndex}
+          ariaLabel={`${item.title} 图集分页`}
+          onPrevious={(event) => stepImage(-1, event)}
+          onNext={(event) => stepImage(1, event)}
+        />
+      ) : null}
     </div>
   );
 }

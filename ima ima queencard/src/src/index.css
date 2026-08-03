@@ -844,6 +844,10 @@ html {
   flex-direction: column;
 }
 
+.case-card-gallery--landscape .case-image-card-surface {
+  background: #f5e2dc;
+}
+
 .case-image-card-shell {
   position: relative;
   flex: 1 1 auto;
@@ -925,6 +929,22 @@ html {
   outline: 0;
   box-shadow: none;
   will-change: transform;
+}
+
+.case-image-trigger img.case-image-contained-center {
+  object-position: center center;
+}
+
+.case-image-backdrop {
+  position: absolute !important;
+  inset: 0;
+  z-index: 1 !important;
+  object-fit: cover !important;
+  object-position: center !important;
+  opacity: 0.32;
+  filter: blur(20px) brightness(1.08) saturate(0.68);
+  transform: scale(1.16);
+  pointer-events: none;
 }
 
 .case-image-download-button {
