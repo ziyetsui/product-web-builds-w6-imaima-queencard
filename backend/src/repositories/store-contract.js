@@ -1,9 +1,9 @@
 const STORE_METHODS = [
   "ensureUser", "getUser", "getUserByIdentity", "updateUserProfile", "listUsers",
   "createSession", "getSession", "getSessionByTokenHash", "touchSession", "revokeSession", "revokeSessionByTokenHash", "revokeAllSessions",
-  "createCreditPackage", "listCreditPackages", "createCreditHold", "getCreditHold",
+  "createCreditPackage", "getCreditPackage", "listCreditPackages", "createCreditHold", "getCreditHold",
   "settleCreditHold", "releaseCreditHold", "addCredits", "charge", "listCreditTransactions",
-  "createTask", "getTask", "listTasks", "claimTask", "renewTaskLease", "releaseTaskLease", "reclaimExpiredTasks", "updateTask",
+  "createTask", "createTaskWithCreditHold", "getTask", "listTasks", "claimTask", "renewTaskLease", "releaseTaskLease", "reclaimExpiredTasks", "updateTask",
   "createAsset", "createGeneratedAsset", "getAsset", "getGeneratedAsset", "findOwnedAsset", "findOwnedImageAsset", "listAssets", "listGeneratedAssets", "deleteAsset",
   "createReferenceAsset", "getReferenceAsset", "listReferenceAssets", "deleteReferenceAsset",
   "createCatalogVersion", "getCatalogVersion", "getCatalogVersionState", "getActiveCatalogVersion", "activateCatalogVersion",

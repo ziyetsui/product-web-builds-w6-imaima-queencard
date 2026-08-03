@@ -164,6 +164,9 @@ function loadConfig(env = process.env) {
     ? requiredValue(env, ["STORAGE_SECRET_ACCESS_KEY", "S3_SECRET_ACCESS_KEY"], "STORAGE_SECRET_ACCESS_KEY", missing)
     : valueFor(env, ["STORAGE_SECRET_ACCESS_KEY", "S3_SECRET_ACCESS_KEY"], "");
   if (!["local", "s3", "minio", "r2"].includes(storageDriver)) invalid.push("STORAGE_PROVIDER");
+  const assetSigningSecret = production
+    ? requiredValue(env, ["MINIAPP_ASSET_SIGNING_SECRET", "ASSET_SIGNING_SECRET"], "MINIAPP_ASSET_SIGNING_SECRET", missing)
+    : valueFor(env, ["MINIAPP_ASSET_SIGNING_SECRET", "ASSET_SIGNING_SECRET"], "local-development-only-secret");
 
   const legacyPaymentMode = valueFor(env, ["MINIAPP_PAYMENT_MODE"], production ? "manual" : "mock").toLowerCase();
   const paymentProvider = valueFor(
@@ -216,9 +219,10 @@ function loadConfig(env = process.env) {
       publicBaseUrl: valueFor(env, ["STORAGE_PUBLIC_BASE_URL", "MINIAPP_PUBLIC_ASSET_BASE_URL"], ""),
       localRoot: valueFor(env, ["STORAGE_LOCAL_ROOT", "MINIAPP_UPLOAD_ROOT"], path.join(defaultRoot, "uploads")),
       forcePathStyle: booleanFor(env, ["STORAGE_FORCE_PATH_STYLE", "S3_FORCE_PATH_STYLE"], storageDriver === "minio"),
+      signingSecret: assetSigningSecret,
     },
     generation: {
-      provider: valueFor(env, ["MINIAPP_IMAGE_PROVIDER", "GENERATION_PROVIDER", "MINIAPP_GENERATION_MODE"], "preview").toLowerCase(),
+      provider: valueFor(env, ["MINIAPP_IMAGE_PROVIDER", "GENERATION_PROVIDER", "MINIAPP_GENERATION_MODE"], production ? "gptproto" : "preview").toLowerCase(),
       upstreamBaseUrl: valueFor(env, ["GENERATION_UPSTREAM_BASE_URL", "ANCHER_GENERATOR_API_BASE_URL"], ""),
       upstreamAuthToken: valueFor(env, ["GENERATION_UPSTREAM_AUTH_TOKEN", "MINIAPP_UPSTREAM_AUTH_TOKEN"], ""),
       workerMode: valueFor(env, ["GENERATION_WORKER_MODE"], production ? "durable" : "in-process").toLowerCase(),
@@ -264,6 +268,14 @@ function toRuntimeEnv(config, sourceEnv = {}) {
     MINIAPP_AUTH_TOKEN_TTL_SECONDS: String(config.auth.tokenTtlSeconds),
     MINIAPP_DB_PATH: config.database.sqlitePath,
     MINIAPP_UPLOAD_ROOT: config.storage.localRoot,
+    MINIAPP_STORAGE_PROVIDER: config.storage.driver,
+    MINIAPP_STORAGE_ENDPOINT: config.storage.endpoint,
+    MINIAPP_STORAGE_REGION: config.storage.region,
+    MINIAPP_STORAGE_BUCKET: config.storage.bucket,
+    MINIAPP_STORAGE_ACCESS_KEY_ID: config.storage.accessKeyId,
+    MINIAPP_STORAGE_SECRET_ACCESS_KEY: config.storage.secretAccessKey,
+    MINIAPP_STORAGE_FORCE_PATH_STYLE: config.storage.forcePathStyle ? "1" : "0",
+    MINIAPP_ASSET_SIGNING_SECRET: config.storage.signingSecret,
     MINIAPP_PUBLIC_ASSET_BASE_URL: config.storage.publicBaseUrl,
     MINIAPP_IMAGE_PROVIDER: config.generation.provider,
     PAYMENT_PROVIDER: config.payment.provider,

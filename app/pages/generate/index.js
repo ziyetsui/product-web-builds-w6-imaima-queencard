@@ -4,9 +4,9 @@ var auth = require("../../services/auth.js");
 var generation = require("../../services/generation.js");
 var templatesService = require("../../services/templates.js");
 
-var DEFAULT_MODEL_VALUE = "gpt-image-2-edit";
+var DEFAULT_MODEL_VALUE = "gpt-image-2";
 var DEFAULT_MODEL_LABEL = "GPT Image 2";
-var DEFAULT_TEXT_MODEL_VALUE = "gpt-image";
+var DEFAULT_TEXT_MODEL_VALUE = "gpt-image-2";
 var MODE_IMAGE_EDIT = "image-edit";
 var MODE_TEXT_TO_IMAGE = "text-to-image";
 var MAX_REFERENCE_IMAGES = 3;
@@ -131,8 +131,17 @@ function modelIndexFor(models, value) {
 
 function modelsForCapability(models, capability) {
   return models.filter(function (model) {
-    return model.capability === capability;
+    return model.capability === capability || (model.capabilities && model.capabilities.indexOf(capability) >= 0);
   });
+}
+
+function publicModel(record) {
+  return {
+    label: record.publicLabel || record.label || record.key,
+    value: record.key || record.value,
+    capability: record.capability || "",
+    capabilities: record.capabilities || [],
+  };
 }
 
 function defaultModelForCapability(capability) {
@@ -155,6 +164,7 @@ Page({
     userDesc: "使用 wx.login 获取 code，服务端换 openid 并绑定账号",
     referenceImagePath: "",
     referenceImagePaths: [],
+    referenceAssetIds: [],
     templateId: "",
     templateTitle: "",
     topic: "",
@@ -167,17 +177,17 @@ Page({
     modeLabel: "参考图生成",
     capability: MODE_IMAGE_EDIT,
     models: [
-      { label: DEFAULT_MODEL_LABEL, value: DEFAULT_MODEL_VALUE, capability: MODE_IMAGE_EDIT },
-      { label: DEFAULT_MODEL_LABEL, value: DEFAULT_TEXT_MODEL_VALUE, capability: MODE_TEXT_TO_IMAGE },
-      { label: "Doubao Seedream", value: "doubao-seedream-5-edit", capability: MODE_IMAGE_EDIT },
-      { label: "Seedream", value: "seedream-5-edit", capability: MODE_IMAGE_EDIT },
-      { label: "Gemini Flash", value: "gemini-3.1-flash-edit", capability: MODE_IMAGE_EDIT }
+      { label: DEFAULT_MODEL_LABEL, value: DEFAULT_MODEL_VALUE, capabilities: [MODE_IMAGE_EDIT, MODE_TEXT_TO_IMAGE] },
+      { label: "Gemini 3.1 Flash Image Preview", value: "gemini-3.1-flash-image-preview", capabilities: [MODE_IMAGE_EDIT, MODE_TEXT_TO_IMAGE] },
+      { label: "Seedream 5.0", value: "seedream-5.0", capabilities: [MODE_IMAGE_EDIT, MODE_TEXT_TO_IMAGE] },
+      { label: "Doubao Seedream 5.0", value: "doubao-seedream-5.0", capabilities: [MODE_IMAGE_EDIT, MODE_TEXT_TO_IMAGE] },
+      { label: "Vidu Q2", value: "vidu-q2", capabilities: ["image-to-image", MODE_TEXT_TO_IMAGE] }
     ],
     availableModels: [
-      { label: DEFAULT_MODEL_LABEL, value: DEFAULT_MODEL_VALUE, capability: MODE_IMAGE_EDIT },
-      { label: "Doubao Seedream", value: "doubao-seedream-5-edit", capability: MODE_IMAGE_EDIT },
-      { label: "Seedream", value: "seedream-5-edit", capability: MODE_IMAGE_EDIT },
-      { label: "Gemini Flash", value: "gemini-3.1-flash-edit", capability: MODE_IMAGE_EDIT }
+      { label: DEFAULT_MODEL_LABEL, value: DEFAULT_MODEL_VALUE, capabilities: [MODE_IMAGE_EDIT, MODE_TEXT_TO_IMAGE] },
+      { label: "Gemini 3.1 Flash Image Preview", value: "gemini-3.1-flash-image-preview", capabilities: [MODE_IMAGE_EDIT, MODE_TEXT_TO_IMAGE] },
+      { label: "Seedream 5.0", value: "seedream-5.0", capabilities: [MODE_IMAGE_EDIT, MODE_TEXT_TO_IMAGE] },
+      { label: "Doubao Seedream 5.0", value: "doubao-seedream-5.0", capabilities: [MODE_IMAGE_EDIT, MODE_TEXT_TO_IMAGE] }
     ],
     modelIndex: 0,
     modelLabel: DEFAULT_MODEL_LABEL,
@@ -195,11 +205,33 @@ Page({
   onLoad: function (options) {
     var templateId = options && options.templateId ? decodeOption(options.templateId) : "";
     this.prefillFromOptions(options || {});
+    this.loadModels();
     if (templateId) {
       this.loadTemplateSeed(templateId);
     } else {
       this.scheduleEstimate();
     }
+  },
+
+  loadModels: function () {
+    var page = this;
+    if (!this.data.apiReady || !api.listImageModels) return;
+    api.listImageModels().then(function (payload) {
+      var records = (payload && (payload.models || payload.records)) || [];
+      var models = records.map(publicModel);
+      var current = page.data.models[page.data.modelIndex] || {};
+      var available = modelsForCapability(models, page.data.capability);
+      if (!models.length || !available.length) return;
+      var index = modelIndexFor(available, current.value || DEFAULT_MODEL_VALUE);
+      page.setData({
+        models: models,
+        availableModels: available,
+        modelIndex: index,
+        modelLabel: available[index].label,
+      });
+    }).catch(function () {
+      // Keep the local fallback while the authoritative registry is unavailable.
+    });
   },
 
   onShow: function () {
@@ -401,6 +433,7 @@ Page({
         page.setData({
           referenceImagePath: next[0] || "",
           referenceImagePaths: next,
+          referenceAssetIds: [],
         }, function () {
           page.scheduleEstimate();
         });
@@ -430,6 +463,7 @@ Page({
           page.setData({
             referenceImagePath: next[0] || "",
             referenceImagePaths: next,
+            referenceAssetIds: [],
           }, function () {
             page.scheduleEstimate();
           });
@@ -455,6 +489,7 @@ Page({
     this.setData({
       referenceImagePath: next[0] || "",
       referenceImagePaths: next,
+      referenceAssetIds: [],
       estimateText: "上传参考图后显示预计消耗",
       estimateLoading: false,
       estimateError: "",
@@ -496,6 +531,7 @@ Page({
       templateId: this.data.templateId,
       sourceTaskId: this.data.sourceTaskId,
       referenceImages: referenceImages,
+      referenceAssetIds: this.data.capability === MODE_TEXT_TO_IMAGE ? [] : (this.data.referenceAssetIds || []),
       outputCount: this.data.outputCounts[this.data.countIndex],
       aspectRatio: this.data.capability === MODE_TEXT_TO_IMAGE ? "1:1" : "3:4",
       resolution: "1k",
@@ -694,9 +730,13 @@ Page({
         var referenceUrls = uploads.map(function (upload) {
           return upload.url || upload.fileUrl || upload.assetUrl || upload.key || upload.path;
         }).filter(Boolean);
-        if (capability !== MODE_TEXT_TO_IMAGE && referenceUrls.length === 0) {
-          throw new Error("上传成功但没有返回图片 URL");
+        var referenceAssetIds = uploads.map(function (upload) {
+          return upload.assetId || upload.asset_id || "";
+        }).filter(Boolean);
+        if (capability !== MODE_TEXT_TO_IMAGE && referenceUrls.length === 0 && referenceAssetIds.length === 0) {
+          throw new Error("上传成功但没有返回图片 assetId");
         }
+        page.setData({ referenceAssetIds: referenceAssetIds });
         return api.createGenerationTask({
           source: "wechat-miniapp",
           model: model.value,
@@ -706,6 +746,7 @@ Page({
           templateId: page.data.templateId,
           sourceTaskId: page.data.sourceTaskId,
           referenceImages: capability === MODE_TEXT_TO_IMAGE ? [] : referenceUrls,
+          referenceAssetIds: capability === MODE_TEXT_TO_IMAGE ? [] : referenceAssetIds,
           outputCount: outputCount,
           aspectRatio: capability === MODE_TEXT_TO_IMAGE ? "1:1" : "3:4",
           resolution: "1k",

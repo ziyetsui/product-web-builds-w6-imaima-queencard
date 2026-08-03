@@ -251,6 +251,7 @@ function rowToTask(row) {
     settledCredits: Number(row.settled_credits || 0),
     creditHoldId: row.credit_hold_id || null,
     rawProviderResult: parseJson(row.raw_provider_result, null),
+    metadata: parseJson(row.metadata, {}),
     errorCode: row.error_code || "",
     errorMessage: row.error_message || "",
     attempt: Number(row.attempt || 0),
@@ -669,59 +670,61 @@ function createPostgresStore(options = {}) {
     return rowToPackage(result.rows[0]);
   }
 
-  async function createCreditHoldOnce(input) {
+  async function createCreditHoldInTransaction(client, input) {
     const createdAt = timestamp(clock);
     const expected = holdRequest(input);
     const requestFingerprint = fingerprint(expected);
     const holdId = input.id || id("hold");
-    return withTransaction(pool, async (client) => {
-      const replay = await client.query("SELECT * FROM credit_holds WHERE idempotency_key = $1", [expected.idempotencyKey]);
-      if (replay.rowCount) {
-        if (!holdMatchesRequest(replay.rows[0], expected, requestFingerprint)) throw err("Credit hold idempotency conflict", 409);
-        return rowToHold(replay.rows[0]);
-      }
-      const inserted = await client.query(`
+    const replay = await client.query("SELECT * FROM credit_holds WHERE idempotency_key = $1 FOR UPDATE", [expected.idempotencyKey]);
+    if (replay.rowCount) {
+      if (!holdMatchesRequest(replay.rows[0], expected, requestFingerprint)) throw err("Credit hold idempotency conflict", 409);
+      return rowToHold(replay.rows[0]);
+    }
+    const inserted = await client.query(`
         INSERT INTO credit_holds (id, user_id, task_id, idempotency_key, credits, package_allocation, request_fingerprint, created_at)
         VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, $6, $7)
         ON CONFLICT (idempotency_key) DO NOTHING RETURNING *
       `, [holdId, expected.userId, expected.taskId || null, expected.idempotencyKey, expected.credits, requestFingerprint, createdAt]);
-      if (!inserted.rowCount) {
-        const existing = await client.query("SELECT * FROM credit_holds WHERE idempotency_key = $1", [expected.idempotencyKey]);
-        if (!existing.rowCount || !holdMatchesRequest(existing.rows[0], expected, requestFingerprint)) throw err("Credit hold idempotency conflict", 409);
-        return rowToHold(existing.rows[0]);
-      }
-      if (!holdMatchesRequest(inserted.rows[0], expected, requestFingerprint)) throw err("Credit hold idempotency conflict", 409);
-      await changeUserBalance(client, expected.userId, -expected.credits, createdAt);
-      const allocations = expected.packageAllocation;
-      let remainingToAllocate = expected.credits;
-      const selected = allocations.length ? allocations : (await client.query(`
+    if (!inserted.rowCount) {
+      const existing = await client.query("SELECT * FROM credit_holds WHERE idempotency_key = $1 FOR UPDATE", [expected.idempotencyKey]);
+      if (!existing.rowCount || !holdMatchesRequest(existing.rows[0], expected, requestFingerprint)) throw err("Credit hold idempotency conflict", 409);
+      return rowToHold(existing.rows[0]);
+    }
+    if (!holdMatchesRequest(inserted.rows[0], expected, requestFingerprint)) throw err("Credit hold idempotency conflict", 409);
+    await changeUserBalance(client, expected.userId, -expected.credits, createdAt);
+    const allocations = expected.packageAllocation;
+    let remainingToAllocate = expected.credits;
+    const selected = allocations.length ? allocations : (await client.query(`
         SELECT id, remaining_credits FROM credit_packages
         WHERE user_id = $1 AND status = 'ACTIVE' AND (expired_at IS NULL OR expired_at > $2) AND remaining_credits > 0
         ORDER BY expired_at NULLS LAST, created_at ASC, id ASC FOR UPDATE
       `, [expected.userId, createdAt])).rows.map((row) => ({ packageId: row.id, credits: Math.min(Number(row.remaining_credits), remainingToAllocate) }));
-      const normalized = [];
-      for (const allocation of selected) {
-        const amount = Math.min(Number(allocation.credits), remainingToAllocate);
-        if (amount <= 0) continue;
-        const locked = await client.query("SELECT remaining_credits, frozen_credits FROM credit_packages WHERE id = $1 AND user_id = $2 FOR UPDATE", [allocation.packageId, expected.userId]);
-        if (!locked.rowCount || Number(locked.rows[0].remaining_credits) < amount) throw err("Insufficient credits", 402);
-        const nextRemaining = Number(locked.rows[0].remaining_credits) - amount;
-        const nextFrozen = Number(locked.rows[0].frozen_credits) + amount;
-        const updated = await client.query(`
+    const normalized = [];
+    for (const allocation of selected) {
+      const amount = Math.min(Number(allocation.credits), remainingToAllocate);
+      if (amount <= 0) continue;
+      const locked = await client.query("SELECT remaining_credits, frozen_credits FROM credit_packages WHERE id = $1 AND user_id = $2 FOR UPDATE", [allocation.packageId, expected.userId]);
+      if (!locked.rowCount || Number(locked.rows[0].remaining_credits) < amount) throw err("Insufficient credits", 402);
+      const nextRemaining = Number(locked.rows[0].remaining_credits) - amount;
+      const nextFrozen = Number(locked.rows[0].frozen_credits) + amount;
+      const updated = await client.query(`
           UPDATE credit_packages SET remaining_credits = $1, frozen_credits = $2, status = 'ACTIVE', updated_at = $3
           WHERE id = $4 AND user_id = $5 AND remaining_credits >= $6 RETURNING id
         `, [nextRemaining, nextFrozen, createdAt, allocation.packageId, expected.userId, amount]);
-        if (!updated.rowCount) throw err("Insufficient credits", 402);
-        normalized.push({ packageId: allocation.packageId, credits: amount });
-        remainingToAllocate -= amount;
-      }
-      if (remainingToAllocate > 0) throw err("Insufficient credits", 402);
-      const result = await client.query(
+      if (!updated.rowCount) throw err("Insufficient credits", 402);
+      normalized.push({ packageId: allocation.packageId, credits: amount });
+      remainingToAllocate -= amount;
+    }
+    if (remainingToAllocate > 0) throw err("Insufficient credits", 402);
+    const result = await client.query(
         "UPDATE credit_holds SET package_allocation = $1 WHERE id = $2 RETURNING *",
         [JSON.stringify(normalized), inserted.rows[0].id],
       );
-      return rowToHold(result.rows[0]);
-    });
+    return rowToHold(result.rows[0]);
+  }
+
+  async function createCreditHoldOnce(input) {
+    return withTransaction(pool, (client) => createCreditHoldInTransaction(client, input));
   }
 
   function createCreditHold(input) {
@@ -852,11 +855,11 @@ function createPostgresStore(options = {}) {
       ? "ON CONFLICT (owner_id, idempotency_key) DO NOTHING"
       : "ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, images = EXCLUDED.images, provider = EXCLUDED.provider, provider_task_id = EXCLUDED.provider_task_id, prompt = EXCLUDED.prompt, topic = EXCLUDED.topic, reference_images = EXCLUDED.reference_images, model = EXCLUDED.model, output_count = EXCLUDED.output_count, aspect_ratio = EXCLUDED.aspect_ratio, resolution = EXCLUDED.resolution, requested_credits = EXCLUDED.requested_credits, settled_credits = EXCLUDED.settled_credits, credit_hold_id = EXCLUDED.credit_hold_id, raw_provider_result = EXCLUDED.raw_provider_result, error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message, updated_at = EXCLUDED.updated_at, completed_at = EXCLUDED.completed_at";
     const result = await pool.query(`
-      INSERT INTO generation_tasks (id, owner_id, idempotency_key, status, images, template_id, provider, provider_task_id, provider_result_url, mode, prompt, topic, reference_images, model, output_count, aspect_ratio, resolution, requested_credits, settled_credits, credit_hold_id, raw_provider_result, error_code, error_message, created_at, updated_at, started_at, completed_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $24, $25, $26)
+      INSERT INTO generation_tasks (id, owner_id, idempotency_key, status, images, template_id, provider, provider_task_id, provider_result_url, mode, prompt, topic, reference_images, model, output_count, aspect_ratio, resolution, requested_credits, settled_credits, credit_hold_id, raw_provider_result, metadata, error_code, error_message, created_at, updated_at, started_at, completed_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $25, $26, $27)
       ${conflict}
       RETURNING *
-    `, [taskIdValue, input.ownerId, input.idempotencyKey || null, input.status || "completed", JSON.stringify(input.images || []), input.templateId || null, input.provider || null, input.providerTaskId || null, input.providerResultUrl || null, input.mode || null, input.prompt || "", input.topic || "", JSON.stringify(input.referenceImages || []), input.model || "", positiveInt(input.outputCount, 1), input.aspectRatio || "", input.resolution || "", Number(input.requestedCredits || 0), Number(input.settledCredits || 0), input.creditHoldId || null, JSON.stringify(input.rawProviderResult || null), input.errorCode || null, input.errorMessage || null, createdAt, input.startedAt || null, input.completedAt || null]);
+    `, [taskIdValue, input.ownerId, input.idempotencyKey || null, input.status || "completed", JSON.stringify(input.images || []), input.templateId || null, input.provider || null, input.providerTaskId || null, input.providerResultUrl || null, input.mode || null, input.prompt || "", input.topic || "", JSON.stringify(input.referenceImages || []), input.model || "", positiveInt(input.outputCount, 1), input.aspectRatio || "", input.resolution || "", Number(input.requestedCredits || 0), Number(input.settledCredits || 0), input.creditHoldId || null, JSON.stringify(input.rawProviderResult || null), JSON.stringify(input.metadata || {}), input.errorCode || null, input.errorMessage || null, createdAt, input.startedAt || null, input.completedAt || null]);
     if (!result.rowCount && input.idempotencyKey) {
       const existing = await pool.query("SELECT * FROM generation_tasks WHERE owner_id = $1 AND idempotency_key = $2", [input.ownerId, input.idempotencyKey]);
       return rowToTask(existing.rows[0]);
@@ -866,6 +869,49 @@ function createPostgresStore(options = {}) {
 
   function createTask(input) {
     return singleFlight(input.idempotencyKey ? `task:${input.ownerId}:${input.idempotencyKey}` : null, () => createTaskOnce(input));
+  }
+
+  function createTaskWithCreditHold(input) {
+    const task = input.task || {};
+    const key = String(task.idempotencyKey || input.hold?.idempotencyKey || "");
+    return singleFlight(`generation:${task.ownerId}:${key}`, async () => withTransaction(pool, async (client) => {
+      const existing = key
+        ? await client.query("SELECT * FROM generation_tasks WHERE owner_id = $1 AND idempotency_key = $2 FOR UPDATE", [task.ownerId, key])
+        : { rowCount: 0, rows: [] };
+      if (existing.rowCount) {
+        const holdRow = task.creditHoldId
+          ? await client.query("SELECT * FROM credit_holds WHERE id = $1", [task.creditHoldId])
+          : await client.query("SELECT * FROM credit_holds WHERE task_id = $1", [existing.rows[0].id]);
+        return { task: rowToTask(existing.rows[0]), hold: rowToHold(holdRow.rows[0]), created: false };
+      }
+
+      const hold = await createCreditHoldInTransaction(client, input.hold);
+      const createdAt = task.createdAt || timestamp(clock);
+      const result = await client.query(`
+        INSERT INTO generation_tasks (
+          id, owner_id, idempotency_key, status, images, template_id, provider, provider_task_id,
+          provider_result_url, mode, prompt, topic, reference_images, model, output_count,
+          aspect_ratio, resolution, requested_credits, settled_credits, credit_hold_id,
+          raw_provider_result, metadata, error_code, error_message, created_at, updated_at, started_at, completed_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+          $18, $19, $20, $21, $22, $23, $24, $25, $25, $26, $27
+        ) ON CONFLICT (owner_id, idempotency_key) DO NOTHING RETURNING *
+      `, [
+        task.id || id("task"), task.ownerId, key || null, task.status || "pending", JSON.stringify(task.images || []),
+        task.templateId || null, task.provider || null, task.providerTaskId || null, task.providerResultUrl || null,
+        task.mode || null, task.prompt || "", task.topic || "", JSON.stringify(task.referenceImages || []),
+        task.model || "", positiveInt(task.outputCount, 1), task.aspectRatio || "", task.resolution || "",
+        Number(task.requestedCredits || input.hold.credits || 0), Number(task.settledCredits || 0), hold.id,
+        JSON.stringify(task.rawProviderResult || null), JSON.stringify(task.metadata || {}), task.errorCode || null,
+        task.errorMessage || null, createdAt, task.startedAt || null, task.completedAt || null,
+      ]);
+      if (!result.rowCount) {
+        const replay = await client.query("SELECT * FROM generation_tasks WHERE owner_id = $1 AND idempotency_key = $2 FOR UPDATE", [task.ownerId, key]);
+        return { task: rowToTask(replay.rows[0]), hold, created: false };
+      }
+      return { task: rowToTask(result.rows[0]), hold, created: true };
+    }));
   }
 
   async function getTask(taskId) {
@@ -922,6 +968,7 @@ function createPostgresStore(options = {}) {
     const allowed = {
       status: "status",
       images: "images",
+      provider: "provider",
       providerTaskId: "provider_task_id",
       providerResultUrl: "provider_result_url",
       rawProviderResult: "raw_provider_result",
@@ -1427,7 +1474,7 @@ function createPostgresStore(options = {}) {
     createSession, getSession, getSessionByTokenHash, touchSession, revokeSession, revokeSessionByTokenHash, revokeAllSessions,
     createCreditPackage, getCreditPackage, listCreditPackages, createCreditHold, getCreditHold, settleCreditHold, releaseCreditHold,
     addCredits, charge, listCreditTransactions,
-    createTask, getTask, listTasks, claimTask, renewTaskLease, releaseTaskLease, reclaimExpiredTasks, updateTask,
+    createTask, createTaskWithCreditHold, getTask, listTasks, claimTask, renewTaskLease, releaseTaskLease, reclaimExpiredTasks, updateTask,
     createAsset, createGeneratedAsset: createAsset, getAsset, getGeneratedAsset: getAsset, findOwnedAsset, findOwnedImageAsset, listAssets, listGeneratedAssets: listAssets, deleteAsset,
     createReferenceAsset, getReferenceAsset, listReferenceAssets, deleteReferenceAsset,
     createCatalogVersion, getCatalogVersion, getCatalogVersionState, getActiveCatalogVersion, activateCatalogVersion, importCatalogVersion, syncTemplates, listTemplates, getTemplate,

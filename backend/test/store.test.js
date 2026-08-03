@@ -473,3 +473,45 @@ test("sqlite store persists and filters generation task history", () => {
   assert.equal(firstPage.pagination.totalPages, 2);
   reopened.close();
 });
+
+for (const adapter of mockAdapters) {
+  test(`${adapter.name} atomically holds credits with an idempotent leased generation task`, async () => {
+    const store = adapter.create({ environment: "test", initialCredits: 2 });
+    try {
+      const user = store.ensureUser({ appid: "wx-durable", openid: `${adapter.name}-durable` });
+      const request = {
+        task: {
+          id: `${adapter.name}-durable-task`,
+          ownerId: user.id,
+          idempotencyKey: `${adapter.name}-durable-key`,
+          status: "pending",
+          requestedCredits: 2,
+          outputCount: 2,
+        },
+        hold: {
+          id: `${adapter.name}-durable-hold`,
+          userId: user.id,
+          taskId: `${adapter.name}-durable-task`,
+          idempotencyKey: `${adapter.name}-durable-key`,
+          credits: 2,
+        },
+      };
+      const first = await store.createTaskWithCreditHold(request);
+      const replay = await store.createTaskWithCreditHold({
+        ...request,
+        task: { ...request.task, id: `${adapter.name}-durable-retry` },
+        hold: { ...request.hold, id: `${adapter.name}-durable-hold-retry` },
+      });
+      assert.equal(replay.task.id, first.task.id);
+      assert.equal(replay.hold.id, first.hold.id);
+      assert.equal((await store.getUser(user.id)).balance, 0);
+      const claimed = await store.claimTask(`${adapter.name}-worker`, { leaseDurationMs: 10 });
+      assert.equal(claimed.id, first.task.id);
+      const reclaimed = await store.reclaimExpiredTasks(new Date(Date.now() + 20));
+      assert.equal(reclaimed[0].id, first.task.id);
+      assert.equal(reclaimed[0].status, "retryable");
+    } finally {
+      await store.close();
+    }
+  });
+}

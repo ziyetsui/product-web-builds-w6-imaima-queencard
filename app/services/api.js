@@ -27,6 +27,7 @@ function isPublicRequest(options) {
   var path = String(options && options.path || "");
   return path === "/auth/wechat-login"
     || path === "/pricing"
+    || path === "/models"
     || path === "/templates"
     || /^\/templates\/[^/]+$/.test(path);
 }
@@ -204,6 +205,13 @@ function listPricingProducts() {
   });
 }
 
+function listImageModels() {
+  return request({
+    path: "/models",
+    protected: false,
+  });
+}
+
 function createOrder(productId, channel) {
   return request({
     path: "/orders",
@@ -357,6 +365,7 @@ module.exports = {
   logout: logout,
   getMe: getMe,
   listPricingProducts: listPricingProducts,
+  listImageModels: listImageModels,
   createOrder: createOrder,
   listOrders: listOrders,
   getBilling: getBilling,

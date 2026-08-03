@@ -6,6 +6,13 @@ const { AuthService } = require("./services/auth-service");
 const { serveAsset } = require("./assets");
 const { createImageProvider } = require("./providers");
 const { createSqliteStore } = require("./store");
+const { createLocalStorage } = require("./storage/local-storage");
+const { createS3Storage } = require("./storage/s3-storage");
+const { createAssetService } = require("./services/asset-service");
+const { createCreditService } = require("./services/credit-service");
+const { createGenerationService } = require("./services/generation-service");
+const { createGenerationWorker } = require("./worker/generation-worker");
+const { createModelRegistry } = require("./services/model-registry");
 const { fetchTemplateById, fetchTemplateList } = require("./templates");
 const { importCatalog, validateCatalog } = require("./services/catalog-service");
 
@@ -65,10 +72,6 @@ async function requireAdmin(request, authService, env) {
   return { payload, user };
 }
 
-function taskId() {
-  return `task_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
 function appOrderId() {
   return `ord_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
 }
@@ -88,6 +91,7 @@ function generationCapability(body = {}, referenceImages = []) {
 
 function validateGenerationBody(body = {}) {
   const referenceImages = Array.isArray(body.referenceImages) ? body.referenceImages : [];
+  const referenceAssetIds = Array.isArray(body.referenceAssetIds) ? body.referenceAssetIds : [];
   const capability = generationCapability(body, referenceImages);
   const outputCount = estimateCredits(body);
 
@@ -109,7 +113,7 @@ function validateGenerationBody(body = {}) {
     throw error;
   }
 
-  if (capability !== "text-to-image" && (referenceImages.length < 1 || referenceImages.length > 3)) {
+  if (capability !== "text-to-image" && (referenceImages.length + referenceAssetIds.length < 1 || referenceImages.length + referenceAssetIds.length > 3)) {
     const error = new Error("Image reference generation requires 1 to 3 reference images");
     error.status = 400;
     throw error;
@@ -118,6 +122,7 @@ function validateGenerationBody(body = {}) {
   return {
     capability,
     referenceImages,
+    referenceAssetIds,
     outputCount,
   };
 }
@@ -135,23 +140,11 @@ function taskMetadata(template, body = {}) {
     topic: body.topic || (template && template.title) || "",
     referenceImages,
     capability,
-    model: body.model || seed.model || (capability === "text-to-image" ? "gpt-image" : "gpt-image-2-edit"),
+    model: body.model || seed.model || "gpt-image-2",
     outputCount: estimateCredits(body),
     aspectRatio: body.aspectRatio || seed.aspectRatio || "",
     resolution: body.resolution || seed.resolution || "",
   };
-}
-
-function mimeExt(mimeType) {
-  if (mimeType === "image/png") return ".png";
-  if (mimeType === "image/webp") return ".webp";
-  if (mimeType === "image/gif") return ".gif";
-  return ".jpg";
-}
-
-function uploadId(fileName, mimeType) {
-  const ext = pathModule.extname(fileName || "") || mimeExt(mimeType);
-  return `ref_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}${ext}`;
 }
 
 function publicBaseUrl(env, request) {
@@ -332,28 +325,6 @@ function paymentInstructions(order) {
   };
 }
 
-async function saveReferenceImage(request, env) {
-  const form = await request.formData();
-  const file = form.get("file");
-  if (!file || typeof file.arrayBuffer !== "function") {
-    const error = new Error("Missing upload file");
-    error.status = 400;
-    throw error;
-  }
-
-  const root = pathModule.resolve(getEnv(env, "MINIAPP_UPLOAD_ROOT", pathModule.resolve(__dirname, "../data/uploads")));
-  const dir = pathModule.join(root, "reference");
-  const fileName = uploadId(file.name, file.type);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(pathModule.join(dir, fileName), Buffer.from(await file.arrayBuffer()));
-  return {
-    url: `${publicBaseUrl(env, request)}/uploads/reference/${encodeURIComponent(fileName)}`,
-    fileName,
-    size: file.size || 0,
-    contentType: file.type || "application/octet-stream",
-  };
-}
-
 function templateOptions(env, query, request) {
   const source = getEnv(env, "MINIAPP_TEMPLATE_SOURCE", getEnv(env, "MINIAPP_TEMPLATE_API_BASE_URL") ? "remote" : "github");
   return {
@@ -383,6 +354,61 @@ function createApp(options = {}) {
   const imageProvider = options.imageProvider || createImageProvider({
     env,
     fetch: fetchImpl,
+  });
+  const modelRegistry = options.modelRegistry || createModelRegistry({ models: options.models });
+  const storage = options.storage || (() => {
+    const driver = String(getEnv(env, "MINIAPP_STORAGE_PROVIDER", getEnv(env, "STORAGE_PROVIDER", "local"))).toLowerCase();
+    if (driver === "s3" || driver === "minio" || driver === "r2") {
+      return createS3Storage({
+        bucket: getEnv(env, "MINIAPP_STORAGE_BUCKET", getEnv(env, "S3_BUCKET")),
+        endpoint: getEnv(env, "MINIAPP_STORAGE_ENDPOINT", getEnv(env, "S3_ENDPOINT")),
+        region: getEnv(env, "MINIAPP_STORAGE_REGION", getEnv(env, "S3_REGION", "auto")),
+        accessKeyId: getEnv(env, "MINIAPP_STORAGE_ACCESS_KEY_ID", getEnv(env, "S3_ACCESS_KEY_ID")),
+        secretAccessKey: getEnv(env, "MINIAPP_STORAGE_SECRET_ACCESS_KEY", getEnv(env, "S3_SECRET_ACCESS_KEY")),
+        forcePathStyle: getEnv(env, "MINIAPP_STORAGE_FORCE_PATH_STYLE", "") === "1",
+      });
+    }
+    if (["production", "prod"].includes(String(getEnv(env, "NODE_ENV")).toLowerCase())) {
+      if (!getEnv(env, "MINIAPP_ASSET_SIGNING_SECRET")) {
+        const unavailable = async () => {
+          const error = new Error("Private asset storage is not configured in production");
+          error.code = "ASSET_STORAGE_CONFIG_INVALID";
+          error.status = 503;
+          throw error;
+        };
+        return { driver: "disabled", put: unavailable, head: unavailable, get: unavailable, getSignedDownloadUrl: unavailable, delete: unavailable };
+      }
+    }
+    return createLocalStorage({
+      root: getEnv(env, "MINIAPP_UPLOAD_ROOT", pathModule.resolve(__dirname, "../data/uploads")),
+      baseUrl: getEnv(env, "MINIAPP_PUBLIC_ASSET_BASE_URL"),
+      signingSecret: getEnv(env, "MINIAPP_ASSET_SIGNING_SECRET", "local-development-only-secret"),
+    });
+  })();
+  const assetService = options.assetService || createAssetService({
+    store,
+    storage,
+    fetch: fetchImpl,
+    environment: getEnv(env, "NODE_ENV", "development"),
+  });
+  const creditService = options.creditService || createCreditService({ store });
+  const generationService = options.generationService || createGenerationService({
+    store,
+    registry: modelRegistry,
+    creditService,
+    providerName: imageProvider.name,
+  });
+  const generationWorker = options.worker || createGenerationWorker({
+    store,
+    provider: imageProvider,
+    generation: generationService,
+    registry: modelRegistry,
+    assetService,
+    leaseDurationMs: Number(getEnv(env, "MINIAPP_GENERATION_LEASE_MS", "60000")),
+    pollIntervalMs: Number(getEnv(env, "MINIAPP_GENERATION_POLL_MS", "1000")),
+    maxAttempts: Number(getEnv(env, "MINIAPP_GENERATION_MAX_ATTEMPTS", "3")),
+    backoffBaseMs: Number(getEnv(env, "MINIAPP_GENERATION_BACKOFF_BASE_MS", "1000")),
+    backoffCapMs: Number(getEnv(env, "MINIAPP_GENERATION_BACKOFF_CAP_MS", "30000")),
   });
   const remoteTemplateSource = getEnv(env, "MINIAPP_TEMPLATE_SOURCE", "") === "remote"
     || Boolean(getEnv(env, "MINIAPP_TEMPLATE_API_BASE_URL", ""));
@@ -455,80 +481,42 @@ function createApp(options = {}) {
     return publicTemplateAssets(template, env, request);
   }
 
-  async function runGenerationTask(input, id) {
-    const metadata = taskMetadata(input.template, input.body);
-    try {
-      const generation = await imageProvider.generate({
-        template: input.template,
-        prompt: metadata.prompt,
-        referenceImages: metadata.referenceImages,
-        outputNumber: metadata.outputCount,
-        user: input.user,
-        request: input.body,
-      });
-      await store.createTask({
-        id,
-        taskId: id,
-        ownerId: input.user.id,
-        status: generation.status || "completed",
-        images: generation.images || [],
-        templateId: input.template.id,
-        provider: generation.provider || imageProvider.name || "unknown",
-        providerTaskId: generation.providerTaskId || "",
-        mode: getEnv(env, "MINIAPP_IMAGE_PROVIDER", getEnv(env, "MINIAPP_GENERATION_MODE", "preview")),
-        ...metadata,
-        rawProviderResult: generation.raw || null,
-        createdAt: input.createdAt,
-      });
-    } catch (error) {
-      await store.createTask({
-        id,
-        taskId: id,
-        ownerId: input.user.id,
-        status: "failed",
-        images: [],
-        templateId: input.template.id,
-        provider: imageProvider.name || "unknown",
-        providerTaskId: "",
-        mode: getEnv(env, "MINIAPP_IMAGE_PROVIDER", getEnv(env, "MINIAPP_GENERATION_MODE", "preview")),
-        ...metadata,
-        rawProviderResult: {
-          error: error.message || "Image generation failed",
-        },
-        createdAt: input.createdAt,
-      });
-    }
+  async function createGenerationTask(input) {
+    const body = input.body || {};
+    const template = input.template || {};
+    const templateReferences = Array.isArray(template.referenceImages) && template.referenceImages.length
+      ? template.referenceImages
+      : template.previewUrl ? [template.previewUrl] : [];
+    const referenceImages = Array.isArray(body.referenceImages) ? body.referenceImages : templateReferences;
+    const referenceAssetIds = Array.isArray(body.referenceAssetIds) ? body.referenceAssetIds : [];
+    const capability = body.capability || (referenceImages.length || referenceAssetIds.length ? "image-edit" : "text-to-image");
+    const model = body.model || template.seed?.model || undefined;
+    const result = await generationService.submit({
+      ownerId: input.user.id,
+      idempotencyKey: input.idempotencyKey,
+      templateId: template.id || "custom",
+      prompt: body.prompt || template.prompt || "",
+      topic: body.topic || template.title || "",
+      model,
+      capability,
+      referenceAssetIds,
+      referenceImages,
+      aspectRatio: body.aspectRatio || template.seed?.aspectRatio || (capability === "text-to-image" ? "1:1" : "3:4"),
+      resolution: body.resolution || template.seed?.resolution || "1k",
+      outputCount: body.outputCount || body.outputNumber || 1,
+      previewUrl: template.previewUrl || template.thumbnailUrl || "",
+    });
+    setImmediate(() => generationWorker.schedule());
+    return result.task;
   }
 
-  async function createGenerationTask(input) {
-    const metadata = taskMetadata(input.template, input.body);
-    const requestedCredits = input.requestedCredits || metadata.outputCount;
-    await store.charge(input.user.id, requestedCredits, input.reason);
-    const id = taskId();
-    const createdAt = new Date().toISOString();
-    const task = await store.createTask({
-      id,
-      taskId: id,
-      ownerId: input.user.id,
-      status: "pending",
-      images: [],
-      templateId: input.template.id,
-      provider: imageProvider.name || "unknown",
-      providerTaskId: "",
-      mode: getEnv(env, "MINIAPP_IMAGE_PROVIDER", getEnv(env, "MINIAPP_GENERATION_MODE", "preview")),
-      ...metadata,
-      rawProviderResult: {
-        request: input.body,
-      },
-      createdAt,
-    });
-    setTimeout(() => {
-      void runGenerationTask({
-        ...input,
-        createdAt,
-      }, id).catch(() => {});
-    }, 0);
-    return task;
+  function serializeTask(task) {
+    const images = Array.isArray(task?.images) ? task.images : [];
+    return {
+      ...task,
+      images: images.map((image) => typeof image === "string" ? image : image?.url || "").filter(Boolean),
+      imageAssets: images.filter((image) => image && typeof image === "object" && image.assetId),
+    };
   }
 
   async function handle(request) {
@@ -544,7 +532,7 @@ function createApp(options = {}) {
         return json({ success: true, data: { ok: true } });
       }
 
-      const assetResponse = await serveAsset(path, env);
+      const assetResponse = await serveAsset(path, env, request);
       if (assetResponse) return assetResponse;
 
       if (path === "/api/miniapp/auth/wechat-login" && request.method === "POST") {
@@ -572,6 +560,16 @@ function createApp(options = {}) {
 
       if (path === "/api/miniapp/pricing" && request.method === "GET") {
         return json({ success: true, data: pricingProducts(env) });
+      }
+
+      if (path === "/api/miniapp/models" && request.method === "GET") {
+        return json({
+          success: true,
+          data: {
+            defaultModel: modelRegistry.defaultModel().key,
+            models: modelRegistry.listPublic(),
+          },
+        });
       }
 
       if (path === "/api/miniapp/account/me" && request.method === "GET") {
@@ -804,9 +802,36 @@ function createApp(options = {}) {
 
       if (path === "/api/miniapp/uploads/reference-image" && request.method === "POST") {
         const payload = await getAuthPayload(request, authService);
-        await store.ensureUser(payload);
-        const upload = await saveReferenceImage(request, env);
-        return json({ success: true, data: upload });
+        const user = await store.ensureUser(payload);
+        const form = await request.formData();
+        const file = form.get("file");
+        if (!file || typeof file.arrayBuffer !== "function") {
+          const error = new Error("Missing upload file");
+          error.status = 400;
+          throw error;
+        }
+        const asset = await assetService.createReferenceAsset({
+          userId: user.id,
+          body: Buffer.from(await file.arrayBuffer()),
+          contentType: file.type,
+          filename: file.name,
+        });
+        const url = await assetService.getDownloadUrl(user.id, asset.id, {
+          baseUrl: publicBaseUrl(env, request),
+          expiresInSeconds: 300,
+        });
+        return json({
+          success: true,
+          data: {
+            assetId: asset.id,
+            url,
+            fileName: file.name || asset.id,
+            size: asset.sizeBytes,
+            contentType: asset.mimeType,
+            width: asset.width,
+            height: asset.height,
+          },
+        });
       }
 
       if (path === "/api/miniapp/templates" && request.method === "GET") {
@@ -855,9 +880,9 @@ function createApp(options = {}) {
           template,
           body,
           reason: `template:${template.id}`,
-          requestedCredits: estimateCredits(body),
+          idempotencyKey: request.headers.get("idempotency-key") || body.idempotencyKey,
         });
-        return json({ success: true, data: { taskId: task.id, status: task.status } });
+        return json({ success: true, data: { taskId: task.id, status: task.status } }, 202);
       }
 
       if (path === "/api/miniapp/image-generations" && request.method === "GET") {
@@ -867,7 +892,7 @@ function createApp(options = {}) {
         return json({
           success: true,
           data: {
-            records: data.records,
+            records: data.records.map(serializeTask),
             pagination: data.pagination,
           },
         });
@@ -877,14 +902,22 @@ function createApp(options = {}) {
         await getAuthPayload(request, authService);
         const body = await readJson(request);
         const validation = validateGenerationBody(body);
-        const outputCount = estimateCredits(body);
+        const model = modelRegistry.validate({
+          model: body.model,
+          capability: validation.capability,
+          referenceAssetIds: validation.referenceAssetIds,
+          referenceImages: validation.referenceImages,
+          aspectRatio: body.aspectRatio || (validation.capability === "text-to-image" ? "1:1" : "3:4"),
+          resolution: body.resolution || "1k",
+          outputCount: validation.outputCount,
+        });
         return json({
           success: true,
           data: {
-            requestedCredits: outputCount,
-            model: body.model || (validation.capability === "text-to-image" ? "gpt-image" : "gpt-image-2-edit"),
+            requestedCredits: model.requestedCredits,
+            model: body.model || model.modelKey,
             capability: validation.capability,
-            outputCount,
+            outputCount: model.outputCount,
           },
         });
       }
@@ -906,12 +939,22 @@ function createApp(options = {}) {
       if (imageAssetDownloadMatch && request.method === "GET") {
         const { user } = await getCurrentUser(request, authService);
         const assetId = decodeURIComponent(imageAssetDownloadMatch[1]);
-        const asset = await store.findOwnedImageAsset(user.id, assetId);
-        if (!asset) return json({ success: false, error: "Image asset not found" }, 404);
+        let location;
+        try {
+          location = await assetService.getGeneratedDownloadUrl(user.id, assetId, {
+            baseUrl: publicBaseUrl(env, request),
+            expiresInSeconds: 300,
+          });
+        } catch (error) {
+          if (error.code !== "ASSET_NOT_FOUND") throw error;
+          const legacy = await store.findOwnedImageAsset(user.id, assetId);
+          if (!legacy) return json({ success: false, error: "Image asset not found" }, 404);
+          location = legacy.url;
+        }
         return new Response(null, {
           status: 302,
           headers: {
-            Location: asset.url,
+            Location: location,
             "Cache-Control": "private, max-age=60",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "content-type, authorization",
@@ -925,8 +968,16 @@ function createApp(options = {}) {
         const user = await store.ensureUser(payload);
         const body = await readJson(request);
         const validation = validateGenerationBody(body);
-        const requestedCredits = estimateCredits(body);
-        if (user.balance < requestedCredits) return json({ success: false, error: "Insufficient credits" }, 402);
+        modelRegistry.validate({
+          model: body.model,
+          capability: validation.capability,
+          referenceAssetIds: validation.referenceAssetIds,
+          referenceImages: validation.referenceImages,
+          aspectRatio: body.aspectRatio || (validation.capability === "text-to-image" ? "1:1" : "3:4"),
+          resolution: body.resolution || "1k",
+          outputCount: validation.outputCount,
+        });
+        for (const assetId of validation.referenceAssetIds) await assetService.getReferenceAsset(user.id, assetId);
         const referenceImages = validation.referenceImages;
         const template = body.templateId ? await getTemplate(String(body.templateId), request) : {
           id: "custom",
@@ -950,11 +1001,12 @@ function createApp(options = {}) {
           body: {
             ...body,
             referenceImages,
+            referenceAssetIds: validation.referenceAssetIds,
           },
           reason: body.templateId ? `template:${template.id}` : "custom:generation",
-          requestedCredits,
+          idempotencyKey: request.headers.get("idempotency-key") || body.idempotencyKey,
         });
-        return json({ success: true, data: { taskId: task.id, status: task.status } });
+        return json({ success: true, data: { taskId: task.id, status: task.status } }, 202);
       }
 
       const regenerateMatch = path.match(/^\/api\/miniapp\/image-generations\/([^/]+)\/regenerate$/);
@@ -971,6 +1023,7 @@ function createApp(options = {}) {
           prompt: original.prompt,
           topic: original.topic,
           referenceImages,
+          referenceAssetIds: Array.isArray(original.referenceAssetIds) ? original.referenceAssetIds : [],
           model: original.model,
           outputCount: original.outputCount || 1,
           aspectRatio: original.aspectRatio,
@@ -996,23 +1049,23 @@ function createApp(options = {}) {
           template,
           body: generationBody,
           reason: `regenerate:${original.id}`,
-          requestedCredits,
+          idempotencyKey: request.headers.get("idempotency-key") || undefined,
         });
-        return json({ success: true, data: { taskId: task.id, status: task.status } });
+        return json({ success: true, data: { taskId: task.id, status: task.status } }, 202);
       }
 
       const taskMatch = path.match(/^\/api\/miniapp\/image-generations\/([^/]+)$/);
       if (taskMatch && request.method === "GET") {
-        const payload = await getAuthPayload(request, authService);
+        const { user } = await getCurrentUser(request, authService);
         const task = await store.getTask(decodeURIComponent(taskMatch[1]));
-        if (!task || task.ownerId !== payload.sub) {
+        if (!task || task.ownerId !== user.id) {
           return json({ success: false, error: "Task not found" }, 404);
         }
         return json({
           success: true,
           data: {
-            ...task,
-            error: task.rawProviderResult && task.rawProviderResult.error ? task.rawProviderResult.error : "",
+            ...serializeTask(task),
+            error: task.rawProviderResult && task.rawProviderResult.error ? task.rawProviderResult.error : task.errorMessage || "",
           },
         });
       }
@@ -1031,7 +1084,11 @@ function createApp(options = {}) {
   return {
     fetch: handle,
     initialize,
+    worker: generationWorker,
+    modelRegistry,
+    assetService,
     close() {
+      generationWorker.stop();
       if (store.close) return store.close();
     },
   };

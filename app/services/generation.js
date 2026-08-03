@@ -111,6 +111,10 @@ function normalizeTask(raw) {
   status = task.status || task.state || "running";
   error = task.error || task.errorMessage || task.message || "";
   imageItems = normalizeImageItems(task.images || task.resultImages || task.outputImages || task.outputs || task.assets);
+  normalizeImageItems(task.imageAssets || task.generatedAssets).forEach(function (asset, index) {
+    if (!imageItems[index]) imageItems[index] = asset;
+    else if (asset.assetId) imageItems[index].assetId = asset.assetId;
+  });
   images = imageItems.map(function (item) {
     return item.url;
   });
@@ -130,6 +134,7 @@ function normalizeTask(raw) {
     images: images,
     imageItems: imageItems,
     referenceImages: referenceImages,
+    referenceAssetIds: task.referenceAssetIds || request.referenceAssetIds || [],
     error: error,
     prompt: task.prompt || request.prompt || "",
     topic: task.topic || request.topic || "",

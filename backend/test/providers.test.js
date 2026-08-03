@@ -255,6 +255,40 @@ test("gptproto provider reports object errors without [object Object]", async ()
   );
 });
 
+test("provider adapters preserve structured upstream errors and normalize sync responses", async () => {
+  const provider = createImageProvider({
+    env: {
+      MINIAPP_IMAGE_PROVIDER: "gptproto",
+      GPTPROTO_API_KEY: "test-key",
+    },
+    fetch: async () => Response.json({
+      error: { code: "quota_exceeded", message: "provider quota exhausted", request_id: "req-structured-1" },
+    }, { status: 429 }),
+  });
+
+  await assert.rejects(
+    () => provider.generate({ template, prompt: template.prompt, request: { model: "gpt-image-2" } }),
+    (error) => {
+      assert.equal(error.code, "PROVIDER_UPSTREAM_ERROR");
+      assert.equal(error.providerStatus, 429);
+      assert.deepEqual(error.upstream, { code: "quota_exceeded", message: "provider quota exhausted", request_id: "req-structured-1" });
+      assert.equal(error.retryable, true);
+      return true;
+    },
+  );
+
+  const syncProvider = createImageProvider({
+    env: {
+      MINIAPP_IMAGE_PROVIDER: "gptproto",
+      GPTPROTO_API_KEY: "test-key",
+    },
+    fetch: async () => Response.json({ data: [{ url: "https://cdn.example.com/sync.png" }] }),
+  });
+  const result = await syncProvider.generate({ template, prompt: template.prompt, request: { model: "gpt-image-2" } });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(result.images, ["https://cdn.example.com/sync.png"]);
+});
+
 test("gptproto provider reports non-json upstream responses with endpoint context", async () => {
   const provider = createImageProvider({
     env: {

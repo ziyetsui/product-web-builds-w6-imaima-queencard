@@ -148,9 +148,13 @@ function sortTemplates(records, sort) {
 function createMemoryStore(options = {}) {
   const initialCredits = Number(options.initialCredits || 10);
   const environment = String(options.environment || process.env.NODE_ENV || "development").toLowerCase();
+  const clock = options.clock || (() => new Date());
   const users = new Map();
   const sessions = new Map();
   const tasks = new Map();
+  const creditHolds = new Map();
+  const referenceAssets = new Map();
+  const generatedAssets = new Map();
   const creditTransactions = [];
   const templates = new Map();
   const catalogRecords = new Map();
@@ -158,6 +162,17 @@ function createMemoryStore(options = {}) {
   let activeCatalogVersionId = null;
   const orders = new Map();
   const paymentAudit = [];
+
+  function nowIso(value) {
+    const current = value instanceof Date ? value : typeof value === "number" ? new Date(value) : clock();
+    return current instanceof Date ? current.toISOString() : String(current);
+  }
+
+  function memoryCreditError(message, status = 400) {
+    const error = new Error(message);
+    error.status = status;
+    return error;
+  }
 
   function ensureUser(identity) {
     const id = identity.appid && identity.openid
@@ -513,6 +528,8 @@ function createMemoryStore(options = {}) {
   }
 
   function findOwnedImageAsset(userId, assetId) {
+    const direct = findOwnedAsset(userId, assetId);
+    if (direct) return { taskId: direct.taskId, assetId: direct.id, url: direct.providerUrl || direct.objectKey };
     for (const task of tasks.values()) {
       if (task.ownerId !== userId) continue;
       for (const image of task.images || []) {
@@ -523,6 +540,80 @@ function createMemoryStore(options = {}) {
       }
     }
     return null;
+  }
+
+  function creditHoldRequest(input) {
+    return { userId: input.userId, taskId: input.taskId || "", idempotencyKey: String(input.idempotencyKey || ""), credits: Number(input.credits) };
+  }
+
+  function createCreditHold(input) {
+    const expected = creditHoldRequest(input);
+    if (!expected.idempotencyKey || !Number.isInteger(expected.credits) || expected.credits <= 0) {
+      const error = new Error("Invalid credit hold"); error.status = 400; throw error;
+    }
+    const requestFingerprint = fingerprint(expected);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = db.prepare("SELECT * FROM credit_holds WHERE idempotency_key = ?").get(expected.idempotencyKey);
+      if (existing) {
+        if (existing.request_fingerprint !== requestFingerprint) { const error = new Error("Credit hold idempotency conflict"); error.status = 409; throw error; }
+        db.exec("COMMIT");
+        return rowToCreditHold(existing);
+      }
+      const user = db.prepare("SELECT balance FROM users WHERE id = ?").get(expected.userId);
+      if (!user) { const error = new Error("User not found"); error.status = 404; throw error; }
+      if (Number(user.balance) < expected.credits) { const error = new Error("Insufficient credits"); error.status = 402; throw error; }
+      const now = clock().toISOString();
+      const id = input.id || `hold_${crypto.randomUUID()}`;
+      db.prepare("UPDATE users SET balance = balance - ?, updated_at = ? WHERE id = ? AND balance >= ?").run(expected.credits, now, expected.userId, expected.credits);
+      db.prepare("INSERT INTO credit_holds (id, user_id, task_id, idempotency_key, credits, request_fingerprint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, expected.userId, expected.taskId || null, expected.idempotencyKey, expected.credits, requestFingerprint, now);
+      db.exec("COMMIT");
+      return getCreditHold(id);
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  function getCreditHold(holdId) {
+    const row = db.prepare("SELECT * FROM credit_holds WHERE id = ?").get(holdId);
+    return row ? rowToCreditHold(row) : null;
+  }
+
+  function settleCreditHold(holdId, actualCredits, input = {}) {
+    const hold = getCreditHold(holdId);
+    if (!hold || hold.status !== "HOLDING") return hold;
+    const settledCredits = Number(actualCredits);
+    if (!Number.isInteger(settledCredits) || settledCredits < 0 || settledCredits > hold.credits) { const error = new Error("Invalid settled credit amount"); error.status = 400; throw error; }
+    const now = clock().toISOString();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const released = hold.credits - settledCredits;
+      db.prepare("UPDATE users SET balance = balance + ?, updated_at = ? WHERE id = ?").run(released, now, hold.userId);
+      if (settledCredits > 0) db.prepare("INSERT INTO credit_transactions (id, user_id, amount, reason, balance_after, created_at) SELECT ?, ?, ?, ?, balance, ? FROM users WHERE id = ?").run(input.transactionId || transactionId(), hold.userId, -settledCredits, input.reason || `hold:${hold.id}`, now, hold.userId);
+      db.prepare("UPDATE credit_holds SET settled_credits = ?, status = 'SETTLED', settled_at = ? WHERE id = ? AND status = 'HOLDING'").run(settledCredits, now, holdId);
+      db.exec("COMMIT");
+      return getCreditHold(holdId);
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  function releaseCreditHold(holdId) {
+    const hold = getCreditHold(holdId);
+    if (!hold || hold.status !== "HOLDING") return hold;
+    const now = clock().toISOString();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare("UPDATE users SET balance = balance + ?, updated_at = ? WHERE id = ?").run(hold.credits, now, hold.userId);
+      db.prepare("UPDATE credit_holds SET status = 'RELEASED', settled_at = ? WHERE id = ? AND status = 'HOLDING'").run(now, holdId);
+      db.exec("COMMIT");
+      return getCreditHold(holdId);
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
   }
 
   function listCreditTransactions(userId, options = new URLSearchParams()) {
@@ -547,6 +638,251 @@ function createMemoryStore(options = {}) {
     };
     tasks.set(saved.id, saved);
     return saved;
+  }
+
+  function createReferenceAsset(input) {
+    const createdAt = input.createdAt || nowIso();
+    const saved = {
+      id: input.id || `asset_${crypto.randomUUID()}`,
+      assetId: input.id || "",
+      taskId: null,
+      userId: input.userId,
+      objectKey: input.objectKey,
+      providerUrl: "",
+      mimeType: input.mimeType,
+      width: input.width || null,
+      height: input.height || null,
+      sizeBytes: input.sizeBytes || null,
+      isDeleted: false,
+      metadata: input.metadata || {},
+      createdAt,
+    };
+    saved.assetId = saved.id;
+    referenceAssets.set(saved.id, saved);
+    return saved;
+  }
+
+  function getReferenceAsset(assetId) {
+    const asset = referenceAssets.get(assetId);
+    return asset && !asset.isDeleted ? asset : null;
+  }
+
+  function listReferenceAssets(userId, options = new URLSearchParams()) {
+    const records = Array.from(referenceAssets.values()).filter((asset) => asset.userId === userId && !asset.isDeleted);
+    return paginateRecords(records.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), options);
+  }
+
+  function deleteReferenceAsset(assetId, userId) {
+    const asset = referenceAssets.get(assetId);
+    if (!asset || asset.userId !== userId || asset.isDeleted) return null;
+    asset.isDeleted = true;
+    asset.deletedAt = nowIso();
+    return asset;
+  }
+
+  function createGeneratedAsset(input) {
+    const key = `${input.taskId}:${Number(input.outputIndex || 0)}`;
+    const existing = Array.from(generatedAssets.values()).find((asset) => asset.taskId === input.taskId && asset.outputIndex === Number(input.outputIndex || 0));
+    const saved = {
+      ...(existing || {}),
+      id: existing?.id || input.id || `asset_${crypto.randomUUID()}`,
+      assetId: existing?.id || input.id || "",
+      taskId: input.taskId,
+      userId: input.userId,
+      outputIndex: Number(input.outputIndex || 0),
+      objectKey: input.objectKey,
+      providerUrl: input.providerUrl || "",
+      mimeType: input.mimeType || "image/png",
+      width: input.width || null,
+      height: input.height || null,
+      sizeBytes: input.sizeBytes || null,
+      isDeleted: false,
+      metadata: input.metadata || {},
+      createdAt: existing?.createdAt || input.createdAt || nowIso(),
+    };
+    saved.assetId = saved.id;
+    generatedAssets.set(saved.id, saved);
+    return saved;
+  }
+
+  function getAsset(assetId) {
+    const asset = generatedAssets.get(assetId);
+    return asset && !asset.isDeleted ? asset : null;
+  }
+
+  function findOwnedAsset(userId, assetId) {
+    const asset = getAsset(assetId);
+    return asset && asset.userId === userId ? asset : null;
+  }
+
+  function listAssets(userId, options = new URLSearchParams()) {
+    const records = Array.from(generatedAssets.values()).filter((asset) => asset.userId === userId && !asset.isDeleted);
+    return paginateRecords(records.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), options);
+  }
+
+  function deleteAsset(assetId, userId) {
+    const asset = generatedAssets.get(assetId);
+    if (!asset || asset.userId !== userId || asset.isDeleted) return null;
+    asset.isDeleted = true;
+    return asset;
+  }
+
+  function creditHoldRequest(input) {
+    return {
+      userId: input.userId,
+      taskId: input.taskId || "",
+      idempotencyKey: String(input.idempotencyKey || ""),
+      credits: Number(input.credits),
+    };
+  }
+
+  function createCreditHold(input) {
+    const expected = creditHoldRequest(input);
+    if (!expected.idempotencyKey || !Number.isInteger(expected.credits) || expected.credits <= 0) throw memoryCreditError("Invalid credit hold", 400);
+    const requestFingerprint = fingerprint(expected);
+    const existing = Array.from(creditHolds.values()).find((hold) => hold.idempotencyKey === expected.idempotencyKey);
+    if (existing) {
+      if (existing.requestFingerprint !== requestFingerprint) throw memoryCreditError("Credit hold idempotency conflict", 409);
+      return existing;
+    }
+    const user = users.get(expected.userId);
+    if (!user) throw memoryCreditError("User not found", 404);
+    if (user.balance < expected.credits) throw memoryCreditError("Insufficient credits", 402);
+    const now = nowIso();
+    user.balance -= expected.credits;
+    user.updatedAt = now;
+    const hold = {
+      id: input.id || `hold_${crypto.randomUUID()}`,
+      userId: expected.userId,
+      taskId: expected.taskId,
+      idempotencyKey: expected.idempotencyKey,
+      credits: expected.credits,
+      settledCredits: 0,
+      status: "HOLDING",
+      packageAllocation: [],
+      requestFingerprint,
+      createdAt: now,
+      settledAt: null,
+    };
+    creditHolds.set(hold.id, hold);
+    return hold;
+  }
+
+  function getCreditHold(holdId) {
+    return creditHolds.get(holdId) || null;
+  }
+
+  function settleCreditHold(holdId, actualCredits, input = {}) {
+    const hold = creditHolds.get(holdId);
+    if (!hold) return null;
+    if (hold.status !== "HOLDING") return hold;
+    const settledCredits = Number(actualCredits);
+    if (!Number.isInteger(settledCredits) || settledCredits < 0 || settledCredits > hold.credits) throw memoryCreditError("Invalid settled credit amount", 400);
+    const now = nowIso();
+    const released = hold.credits - settledCredits;
+    const user = users.get(hold.userId);
+    user.balance += released;
+    user.updatedAt = now;
+    if (settledCredits > 0) creditTransactions.push({
+      id: input.transactionId || transactionId(),
+      userId: hold.userId,
+      amount: -settledCredits,
+      reason: input.reason || `hold:${hold.id}`,
+      balanceAfter: user.balance,
+      taskId: hold.taskId,
+      holdId: hold.id,
+      createdAt: now,
+    });
+    hold.settledCredits = settledCredits;
+    hold.status = "SETTLED";
+    hold.settledAt = now;
+    return hold;
+  }
+
+  function releaseCreditHold(holdId) {
+    const hold = creditHolds.get(holdId);
+    if (!hold) return null;
+    if (hold.status !== "HOLDING") return hold;
+    const user = users.get(hold.userId);
+    user.balance += hold.credits;
+    user.updatedAt = nowIso();
+    hold.status = "RELEASED";
+    hold.settledAt = nowIso();
+    return hold;
+  }
+
+  function createTaskWithCreditHold(input) {
+    const existing = Array.from(tasks.values()).find((task) => task.ownerId === input.task.ownerId && task.idempotencyKey === input.task.idempotencyKey);
+    if (existing) {
+      const hold = getCreditHold(existing.creditHoldId) || Array.from(creditHolds.values()).find((candidate) => candidate.taskId === existing.id);
+      if (!hold) throw memoryCreditError("Generation task hold is missing", 409);
+      return { task: existing, hold, created: false };
+    }
+    const hold = createCreditHold(input.hold);
+    const task = createTask({ ...input.task, creditHoldId: hold.id, requestedCredits: input.hold.credits });
+    return { task, hold, created: true };
+  }
+
+  function claimTask(workerId, input = {}) {
+    const now = input.now !== undefined ? new Date(input.now) : (input.clock ? new Date(input.clock()) : clock());
+    const nowValue = now.getTime();
+    const leaseDurationMs = Number(input.leaseDurationMs || 60000);
+    const candidate = Array.from(tasks.values())
+      .filter((task) => ["pending", "retryable"].includes(task.status))
+      .filter((task) => (!task.leaseExpiresAt || Date.parse(task.leaseExpiresAt) <= nowValue) && (!task.nextAttemptAt || Date.parse(task.nextAttemptAt) <= nowValue))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+    if (!candidate) return null;
+    candidate.status = "leased";
+    candidate.leaseOwner = workerId;
+    candidate.leaseExpiresAt = new Date(nowValue + leaseDurationMs).toISOString();
+    candidate.attempt = Number(candidate.attempt || 0) + 1;
+    candidate.startedAt = candidate.startedAt || now.toISOString();
+    candidate.updatedAt = now.toISOString();
+    return candidate;
+  }
+
+  function renewTaskLease(taskIdValue, workerId, input = {}) {
+    const task = tasks.get(taskIdValue);
+    if (!task || task.leaseOwner !== workerId || !["leased", "processing"].includes(task.status)) return null;
+    const now = input.now !== undefined ? new Date(input.now) : clock();
+    task.leaseExpiresAt = new Date(now.getTime() + Number(input.leaseDurationMs || 60000)).toISOString();
+    task.updatedAt = now.toISOString();
+    return task;
+  }
+
+  function releaseTaskLease(taskIdValue, workerId, input = {}) {
+    const task = tasks.get(taskIdValue);
+    if (!task || task.leaseOwner !== workerId) return null;
+    const now = nowIso();
+    task.status = input.status || "pending";
+    task.leaseOwner = "";
+    task.leaseExpiresAt = null;
+    if (input.errorCode) task.errorCode = input.errorCode;
+    if (input.errorMessage) task.errorMessage = input.errorMessage;
+    task.updatedAt = now;
+    if (task.status === "completed") task.completedAt = task.completedAt || now;
+    return task;
+  }
+
+  function reclaimExpiredTasks(input) {
+    const now = input instanceof Date ? input.getTime() : input !== undefined ? new Date(input).getTime() : clock().getTime();
+    return Array.from(tasks.values()).filter((task) => ["leased", "processing"].includes(task.status) && task.leaseExpiresAt && Date.parse(task.leaseExpiresAt) <= now).map((task) => {
+      task.status = "retryable";
+      task.leaseOwner = "";
+      task.leaseExpiresAt = null;
+      task.updatedAt = new Date(now).toISOString();
+      return task;
+    });
+  }
+
+  function updateTask(taskIdValue, updates = {}) {
+    const task = tasks.get(taskIdValue);
+    if (!task) return null;
+    for (const key of ["status", "images", "provider", "providerTaskId", "providerResultUrl", "rawProviderResult", "errorCode", "errorMessage", "settledCredits", "completedAt", "nextAttemptAt", "metadata"]) {
+      if (updates[key] !== undefined) task[key] = updates[key];
+    }
+    task.updatedAt = nowIso();
+    return task;
   }
 
   function getTask(id) {
@@ -681,6 +1017,15 @@ function createMemoryStore(options = {}) {
     listUsers,
     addCredits,
     charge,
+    createCreditPackage(input) {
+      return { id: input.id || `package_${crypto.randomUUID()}`, userId: input.userId, initialCredits: input.initialCredits || 0, remainingCredits: (input.remainingCredits ?? input.initialCredits) || 0, frozenCredits: 0, status: "ACTIVE" };
+    },
+    getCreditPackage() { return null; },
+    listCreditPackages() { return { records: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 1 } }; },
+    createCreditHold,
+    getCreditHold,
+    settleCreditHold,
+    releaseCreditHold,
     listCreditTransactions,
     createOrder,
     getOrder,
@@ -694,8 +1039,26 @@ function createMemoryStore(options = {}) {
     listPaymentAudit,
     findOwnedImageAsset,
     createTask,
+    createTaskWithCreditHold,
     getTask,
     listTasks,
+    claimTask,
+    renewTaskLease,
+    releaseTaskLease,
+    reclaimExpiredTasks,
+    updateTask,
+    createAsset: createGeneratedAsset,
+    createGeneratedAsset,
+    getAsset,
+    getGeneratedAsset: getAsset,
+    findOwnedAsset,
+    listAssets,
+    listGeneratedAssets: listAssets,
+    deleteAsset,
+    createReferenceAsset,
+    getReferenceAsset,
+    listReferenceAssets,
+    deleteReferenceAsset,
     createCatalogVersion,
     getCatalogVersion,
     getCatalogVersionState,
@@ -712,6 +1075,7 @@ function createMemoryStore(options = {}) {
 function createSqliteStore(options = {}) {
   const initialCredits = Number(options.initialCredits || 10);
   const environment = String(options.environment || process.env.NODE_ENV || "development").toLowerCase();
+  const clock = options.clock || (() => new Date());
   const dbPath = options.dbPath || process.env.MINIAPP_DB_PATH || path.resolve(__dirname, "../data/miniapp.sqlite");
   if (dbPath !== ":memory:") fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -1237,6 +1601,8 @@ function createSqliteStore(options = {}) {
   }
 
   function findOwnedImageAsset(userId, assetId) {
+    const direct = findOwnedAsset(userId, assetId);
+    if (direct) return { taskId: direct.taskId, assetId: direct.id, url: direct.providerUrl || direct.objectKey };
     const rows = db.prepare(`
       SELECT id, images_json FROM generation_tasks
       WHERE owner_id = ? AND status = 'completed'
@@ -1253,18 +1619,158 @@ function createSqliteStore(options = {}) {
     return null;
   }
 
+  function createReferenceAsset(input) {
+    const id = input.id || `asset_${crypto.randomUUID()}`;
+    const createdAt = input.createdAt || clock().toISOString();
+    db.prepare("INSERT INTO reference_assets (id, user_id, object_key, mime_type, width, height, size_bytes, is_deleted, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)").run(id, input.userId, input.objectKey, input.mimeType, input.width || null, input.height || null, input.sizeBytes || null, stringify(input.metadata || {}), createdAt);
+    return getReferenceAsset(id);
+  }
+
+  function getReferenceAsset(assetId) {
+    const row = db.prepare("SELECT * FROM reference_assets WHERE id = ? AND is_deleted = 0").get(assetId);
+    return row ? rowToAsset(row) : null;
+  }
+
+  function listReferenceAssets(userId, options = new URLSearchParams()) {
+    const page = positiveInt(options.get("page"), 1);
+    const limit = Math.min(positiveInt(options.get("limit"), 20), 100);
+    const offset = (page - 1) * limit;
+    const total = db.prepare("SELECT COUNT(*) AS total FROM reference_assets WHERE user_id = ? AND is_deleted = 0").get(userId).total;
+    const rows = db.prepare("SELECT * FROM reference_assets WHERE user_id = ? AND is_deleted = 0 ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?").all(userId, limit, offset);
+    return { records: rows.map(rowToAsset), pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) } };
+  }
+
+  function deleteReferenceAsset(assetId, userId) {
+    const result = db.prepare("UPDATE reference_assets SET is_deleted = 1, deleted_at = ? WHERE id = ? AND user_id = ? AND is_deleted = 0").run(clock().toISOString(), assetId, userId);
+    return result.changes ? getReferenceAsset(assetId) : null;
+  }
+
+  function createGeneratedAsset(input) {
+    const createdAt = input.createdAt || clock().toISOString();
+    const outputIndex = Number(input.outputIndex || 0);
+    db.prepare(`
+      INSERT INTO generated_assets (id, task_id, user_id, output_index, object_key, provider_url, mime_type, width, height, size_bytes, is_deleted, metadata_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+      ON CONFLICT(task_id, output_index) DO UPDATE SET object_key = excluded.object_key, provider_url = excluded.provider_url,
+        mime_type = excluded.mime_type, width = excluded.width, height = excluded.height, size_bytes = excluded.size_bytes,
+        is_deleted = 0, metadata_json = excluded.metadata_json
+    `).run(input.id || `asset_${crypto.randomUUID()}`, input.taskId, input.userId, outputIndex, input.objectKey, input.providerUrl || null, input.mimeType || "image/png", input.width || null, input.height || null, input.sizeBytes || null, stringify(input.metadata || {}), createdAt);
+    return rowToAsset(db.prepare("SELECT * FROM generated_assets WHERE task_id = ? AND output_index = ?").get(input.taskId, outputIndex));
+  }
+
+  function getAsset(assetId) {
+    const row = db.prepare("SELECT * FROM generated_assets WHERE id = ? AND is_deleted = 0").get(assetId);
+    return row ? rowToAsset(row) : null;
+  }
+
+  function getGeneratedAsset(assetId) { return getAsset(assetId); }
+
+  function findOwnedAsset(userId, assetId) {
+    const row = db.prepare("SELECT * FROM generated_assets WHERE id = ? AND user_id = ? AND is_deleted = 0").get(assetId, userId);
+    return row ? rowToAsset(row) : null;
+  }
+
+  function listAssets(userId, options = new URLSearchParams()) {
+    const page = positiveInt(options.get("page"), 1);
+    const limit = Math.min(positiveInt(options.get("limit"), 20), 100);
+    const offset = (page - 1) * limit;
+    const total = db.prepare("SELECT COUNT(*) AS total FROM generated_assets WHERE user_id = ? AND is_deleted = 0").get(userId).total;
+    const rows = db.prepare("SELECT * FROM generated_assets WHERE user_id = ? AND is_deleted = 0 ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?").all(userId, limit, offset);
+    return { records: rows.map(rowToAsset), pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) } };
+  }
+
+  function deleteAsset(assetId, userId) {
+    const result = db.prepare("UPDATE generated_assets SET is_deleted = 1 WHERE id = ? AND user_id = ? AND is_deleted = 0").run(assetId, userId);
+    return result.changes ? getAsset(assetId) : null;
+  }
+
+  function creditHoldRequest(input) {
+    return { userId: input.userId, taskId: input.taskId || "", idempotencyKey: String(input.idempotencyKey || ""), credits: Number(input.credits) };
+  }
+
+  function createCreditHold(input) {
+    const expected = creditHoldRequest(input);
+    if (!expected.idempotencyKey || !Number.isInteger(expected.credits) || expected.credits <= 0) { const error = new Error("Invalid credit hold"); error.status = 400; throw error; }
+    const requestFingerprint = fingerprint(expected);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = db.prepare("SELECT * FROM credit_holds WHERE idempotency_key = ?").get(expected.idempotencyKey);
+      if (existing) {
+        if (existing.request_fingerprint !== requestFingerprint) { const error = new Error("Credit hold idempotency conflict"); error.status = 409; throw error; }
+        db.exec("COMMIT");
+        return rowToCreditHold(existing);
+      }
+      const user = db.prepare("SELECT balance FROM users WHERE id = ?").get(expected.userId);
+      if (!user) { const error = new Error("User not found"); error.status = 404; throw error; }
+      if (Number(user.balance) < expected.credits) { const error = new Error("Insufficient credits"); error.status = 402; throw error; }
+      const now = clock().toISOString();
+      const id = input.id || `hold_${crypto.randomUUID()}`;
+      db.prepare("UPDATE users SET balance = balance - ?, updated_at = ? WHERE id = ? AND balance >= ?").run(expected.credits, now, expected.userId, expected.credits);
+      db.prepare("INSERT INTO credit_holds (id, user_id, task_id, idempotency_key, credits, request_fingerprint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, expected.userId, expected.taskId || null, expected.idempotencyKey, expected.credits, requestFingerprint, now);
+      db.exec("COMMIT");
+      return getCreditHold(id);
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  function getCreditHold(holdId) {
+    const row = db.prepare("SELECT * FROM credit_holds WHERE id = ?").get(holdId);
+    return row ? rowToCreditHold(row) : null;
+  }
+
+  function settleCreditHold(holdId, actualCredits, input = {}) {
+    const hold = getCreditHold(holdId);
+    if (!hold || hold.status !== "HOLDING") return hold;
+    const settledCredits = Number(actualCredits);
+    if (!Number.isInteger(settledCredits) || settledCredits < 0 || settledCredits > hold.credits) { const error = new Error("Invalid settled credit amount"); error.status = 400; throw error; }
+    const now = clock().toISOString();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const released = hold.credits - settledCredits;
+      db.prepare("UPDATE users SET balance = balance + ?, updated_at = ? WHERE id = ?").run(released, now, hold.userId);
+      if (settledCredits > 0) db.prepare("INSERT INTO credit_transactions (id, user_id, amount, reason, balance_after, created_at) SELECT ?, ?, ?, ?, balance, ? FROM users WHERE id = ?").run(input.transactionId || transactionId(), hold.userId, -settledCredits, input.reason || `hold:${hold.id}`, now, hold.userId);
+      db.prepare("UPDATE credit_holds SET settled_credits = ?, status = 'SETTLED', settled_at = ? WHERE id = ? AND status = 'HOLDING'").run(settledCredits, now, holdId);
+      db.exec("COMMIT");
+      return getCreditHold(holdId);
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  function releaseCreditHold(holdId) {
+    const hold = getCreditHold(holdId);
+    if (!hold || hold.status !== "HOLDING") return hold;
+    const now = clock().toISOString();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare("UPDATE users SET balance = balance + ?, updated_at = ? WHERE id = ?").run(hold.credits, now, hold.userId);
+      db.prepare("UPDATE credit_holds SET status = 'RELEASED', settled_at = ? WHERE id = ? AND status = 'HOLDING'").run(now, holdId);
+      db.exec("COMMIT");
+      return getCreditHold(holdId);
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
   function createTask(task) {
-    const createdAt = task.createdAt || new Date().toISOString();
+    const createdAt = task.createdAt || clock().toISOString();
     db.prepare(`
       INSERT INTO generation_tasks (
-        id, owner_id, status, images_json, template_id, provider,
+        id, owner_id, idempotency_key, status, images_json, template_id, provider,
         provider_task_id, mode, prompt, topic, reference_images_json, model,
         output_count, aspect_ratio, resolution, raw_provider_result_json,
-        created_at, updated_at
+        metadata_json, requested_credits, settled_credits, credit_hold_id,
+        error_code, error_message, attempt, lease_owner, lease_expires_at,
+        next_attempt_at, started_at, completed_at, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         owner_id = excluded.owner_id,
+        idempotency_key = excluded.idempotency_key,
         status = excluded.status,
         images_json = excluded.images_json,
         template_id = excluded.template_id,
@@ -1279,10 +1785,23 @@ function createSqliteStore(options = {}) {
         aspect_ratio = excluded.aspect_ratio,
         resolution = excluded.resolution,
         raw_provider_result_json = excluded.raw_provider_result_json,
+        metadata_json = excluded.metadata_json,
+        requested_credits = excluded.requested_credits,
+        settled_credits = excluded.settled_credits,
+        credit_hold_id = excluded.credit_hold_id,
+        error_code = excluded.error_code,
+        error_message = excluded.error_message,
+        attempt = excluded.attempt,
+        lease_owner = excluded.lease_owner,
+        lease_expires_at = excluded.lease_expires_at,
+        next_attempt_at = excluded.next_attempt_at,
+        started_at = excluded.started_at,
+        completed_at = excluded.completed_at,
         updated_at = excluded.updated_at
     `).run(
       task.id,
       task.ownerId,
+      task.idempotencyKey || null,
       task.status || "completed",
       stringify(task.images || []),
       task.templateId || null,
@@ -1297,10 +1816,114 @@ function createSqliteStore(options = {}) {
       task.aspectRatio || null,
       task.resolution || null,
       stringify(task.rawProviderResult || null),
+      stringify(task.metadata || {}),
+      Number(task.requestedCredits || 0),
+      Number(task.settledCredits || 0),
+      task.creditHoldId || null,
+      task.errorCode || null,
+      task.errorMessage || null,
+      Number(task.attempt || 0),
+      task.leaseOwner || null,
+      task.leaseExpiresAt || null,
+      task.nextAttemptAt || null,
+      task.startedAt || null,
+      task.completedAt || null,
       createdAt,
-      new Date().toISOString(),
+      clock().toISOString(),
     );
     return getTask(task.id);
+  }
+
+  function createTaskWithCreditHold(input) {
+    const existing = db.prepare("SELECT * FROM generation_tasks WHERE owner_id = ? AND idempotency_key = ?").get(input.task.ownerId, input.task.idempotencyKey);
+    if (existing) {
+      const hold = getCreditHold(existing.credit_hold_id);
+      if (!hold) { const error = new Error("Generation task hold is missing"); error.status = 409; throw error; }
+      return { task: rowToTask(existing), hold, created: false };
+    }
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const existingInside = db.prepare("SELECT * FROM generation_tasks WHERE owner_id = ? AND idempotency_key = ?").get(input.task.ownerId, input.task.idempotencyKey);
+      if (existingInside) {
+        const hold = getCreditHold(existingInside.credit_hold_id);
+        db.exec("COMMIT");
+        return { task: rowToTask(existingInside), hold, created: false };
+      }
+      const expected = creditHoldRequest(input.hold);
+      const requestFingerprint = fingerprint(expected);
+      const user = db.prepare("SELECT balance FROM users WHERE id = ?").get(expected.userId);
+      if (!user) { const error = new Error("User not found"); error.status = 404; throw error; }
+      if (Number(user.balance) < expected.credits) { const error = new Error("Insufficient credits"); error.status = 402; throw error; }
+      const now = clock().toISOString();
+      const holdId = input.hold.id || `hold_${crypto.randomUUID()}`;
+      db.prepare("UPDATE users SET balance = balance - ?, updated_at = ? WHERE id = ? AND balance >= ?").run(expected.credits, now, expected.userId, expected.credits);
+      db.prepare("INSERT INTO credit_holds (id, user_id, task_id, idempotency_key, credits, request_fingerprint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(holdId, expected.userId, expected.taskId || null, expected.idempotencyKey, expected.credits, requestFingerprint, now);
+      const hold = getCreditHold(holdId);
+      const task = createTask({ ...input.task, idempotencyKey: input.task.idempotencyKey, creditHoldId: hold.id, requestedCredits: input.hold.credits });
+      db.exec("COMMIT");
+      return { task, hold, created: true };
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  function claimTask(workerId, input = {}) {
+    const now = input.now !== undefined ? new Date(input.now) : clock();
+    const nowIsoValue = now.toISOString();
+    const expires = new Date(now.getTime() + Number(input.leaseDurationMs || 60000)).toISOString();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = db.prepare(`SELECT * FROM generation_tasks WHERE status IN ('pending', 'retryable') AND (lease_expires_at IS NULL OR lease_expires_at <= ?) AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at ASC, id ASC LIMIT 1`).get(nowIsoValue, nowIsoValue);
+      if (!row) { db.exec("COMMIT"); return null; }
+      db.prepare("UPDATE generation_tasks SET status = 'leased', lease_owner = ?, lease_expires_at = ?, attempt = attempt + 1, started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?").run(workerId, expires, nowIsoValue, nowIsoValue, row.id);
+      const claimed = getTask(row.id);
+      db.exec("COMMIT");
+      return claimed;
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
+  }
+
+  function renewTaskLease(taskIdValue, workerId, input = {}) {
+    const now = input.now !== undefined ? new Date(input.now) : clock();
+    const expires = new Date(now.getTime() + Number(input.leaseDurationMs || 60000)).toISOString();
+    db.prepare("UPDATE generation_tasks SET lease_expires_at = ?, updated_at = ? WHERE id = ? AND lease_owner = ? AND status IN ('leased', 'processing')").run(expires, now.toISOString(), taskIdValue, workerId);
+    return getTask(taskIdValue);
+  }
+
+  function releaseTaskLease(taskIdValue, workerId, input = {}) {
+    const now = clock().toISOString();
+    const status = input.status || "pending";
+    const result = db.prepare("UPDATE generation_tasks SET status = ?, lease_owner = NULL, lease_expires_at = NULL, error_code = COALESCE(?, error_code), error_message = COALESCE(?, error_message), updated_at = ?, completed_at = CASE WHEN ? = 'completed' THEN COALESCE(completed_at, ?) ELSE completed_at END WHERE id = ? AND lease_owner = ?").run(status, input.errorCode || null, input.errorMessage || null, now, status, now, taskIdValue, workerId);
+    return result.changes ? getTask(taskIdValue) : null;
+  }
+
+  function reclaimExpiredTasks(input) {
+    const now = input instanceof Date ? input : input !== undefined ? new Date(input) : clock();
+    const nowIsoValue = now.toISOString();
+    db.prepare("UPDATE generation_tasks SET status = 'retryable', lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE status IN ('leased', 'processing') AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?").run(nowIsoValue, nowIsoValue);
+    return db.prepare("SELECT * FROM generation_tasks WHERE status = 'retryable' AND updated_at = ?").all(nowIsoValue).map(rowToTask);
+  }
+
+  function updateTask(taskIdValue, updates = {}) {
+    const allowed = {
+      status: "status", images: "images_json", provider: "provider", providerTaskId: "provider_task_id", providerResultUrl: "provider_result_url",
+      rawProviderResult: "raw_provider_result_json", errorCode: "error_code", errorMessage: "error_message", settledCredits: "settled_credits",
+      completedAt: "completed_at", nextAttemptAt: "next_attempt_at", metadata: "metadata_json",
+    };
+    const fields = [];
+    const values = [];
+    for (const [key, column] of Object.entries(allowed)) {
+      if (updates[key] === undefined) continue;
+      values.push(["images", "rawProviderResult", "metadata"].includes(key) ? stringify(updates[key]) : updates[key]);
+      fields.push(`${column} = ?`);
+    }
+    if (!fields.length) return getTask(taskIdValue);
+    values.push(clock().toISOString(), taskIdValue);
+    db.prepare(`UPDATE generation_tasks SET ${fields.join(", ")}, updated_at = ? WHERE id = ?`).run(...values);
+    return getTask(taskIdValue);
   }
 
   function getTask(id) {
@@ -1546,6 +2169,15 @@ function createSqliteStore(options = {}) {
     listUsers,
     addCredits,
     charge,
+    createCreditPackage(input) {
+      return { id: input.id || `package_${crypto.randomUUID()}`, userId: input.userId, initialCredits: input.initialCredits || 0, remainingCredits: (input.remainingCredits ?? input.initialCredits) || 0, frozenCredits: 0, status: "ACTIVE" };
+    },
+    getCreditPackage() { return null; },
+    listCreditPackages() { return { records: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 1 } }; },
+    createCreditHold,
+    getCreditHold,
+    settleCreditHold,
+    releaseCreditHold,
     listCreditTransactions,
     createOrder,
     getOrder,
@@ -1559,8 +2191,26 @@ function createSqliteStore(options = {}) {
     listPaymentAudit,
     findOwnedImageAsset,
     createTask,
+    createTaskWithCreditHold,
     getTask,
     listTasks,
+    claimTask,
+    renewTaskLease,
+    releaseTaskLease,
+    reclaimExpiredTasks,
+    updateTask,
+    createAsset: createGeneratedAsset,
+    createGeneratedAsset,
+    getAsset,
+    getGeneratedAsset,
+    findOwnedAsset,
+    listAssets,
+    listGeneratedAssets: listAssets,
+    deleteAsset,
+    createReferenceAsset,
+    getReferenceAsset,
+    listReferenceAssets,
+    deleteReferenceAsset,
     createCatalogVersion,
     getCatalogVersion,
     getCatalogVersionState,
@@ -1615,6 +2265,7 @@ function migrate(db) {
     CREATE TABLE IF NOT EXISTS generation_tasks (
       id TEXT PRIMARY KEY,
       owner_id TEXT NOT NULL,
+      idempotency_key TEXT,
       status TEXT NOT NULL,
       images_json TEXT NOT NULL,
       template_id TEXT,
@@ -1629,8 +2280,62 @@ function migrate(db) {
       aspect_ratio TEXT,
       resolution TEXT,
       raw_provider_result_json TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      requested_credits INTEGER NOT NULL DEFAULT 0,
+      settled_credits INTEGER NOT NULL DEFAULT 0,
+      credit_hold_id TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      attempt INTEGER NOT NULL DEFAULT 0,
+      lease_owner TEXT,
+      lease_expires_at TEXT,
+      next_attempt_at TEXT,
+      started_at TEXT,
+      completed_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS credit_holds (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      task_id TEXT,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      credits INTEGER NOT NULL,
+      settled_credits INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'HOLDING',
+      package_allocation_json TEXT NOT NULL DEFAULT '[]',
+      request_fingerprint TEXT,
+      created_at TEXT NOT NULL,
+      settled_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS generated_assets (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      output_index INTEGER NOT NULL,
+      object_key TEXT NOT NULL,
+      provider_url TEXT,
+      mime_type TEXT NOT NULL DEFAULT 'image/png',
+      width INTEGER,
+      height INTEGER,
+      size_bytes INTEGER,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      UNIQUE (task_id, output_index)
+    );
+    CREATE TABLE IF NOT EXISTS reference_assets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      object_key TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      width INTEGER,
+      height INTEGER,
+      size_bytes INTEGER,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      deleted_at TEXT
     );
     CREATE TABLE IF NOT EXISTS template_catalog_versions (
       id TEXT PRIMARY KEY,
@@ -1715,6 +2420,19 @@ function migrate(db) {
   ensureColumn(db, "generation_tasks", "output_count", "INTEGER");
   ensureColumn(db, "generation_tasks", "aspect_ratio", "TEXT");
   ensureColumn(db, "generation_tasks", "resolution", "TEXT");
+  ensureColumn(db, "generation_tasks", "idempotency_key", "TEXT");
+  ensureColumn(db, "generation_tasks", "metadata_json", "TEXT NOT NULL DEFAULT '{}' ");
+  ensureColumn(db, "generation_tasks", "requested_credits", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "generation_tasks", "settled_credits", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "generation_tasks", "credit_hold_id", "TEXT");
+  ensureColumn(db, "generation_tasks", "error_code", "TEXT");
+  ensureColumn(db, "generation_tasks", "error_message", "TEXT");
+  ensureColumn(db, "generation_tasks", "attempt", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "generation_tasks", "lease_owner", "TEXT");
+  ensureColumn(db, "generation_tasks", "lease_expires_at", "TEXT");
+  ensureColumn(db, "generation_tasks", "next_attempt_at", "TEXT");
+  ensureColumn(db, "generation_tasks", "started_at", "TEXT");
+  ensureColumn(db, "generation_tasks", "completed_at", "TEXT");
   ensureColumn(db, "templates", "catalog_version_id", "TEXT");
   ensureColumn(db, "templates", "tags_json", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(db, "templates", "preview_images_json", "TEXT NOT NULL DEFAULT '[]'");
@@ -1741,6 +2459,8 @@ function migrate(db) {
   ensureColumn(db, "orders", "canceled_at", "TEXT");
   ensureColumn(db, "orders", "admin_note", "TEXT");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS orders_user_idempotency_key_unique ON orders (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS generation_tasks_owner_idempotency_unique ON generation_tasks (owner_id, idempotency_key) WHERE idempotency_key IS NOT NULL");
+  db.exec("CREATE INDEX IF NOT EXISTS generation_tasks_lease_idx ON generation_tasks (status, lease_expires_at, next_attempt_at)");
 }
 
 function migrateVersionedTemplateRows(db) {
@@ -1924,6 +2644,42 @@ function rowToCreditTransaction(row) {
   };
 }
 
+function rowToCreditHold(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    taskId: row.task_id || "",
+    idempotencyKey: row.idempotency_key,
+    credits: Number(row.credits || 0),
+    settledCredits: Number(row.settled_credits || 0),
+    status: row.status,
+    packageAllocation: parseJson(row.package_allocation_json, []),
+    createdAt: row.created_at,
+    settledAt: row.settled_at,
+  };
+}
+
+function rowToAsset(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    assetId: row.id,
+    taskId: row.task_id || null,
+    userId: row.user_id,
+    outputIndex: Number(row.output_index || 0),
+    objectKey: row.object_key,
+    providerUrl: row.provider_url || "",
+    mimeType: row.mime_type,
+    width: row.width == null ? null : Number(row.width),
+    height: row.height == null ? null : Number(row.height),
+    sizeBytes: row.size_bytes == null ? null : Number(row.size_bytes),
+    isDeleted: Boolean(row.is_deleted),
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+  };
+}
+
 function rowToTask(row) {
   return {
     id: row.id,
@@ -1943,6 +2699,20 @@ function rowToTask(row) {
     aspectRatio: row.aspect_ratio || "",
     resolution: row.resolution || "",
     rawProviderResult: parseJson(row.raw_provider_result_json, null),
+    metadata: parseJson(row.metadata_json, {}),
+    idempotencyKey: row.idempotency_key || "",
+    requestedCredits: Number(row.requested_credits || 0),
+    settledCredits: Number(row.settled_credits || 0),
+    creditHoldId: row.credit_hold_id || null,
+    providerResultUrl: row.provider_result_url || "",
+    errorCode: row.error_code || "",
+    errorMessage: row.error_message || "",
+    attempt: Number(row.attempt || 0),
+    leaseOwner: row.lease_owner || "",
+    leaseExpiresAt: row.lease_expires_at || null,
+    nextAttemptAt: row.next_attempt_at || null,
+    startedAt: row.started_at || null,
+    completedAt: row.completed_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

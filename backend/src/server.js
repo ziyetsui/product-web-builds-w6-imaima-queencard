@@ -12,6 +12,8 @@ const { getListenOptions } = require("./listen-options");
 const { createSqliteStore } = require("./store");
 const { createPostgresPool } = require("./db/pool");
 const { createPostgresStore } = require("./repositories/postgres-store");
+const { createLocalStorage } = require("./storage/local-storage");
+const { createS3Storage } = require("./storage/s3-storage");
 
 function asResourceList(resources) {
   if (!resources) return [];
@@ -225,6 +227,24 @@ async function createDependencies(config, sourceEnv, options, acquiredResources)
   if (!storage && typeof factories.createStorage === "function") {
     storage = await factories.createStorage({ config: config.storage, env: runtimeEnv });
   }
+  if (!storage) {
+    if (config.storage.driver === "local") {
+      storage = createLocalStorage({
+        root: config.storage.localRoot,
+        baseUrl: config.storage.publicBaseUrl,
+        signingSecret: config.storage.signingSecret,
+      });
+    } else {
+      storage = createS3Storage({
+        bucket: config.storage.bucket,
+        endpoint: config.storage.endpoint,
+        region: config.storage.region,
+        accessKeyId: config.storage.accessKeyId,
+        secretAccessKey: config.storage.secretAccessKey,
+        forcePathStyle: config.storage.forcePathStyle,
+      });
+    }
+  }
   trackResource(acquiredResources, storage);
 
   const missing = [];
@@ -290,10 +310,13 @@ async function createServer(options = {}) {
       app = createApp({
         env: dependencies.runtimeEnv,
         store: dependencies.store,
+        storage: dependencies.storage,
         imageProvider: dependencies.imageProvider,
         fetch: options.fetch,
       });
     }
+    trackResource(acquiredResources, app.worker);
+    if (config.generation.workerMode === "in-process" && typeof app.worker?.start === "function") app.worker.start();
     if (typeof app.initialize === "function") await app.initialize();
   } catch (error) {
     const cleanupErrors = await rollbackResources(acquiredResources);

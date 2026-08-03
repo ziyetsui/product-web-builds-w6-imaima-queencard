@@ -1,5 +1,6 @@
 function configuredProvider(env) {
-  return String(env.MINIAPP_IMAGE_PROVIDER || env.MINIAPP_GENERATION_MODE || "preview")
+  const production = ["production", "prod"].includes(String(env.NODE_ENV || "").toLowerCase());
+  return String(env.MINIAPP_IMAGE_PROVIDER || env.MINIAPP_GENERATION_MODE || (production ? "gptproto" : "preview"))
     .trim()
     .toLowerCase();
 }
@@ -7,6 +8,25 @@ function configuredProvider(env) {
 function serviceUnavailable(message) {
   const error = new Error(message);
   error.status = 503;
+  error.code = "PROVIDER_NOT_CONFIGURED";
+  error.retryable = false;
+  return error;
+}
+
+function providerError(message, input = {}) {
+  const error = new Error(message);
+  error.code = input.code || "PROVIDER_UPSTREAM_ERROR";
+  error.provider = input.provider || "unknown";
+  error.providerStatus = Number(input.status || 0) || 0;
+  error.status = error.providerStatus >= 400 ? error.providerStatus : undefined;
+  error.upstream = input.upstream?.error && isRecord(input.upstream.error)
+    ? input.upstream.error
+    : input.upstream && isRecord(input.upstream) ? input.upstream : null;
+  error.details = input.upstream && isRecord(input.upstream) ? input.upstream : null;
+  error.retryable = input.retryable === undefined
+    ? [408, 409, 425, 429].includes(error.providerStatus) || error.providerStatus >= 500
+    : Boolean(input.retryable);
+  error.publicMessage = message;
   return error;
 }
 
@@ -66,7 +86,12 @@ function parseJsonResponse(text, context) {
     return JSON.parse(text);
   } catch (error) {
     const preview = text.replace(/\s+/g, " ").slice(0, 120);
-    throw new Error(`${context.provider} image generation returned non-JSON from ${context.endpoint} (${context.status}, ${context.contentType || "unknown content-type"}): ${preview}`);
+    throw providerError(`${context.provider} image generation returned non-JSON from ${context.endpoint} (${context.status}, ${context.contentType || "unknown content-type"}): ${preview}`, {
+      provider: context.provider,
+      status: context.status,
+      code: "PROVIDER_NON_JSON",
+      retryable: Number(context.status) >= 500,
+    });
   }
 }
 
@@ -339,7 +364,11 @@ function createOpenAiProvider(env, fetchImpl) {
       });
       if (!response.ok) {
         const message = payload.error && payload.error.message ? payload.error.message : text;
-        throw new Error("OpenAI image generation failed: " + response.status + " " + message);
+        throw providerError("OpenAI image generation failed: " + response.status + " " + message, {
+          provider: "openai",
+          status: response.status,
+          upstream: payload,
+        });
       }
       return {
         provider: "openai",
@@ -386,7 +415,11 @@ function createGptProtoProvider(env, fetchImpl) {
           contentType: response.headers.get("content-type"),
         });
         if (!response.ok) {
-          throw new Error("GPTProto image generation failed: " + response.status + " " + upstreamErrorMessage(payload, text));
+          throw providerError("GPTProto image generation failed: " + response.status + " " + upstreamErrorMessage(payload, text), {
+            provider: "gptproto",
+            status: response.status,
+            upstream: payload,
+          });
         }
 
         let resultPayload = payload;
@@ -411,7 +444,11 @@ function createGptProtoProvider(env, fetchImpl) {
               contentType: pollResponse.headers.get("content-type"),
             });
             if (!pollResponse.ok) {
-              throw new Error("GPTProto image generation failed: " + pollResponse.status + " " + upstreamErrorMessage(pollPayload, pollText));
+              throw providerError("GPTProto image generation failed: " + pollResponse.status + " " + upstreamErrorMessage(pollPayload, pollText), {
+                provider: "gptproto",
+                status: pollResponse.status,
+                upstream: pollPayload,
+              });
             }
             const status = taskStatus(pollPayload);
             if (completedStatuses.includes(status) || normalizeImages(pollPayload).length > 0) {
@@ -419,7 +456,13 @@ function createGptProtoProvider(env, fetchImpl) {
               break;
             }
             if (["failed", "error", "cancelled", "canceled"].includes(status)) {
-              throw new Error("GPTProto task failed with status: " + status + " " + upstreamErrorMessage(pollPayload, pollText));
+              throw providerError("GPTProto task failed with status: " + status + " " + upstreamErrorMessage(pollPayload, pollText), {
+                provider: "gptproto",
+                status: pollResponse.status,
+                upstream: pollPayload,
+                retryable: false,
+                code: "PROVIDER_TASK_FAILED",
+              });
             }
             if (attempt === maxPollAttempts) {
               throw new Error("GPTProto task polling timed out: " + taskIdFromPayload(payload));
@@ -462,7 +505,11 @@ function createGptProtoProvider(env, fetchImpl) {
       });
       if (!response.ok) {
         const message = upstreamErrorMessage(payload, text);
-        throw new Error("GPTProto image generation failed: " + response.status + " " + message);
+        throw providerError("GPTProto image generation failed: " + response.status + " " + message, {
+          provider: "gptproto",
+          status: response.status,
+          upstream: payload,
+        });
       }
       return {
         provider: "gptproto",
@@ -475,18 +522,100 @@ function createGptProtoProvider(env, fetchImpl) {
   };
 }
 
+function createCompatibleProvider(provider, env, fetchImpl) {
+  const upper = String(provider || "provider").toUpperCase();
+  const apiKey = String(
+    env[`${upper}_API_KEY`]
+      || (provider === "gemini" ? env.GOOGLE_API_KEY : "")
+      || (provider === "doubao" ? env.ARK_API_KEY || env.GPTPROTO_API_KEY : "")
+      || "",
+  ).trim();
+  const endpoint = String(env[`${upper}_IMAGE_BASE_URL`] || env[`${upper}_IMAGE_ENDPOINT`] || "").trim();
+  async function call(input, method, url) {
+    const request = input.request || {};
+    const response = await fetchImpl(url, {
+      method,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+        ...(provider === "gemini" ? { "x-goog-api-key": apiKey } : {}),
+      },
+      body: method === "GET" ? undefined : JSON.stringify({
+        model: input.model?.providerModelId || request.providerModelId || request.model,
+        prompt: input.prompt || input.template?.prompt || "",
+        images: input.referenceImages || [],
+        aspectRatio: request.aspectRatio || "1:1",
+        resolution: request.resolution || "1k",
+        outputCount: Number(input.outputNumber || 1),
+      }),
+    });
+    const text = await response.text();
+    const payload = parseJsonResponse(text, {
+      provider,
+      endpoint: url,
+      status: response.status,
+      contentType: response.headers.get("content-type"),
+    });
+    if (!response.ok) throw providerError(`${provider} image generation failed: ${response.status} ${upstreamErrorMessage(payload, text)}`, {
+      provider,
+      status: response.status,
+      upstream: payload,
+    });
+    return payload;
+  }
+
+  function normalizedResult(payload, input) {
+    const status = taskStatus(payload);
+    return {
+      provider,
+      status: ["pending", "processing", "queued", "running"].includes(status) ? "processing" : "completed",
+      images: normalizeImages(payload),
+      raw: payload,
+      providerTaskId: taskIdFromPayload(payload),
+      pollCursor: payload.cursor || payload.data?.cursor || null,
+      actualCredits: payload.actualCredits ?? payload.data?.actualCredits,
+      request: input.request,
+    };
+  }
+
+  return {
+    name: provider,
+    async generate(input) {
+      if (!apiKey) throw serviceUnavailable(`${upper}_API_KEY is not configured`);
+      if (!endpoint) throw serviceUnavailable(`${upper}_IMAGE_BASE_URL is not configured`);
+      return normalizedResult(await call(input, "POST", endpoint), input);
+    },
+    async poll(input) {
+      if (!apiKey) throw serviceUnavailable(`${upper}_API_KEY is not configured`);
+      if (!endpoint) throw serviceUnavailable(`${upper}_IMAGE_BASE_URL is not configured`);
+      const statusEndpoint = String(env[`${upper}_IMAGE_STATUS_URL`] || `${endpoint.replace(/\/$/, "")}/${encodeURIComponent(input.providerTaskId || "")}`);
+      return normalizedResult(await call(input, "GET", statusEndpoint), input);
+    },
+  };
+}
+
 function createImageProvider(options = {}) {
   const env = options.env || process.env;
   const fetchImpl = options.fetch || fetch;
   const provider = configuredProvider(env);
 
-  if (provider === "mock") return createMockProvider(env);
+  if (provider === "mock" && !["production", "prod"].includes(String(env.NODE_ENV || "").toLowerCase())) return createMockProvider(env);
   if (provider === "openai") return createOpenAiProvider(env, fetchImpl);
   if (provider === "gptproto") return createGptProtoProvider(env, fetchImpl);
+  if (["gemini", "doubao", "vidu"].includes(provider)) return createCompatibleProvider(provider, env, fetchImpl);
+  if (["production", "prod"].includes(String(env.NODE_ENV || "").toLowerCase()) && ["preview", "mock"].includes(provider)) {
+    return {
+      name: provider,
+      async generate() {
+        throw serviceUnavailable("A real image provider is required in production");
+      },
+    };
+  }
   return createPreviewProvider(env);
 }
 
 module.exports = {
   createImageProvider,
   normalizeImages,
+  providerError,
 };
