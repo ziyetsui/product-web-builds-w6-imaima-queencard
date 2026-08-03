@@ -326,13 +326,25 @@ Page({
       if (requestSerial !== page.templateRequestSerial) return;
       var records = result.records || [];
       var pagination = result.pagination || {};
+      var responseVersion = result.catalogVersion || "";
+      if (!reset && page.data.catalogVersion && responseVersion !== page.data.catalogVersion) {
+        page.setData({
+          templates: [],
+          catalogVersion: "",
+          templatePage: 1,
+          templateCursor: "",
+          templateHasMore: true,
+          templateLoading: false,
+        });
+        return page.loadTemplates(true);
+      }
       var totalPages = pagination.totalPages || pagination.total_pages || nextPage;
       page.setData({
         templates: reset ? records : appendTemplates(page.data.templates, records),
         templatePage: nextPage + 1,
         templateCursor: pagination.nextCursor || "",
         templateHasMore: pagination.hasMore !== undefined ? Boolean(pagination.hasMore) : nextPage < totalPages || records.length >= page.data.templateLimit,
-        catalogVersion: result.catalogVersion || page.data.catalogVersion,
+        catalogVersion: responseVersion || page.data.catalogVersion,
         templateCategories: result.categories && result.categories.length
           ? markServerCategoryOptions(
             result.categories,

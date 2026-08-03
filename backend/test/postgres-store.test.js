@@ -5,6 +5,7 @@ const test = require("node:test");
 const { createPostgresStore } = require("../src/repositories/postgres-store");
 const { migrateDatabase } = require("../src/db/migrate");
 const { assertStoreContract } = require("../src/repositories/store-contract");
+const { recordsChecksum } = require("../src/services/catalog-service");
 const { applyPgMemSchema, createPgMemPool } = require("./support/pg-mem");
 
 const SESSION_TOKEN_HASH = "a".repeat(64);
@@ -147,24 +148,36 @@ test("postgres repository contract persists identity, sessions, credits, tasks, 
   });
   assert.equal((await store.getReferenceAsset(referenceAsset.id)).objectKey, referenceAsset.objectKey);
 
-  const version = await store.createCatalogVersion({
-    id: "catalog-1",
-    checksum: "checksum-1",
-    source: "test",
-    recordCount: 1,
-  });
-  await store.syncTemplates([{
+  const templateRecord = {
     id: "template-1",
-    catalogVersionId: version.id,
     title: "Test template",
+    subtitle: "",
+    author: "",
     category: "image",
+    scenarioCategory: "",
     tags: ["test"],
     prompt: "Use this prompt",
     referenceImages: [],
     previewImages: [],
     source: "test",
+    sourceId: "",
+    sourceUrl: "",
+    thumbnailUrl: "",
+    previewUrl: "",
+    useCase: "",
     metrics: { likes: 1 },
-  }], { catalogVersionId: version.id });
+    seed: null,
+    metadata: {},
+    createdAt: "2026-08-03T00:00:00.000Z",
+    updatedAt: "2026-08-03T00:00:00.000Z",
+  };
+  const version = await store.createCatalogVersion({
+    id: "catalog-1",
+    checksum: recordsChecksum([templateRecord]),
+    source: "test",
+    recordCount: 1,
+  });
+  await store.syncTemplates([templateRecord], { catalogVersionId: version.id });
   await store.activateCatalogVersion(version.id);
   assert.equal((await store.getActiveCatalogVersion()).id, version.id);
   assert.equal((await store.getTemplate("template-1")).title, "Test template");

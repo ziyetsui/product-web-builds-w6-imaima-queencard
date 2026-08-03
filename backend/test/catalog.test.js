@@ -1,8 +1,10 @@
 const assert = require("node:assert/strict");
+const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { DatabaseSync } = require("node:sqlite");
 
 const { createApp } = require("../src/app");
 const { createMemoryStore, createSqliteStore } = require("../src/store");
@@ -13,6 +15,7 @@ const {
   catalogChecksum,
   importCatalog,
   queryCatalog,
+  validateCatalog,
 } = require("../src/services/catalog-service");
 
 function sourceRecord(id, overrides = {}) {
@@ -52,6 +55,23 @@ function buildFixture(records) {
   });
 }
 
+function changedSnapshot(snapshot, change) {
+  const changed = structuredClone(snapshot);
+  change(changed);
+  changed.checksum = catalogChecksum(changed.records);
+  return changed;
+}
+
+async function catalogStores() {
+  const { pool } = createPgMemPool();
+  await applyPgMemSchema(pool);
+  return [
+    { name: "memory", store: createMemoryStore() },
+    { name: "sqlite", store: createSqliteStore({ dbPath: ":memory:" }) },
+    { name: "postgres", store: createPostgresStore({ pool }), pool },
+  ];
+}
+
 test("buildCatalogSnapshot normalizes fields and calculates a reproducible checksum", () => {
   const first = buildFixture([sourceRecord("bo-1")]);
   const second = buildFixture([sourceRecord("bo-1")]);
@@ -71,6 +91,11 @@ test("buildCatalogSnapshot normalizes fields and calculates a reproducible check
   assert.equal(first.counts.total, 1);
   assert.equal(first.counts.bySource.bo, 1);
   assert.equal(first.counts.assetRefs.bo.total, 2);
+});
+
+test("catalog snapshots declare the checked-in schema path", () => {
+  const snapshot = buildFixture([sourceRecord("schema-path")]);
+  assert.equal(snapshot.schema, "schema.json");
 });
 
 test("catalog builder deduplicates identical ids but rejects conflicting duplicate ids", () => {
@@ -124,6 +149,88 @@ test("catalog builder rejects invalid source records", () => {
     sourceRef: "027d145",
     sources: [{ name: "bo", records: [invalid] }],
   }), /missing prompt/i);
+});
+
+test("catalog builder rejects malformed nested metrics instead of coercing them", () => {
+  const invalidNumber = sourceRecord("invalid-nested-number");
+  invalidNumber.metrics = { likes: "not-a-number" };
+  assert.throws(() => buildCatalogSnapshot({
+    sourceRef: "027d145",
+    sources: [{ name: "bo", records: [invalidNumber] }],
+  }), /metrics\.likes/i);
+
+  const invalidObject = sourceRecord("invalid-metrics-object");
+  invalidObject.metrics = "not-an-object";
+  assert.throws(() => buildCatalogSnapshot({
+    sourceRef: "027d145",
+    sources: [{ name: "bo", records: [invalidObject] }],
+  }), /metrics.*object/i);
+});
+
+test("catalog validation enforces schema, field types, dates, and metrics", () => {
+  const snapshot = buildFixture([sourceRecord("strict-validation")]);
+  assert.throws(() => validateCatalog(changedSnapshot(snapshot, (value) => {
+    value.schema = "wrong.json";
+  })), /schema/i);
+  assert.throws(() => validateCatalog(changedSnapshot(snapshot, (value) => {
+    value.records[0].createdAt = "not-a-date";
+  })), /createdAt|date/i);
+  assert.throws(() => validateCatalog(changedSnapshot(snapshot, (value) => {
+    value.records[0].metrics.likes = "not-a-number";
+  })), /metrics|schema/i);
+  assert.throws(() => validateCatalog(changedSnapshot(snapshot, (value) => {
+    value.records[0].metrics = "not-an-object";
+  })), /metrics|schema/i);
+});
+
+test("catalog builder rejects traversal and symlink escapes outside assetRoot", () => {
+  const assetRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ima-catalog-contained-"));
+  assert.throws(() => buildCatalogSnapshot({
+    sourceRef: "027d145",
+    assetRoot,
+    sources: [{ name: "bo", records: [sourceRecord("traversal", {
+      image: "/../../etc/passwd",
+      images: ["/../../etc/passwd"],
+    })] }],
+  }), /asset.*root|escape|traversal/i);
+
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ima-catalog-outside-"));
+  fs.writeFileSync(path.join(outside, "outside.jpg"), "outside");
+  fs.symlinkSync(outside, path.join(assetRoot, "escape"));
+  assert.throws(() => buildCatalogSnapshot({
+    sourceRef: "027d145",
+    assetRoot,
+    sources: [{ name: "bo", records: [sourceRecord("symlink", {
+      image: "/escape/outside.jpg",
+      images: ["/escape/outside.jpg"],
+    })] }],
+  }), /asset.*root|escape|symlink/i);
+});
+
+test("catalog source import never evaluates executable TypeScript expressions", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ima-catalog-parser-"));
+  const marker = path.join(root, "executed.txt");
+  const boSource = path.join(root, "bo.ts");
+  const xhsSource = path.join(root, "xhs.ts");
+  const output = path.join(root, "catalog.json");
+  const record = sourceRecord("malicious", {
+    image: "https://cdn.example.com/malicious.jpg",
+    images: ["https://cdn.example.com/malicious.jpg"],
+  });
+  fs.writeFileSync(boSource, `export const boLandingPromptCases = [\n  (this.constructor.constructor("return process")().getBuiltinModule("fs").writeFileSync(${JSON.stringify(marker)}, "owned"), ${JSON.stringify(record)})\n];\n`);
+  fs.writeFileSync(xhsSource, "export const xhsPromptCases = [];\n");
+
+  const result = childProcess.spawnSync(process.execPath, [
+    path.resolve(__dirname, "../scripts/build-template-catalog.js"),
+    "--source-ref", "malicious-ref",
+    "--bo-source", boSource,
+    "--xhs-source", xhsSource,
+    "--asset-root", root,
+    "--output", output,
+  ], { encoding: "utf8" });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(fs.existsSync(marker), false);
 });
 
 test("catalog builder carries XHS potential metrics by note id", () => {
@@ -201,6 +308,203 @@ test("memory and sqlite adapters expose the same versioned catalog contract", as
     assert.equal((await store.listTemplates(new URLSearchParams({ limit: "1" }))).catalogVersion, snapshot.catalogVersion);
     await store.close();
   }
+});
+
+test("SQLite migrates the previously shipped global template id key without losing rows", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ima-catalog-old-sqlite-"));
+  const dbPath = path.join(root, "miniapp.sqlite");
+  const oldDb = new DatabaseSync(dbPath);
+  oldDb.exec(`
+    CREATE TABLE templates (
+      id TEXT PRIMARY KEY,
+      catalog_version_id TEXT,
+      title TEXT NOT NULL,
+      subtitle TEXT,
+      category TEXT,
+      scenario_category TEXT,
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      source TEXT,
+      source_id TEXT,
+      source_url TEXT,
+      thumbnail_url TEXT,
+      preview_url TEXT,
+      reference_images_json TEXT NOT NULL,
+      preview_images_json TEXT NOT NULL DEFAULT '[]',
+      prompt TEXT,
+      use_case TEXT,
+      author TEXT,
+      metrics_json TEXT,
+      seed_json TEXT,
+      created_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO templates (id, title, reference_images_json, updated_at)
+    VALUES ('legacy-template', 'Legacy title', '[]', '2026-08-01T00:00:00.000Z');
+  `);
+  oldDb.close();
+
+  const store = createSqliteStore({ dbPath });
+  assert.equal((await store.getTemplate("legacy-template")).title, "Legacy title");
+  await store.close();
+
+  const migratedDb = new DatabaseSync(dbPath);
+  const idColumn = migratedDb.prepare("PRAGMA table_info(templates)").all().find((column) => column.name === "id");
+  assert.equal(Number(idColumn.pk), 0);
+  assert.equal(migratedDb.prepare("SELECT COUNT(*) AS count FROM templates WHERE id = 'legacy-template'").get().count, 1);
+  migratedDb.close();
+});
+
+test("all catalog adapters preserve overlapping ids when rolling back versions", async () => {
+  const recordA = sourceRecord("shared-template");
+  recordA.title = "Version A";
+  recordA.sourceTitle = "Version A";
+  const recordB = sourceRecord("shared-template");
+  recordB.title = "Version B";
+  recordB.sourceTitle = "Version B";
+  const snapshotA = buildFixture([recordA]);
+  const snapshotB = buildFixture([recordB]);
+  const stores = await catalogStores();
+
+  for (const entry of stores) {
+    await importCatalog(entry.store, snapshotA);
+    await importCatalog(entry.store, snapshotB);
+    await entry.store.activateCatalogVersion(snapshotA.catalogVersion);
+    const listed = await entry.store.listTemplates(new URLSearchParams({ limit: "10" }));
+    assert.equal(listed.records.length, 1, entry.name);
+    assert.equal(listed.records[0].title, "Version A", entry.name);
+    assert.equal((await entry.store.getTemplate("shared-template")).title, "Version A", entry.name);
+    await entry.store.close();
+    if (entry.pool) await entry.pool.end();
+  }
+});
+
+test("all catalog adapters reject activation of incomplete versions", async () => {
+  const snapshot = buildFixture([sourceRecord("complete-template")]);
+  const stores = await catalogStores();
+
+  for (const entry of stores) {
+    await importCatalog(entry.store, snapshot);
+    await entry.store.createCatalogVersion({
+      id: "incomplete-version",
+      checksum: "1".repeat(64),
+      source: "test",
+      recordCount: 1,
+    });
+    await assert.rejects(
+      Promise.resolve().then(() => entry.store.activateCatalogVersion("incomplete-version")),
+      /incomplete|record count/i,
+      entry.name,
+    );
+    assert.equal((await entry.store.getActiveCatalogVersion()).id, snapshot.catalogVersion, entry.name);
+    await entry.store.close();
+    if (entry.pool) await entry.pool.end();
+  }
+});
+
+test("all catalog adapters reject activation when persisted rows do not match the version checksum", async () => {
+  const snapshot = buildFixture([sourceRecord("checksum-template")]);
+  const stores = await catalogStores();
+
+  for (const entry of stores) {
+    await importCatalog(entry.store, snapshot);
+    await entry.store.createCatalogVersion({
+      id: "checksum-mismatch-version",
+      checksum: "0".repeat(64),
+      source: "test",
+      recordCount: 1,
+    });
+    await entry.store.syncTemplates(
+      [{ ...snapshot.records[0], catalogVersionId: "checksum-mismatch-version" }],
+      { catalogVersionId: "checksum-mismatch-version" },
+    );
+    await assert.rejects(
+      Promise.resolve().then(() => entry.store.activateCatalogVersion("checksum-mismatch-version")),
+      /checksum/i,
+      entry.name,
+    );
+    assert.equal((await entry.store.getActiveCatalogVersion()).id, snapshot.catalogVersion, entry.name);
+    await entry.store.close();
+    if (entry.pool) await entry.pool.end();
+  }
+});
+
+test("all catalog adapters can sync and activate a checksummed version without mutating records", async () => {
+  const snapshot = buildFixture([sourceRecord("synced-template")]);
+  const versionId = "synced-version";
+  const stores = await catalogStores();
+
+  for (const entry of stores) {
+    await entry.store.createCatalogVersion({
+      id: versionId,
+      checksum: snapshot.checksum,
+      source: "test",
+      recordCount: snapshot.records.length,
+    });
+    await entry.store.syncTemplates(snapshot.records, { catalogVersionId: versionId });
+    await entry.store.activateCatalogVersion(versionId);
+    const state = await entry.store.getCatalogVersionState(versionId);
+    assert.equal(state.complete, true, entry.name);
+    assert.equal((await entry.store.listTemplates(new URLSearchParams())).records[0].updatedAt, snapshot.records[0].updatedAt, entry.name);
+    await entry.store.close();
+    if (entry.pool) await entry.pool.end();
+  }
+});
+
+test("app initialization atomically repairs an incomplete active snapshot version", async () => {
+  const snapshot = buildFixture([sourceRecord("startup-repair")]);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ima-catalog-startup-"));
+  const dbPath = path.join(root, "miniapp.sqlite");
+  const migrated = createSqliteStore({ dbPath });
+  await migrated.close();
+  const raw = new DatabaseSync(dbPath);
+  raw.prepare(`
+    INSERT INTO template_catalog_versions
+      (id, checksum, source, record_count, active, metadata_json, created_at, activated_at)
+    VALUES (?, ?, ?, ?, 1, '{}', ?, ?)
+  `).run(snapshot.catalogVersion, snapshot.checksum, "corrupt-test", snapshot.records.length, new Date().toISOString(), new Date().toISOString());
+  raw.close();
+
+  const store = createSqliteStore({ dbPath });
+  const app = createApp({
+    store,
+    catalogSnapshot: snapshot,
+    env: { NODE_ENV: "test", MINIAPP_DEV_LOGIN: "1", WECHAT_MINIAPP_APP_ID: "wx-test" },
+  });
+  assert.equal(typeof app.initialize, "function");
+  await app.initialize();
+  const listed = await store.listTemplates(new URLSearchParams({ limit: "10" }));
+  assert.equal(listed.catalogVersion, snapshot.catalogVersion);
+  assert.equal(listed.pagination.total, 1);
+  assert.equal(listed.records[0].id, "startup-repair");
+  await app.close();
+});
+
+test("app initialization repairs mismatched active checksum and declared count", async () => {
+  const snapshot = buildFixture([sourceRecord("startup-metadata-repair")]);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ima-catalog-startup-metadata-"));
+  const dbPath = path.join(root, "miniapp.sqlite");
+  const initialStore = createSqliteStore({ dbPath });
+  await importCatalog(initialStore, snapshot);
+  await initialStore.close();
+
+  const raw = new DatabaseSync(dbPath);
+  raw.prepare("UPDATE template_catalog_versions SET checksum = ?, record_count = ? WHERE id = ?")
+    .run("0".repeat(64), 99, snapshot.catalogVersion);
+  raw.close();
+
+  const store = createSqliteStore({ dbPath });
+  const app = createApp({
+    store,
+    catalogSnapshot: snapshot,
+    env: { NODE_ENV: "test", MINIAPP_DEV_LOGIN: "1", WECHAT_MINIAPP_APP_ID: "wx-test" },
+  });
+  await app.initialize();
+  const active = await store.getActiveCatalogVersion();
+  const state = await store.getCatalogVersionState(snapshot.catalogVersion);
+  assert.equal(active.checksum, snapshot.checksum);
+  assert.equal(active.recordCount, snapshot.records.length);
+  assert.equal(state.complete, true);
+  await app.close();
 });
 
 test("postgres adapter imports and activates a complete catalog in one store contract", async () => {

@@ -294,6 +294,7 @@ async function createServer(options = {}) {
         fetch: options.fetch,
       });
     }
+    if (typeof app.initialize === "function") await app.initialize();
   } catch (error) {
     const cleanupErrors = await rollbackResources(acquiredResources);
     if (error && error.code === "RUNTIME_DEPENDENCY_MISSING" && cleanupErrors.length === 0) throw error;

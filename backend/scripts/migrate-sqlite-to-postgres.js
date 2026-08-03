@@ -256,10 +256,10 @@ async function importSnapshot(client, snapshot, expected) {
   const catalogId = `legacy_catalog_${expected.checksum.slice(0, 24)}`;
   await client.query("INSERT INTO template_catalog_versions (id, checksum, source, record_count, active, metadata) VALUES ($1, $2, 'legacy-sqlite', $3, TRUE, $4) ON CONFLICT (id) DO NOTHING", [catalogId, expected.checksum, snapshot.templates.length, JSON.stringify({ legacy: true })]);
   for (const row of snapshot.templates) {
+    await client.query("DELETE FROM templates WHERE catalog_version_id = $1 AND id = $2", [catalogId, row.id]);
     await client.query(`
       INSERT INTO templates (id, catalog_version_id, title, subtitle, category, scenario_category, source, source_id, source_url, thumbnail_url, preview_url, reference_images, prompt, use_case, author, metrics, seed, metadata, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-      ON CONFLICT (id) DO NOTHING
     `, [row.id, catalogId, row.title || "", row.subtitle || "", row.category || "", row.scenario_category || "", row.source || "", row.source_id || "", row.source_url || "", row.thumbnail_url || "", row.preview_url || "", row.reference_images_json || "[]", row.prompt || "", row.use_case || "", row.author || "", row.metrics_json || null, row.seed_json || null, JSON.stringify({ legacyId: row.id, legacyRow: row }), row.updated_at || now]);
   }
   for (const row of snapshot.orders) {

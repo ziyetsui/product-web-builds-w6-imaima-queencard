@@ -1,34 +1,136 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema.json",
   "title": "ima ima Queencard template catalog",
   "type": "object",
-  "required": ["schemaVersion", "catalogVersion", "schema", "source", "counts", "checksum", "records"],
+  "additionalProperties": false,
+  "required": ["schemaVersion", "catalogVersion", "schema", "source", "counts", "deduplicatedIds", "checksum", "records"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "catalogVersion": { "type": "string", "minLength": 1 },
-    "schema": { "const": "catalog.schema.json" },
-    "source": { "type": "object", "required": ["ref", "commit", "inputs"] },
-    "counts": { "type": "object", "required": ["total", "beforeDedup", "bySource", "byCategory", "assetRefs"] },
+    "schema": { "const": "schema.json" },
+    "source": { "$ref": "#/$defs/source" },
+    "counts": { "$ref": "#/$defs/counts" },
+    "deduplicatedIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
     "checksum": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "records": { "type": "array", "items": { "$ref": "#/$defs/record" } }
   },
   "$defs": {
+    "assetStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "local", "http", "missing"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "local": { "type": "integer", "minimum": 0 },
+        "http": { "type": "integer", "minimum": 0 },
+        "missing": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "sourceInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "count", "assetRefs"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "count": { "type": "integer", "minimum": 0 },
+        "assetRefs": { "$ref": "#/$defs/assetStats" },
+        "metricsRef": { "type": "string", "minLength": 1 }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "commit", "inputs"],
+      "properties": {
+        "ref": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "minLength": 1 },
+        "inputs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/sourceInput" } }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "beforeDedup", "bySource", "byCategory", "assetRefs"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "beforeDedup": { "type": "integer", "minimum": 0 },
+        "bySource": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "byCategory": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "assetRefs": { "type": "object", "additionalProperties": { "$ref": "#/$defs/assetStats" } }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["likes", "saves", "shares", "likesText", "savesText", "sharesText"],
+      "properties": {
+        "likes": { "type": "number", "minimum": 0 },
+        "saves": { "type": "number", "minimum": 0 },
+        "shares": { "type": "number", "minimum": 0 },
+        "likesText": { "type": "string" },
+        "savesText": { "type": "string" },
+        "sharesText": { "type": "string" },
+        "followers": { "type": "number", "minimum": 0 },
+        "followersText": { "type": "string" },
+        "potentialRatio": { "type": "number" },
+        "likeFollowerRatio": { "type": "number" },
+        "potentialScore": { "type": "number" },
+        "potentialRank": { "type": "number", "minimum": 1 },
+        "isPotentialHit": { "type": "boolean" }
+      }
+    },
     "record": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["id", "title", "author", "category", "tags", "prompt", "referenceImages", "previewImages", "source", "metrics", "createdAt", "updatedAt"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
-        "title": { "type": "string" },
-        "author": { "type": "string" },
-        "category": { "type": "string" },
+        "title": { "type": "string", "minLength": 1 },
+        "subtitle": { "type": "string" },
+        "author": { "type": "string", "minLength": 1 },
+        "category": { "type": "string", "minLength": 1 },
+        "scenarioCategory": { "type": "string" },
         "tags": { "type": "array", "items": { "type": "string" } },
-        "prompt": { "type": "string" },
+        "prompt": { "type": "string", "minLength": 1 },
         "referenceImages": { "type": "array", "items": { "type": "string" } },
         "previewImages": { "type": "array", "items": { "type": "string" } },
-        "source": { "type": "string" },
-        "metrics": { "type": "object" },
-        "createdAt": { "type": ["string", "null"] },
-        "updatedAt": { "type": ["string", "null"] }
+        "source": { "type": "string", "minLength": 1 },
+        "sourceId": { "type": "string" },
+        "sourceUrl": { "type": "string" },
+        "thumbnailUrl": { "type": "string" },
+        "previewUrl": { "type": "string" },
+        "useCase": { "type": "string" },
+        "metrics": { "$ref": "#/$defs/metrics" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sourceTitle", "authorUrl", "patternId", "suggestedPatternValues", "likesText", "savesText", "sharesText"],
+          "properties": {
+            "sourceTitle": { "type": "string" },
+            "authorUrl": { "type": "string" },
+            "patternId": { "type": "string" },
+            "suggestedPatternValues": { "type": ["object", "null"] },
+            "likesText": { "type": "string" },
+            "savesText": { "type": "string" },
+            "sharesText": { "type": "string" }
+          }
+        },
+        "seed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["templateId", "prompt", "referenceImages", "sourceCaseId", "sourceCaseCategory", "sourceTitle"],
+          "properties": {
+            "templateId": { "type": "string" },
+            "prompt": { "type": "string" },
+            "referenceImages": { "type": "array", "items": { "type": "string" } },
+            "sourceCaseId": { "type": "string" },
+            "sourceCaseCategory": { "type": "string" },
+            "sourceTitle": { "type": "string" }
+          }
+        }
       }
     }
   }

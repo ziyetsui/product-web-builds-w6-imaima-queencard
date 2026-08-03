@@ -2,6 +2,9 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const servicePath = require.resolve("../services/templates.js");
+const apiPath = require.resolve("../services/api.js");
+const sessionPath = require.resolve("../services/session.js");
+const env = require("../config/env.js");
 
 function createWxHarness() {
   const storage = new Map();
@@ -18,7 +21,7 @@ function createWxHarness() {
 }
 
 function unload() {
-  delete require.cache[servicePath];
+  for (const modulePath of [servicePath, apiPath, sessionPath]) delete require.cache[modulePath];
   delete global.wx;
 }
 
@@ -94,6 +97,27 @@ test("template client keeps normalized server catalog fields", async () => {
     assert.equal(result.records[0].thumbnailUrl, "https://cdn.example.com/cover.jpg");
     assert.equal(result.records[0].category, "梗图");
   } finally {
+    unload();
+  }
+});
+
+test("public fallback retains and aborts its wx.request task", { concurrency: false }, async () => {
+  const originalApiBaseUrl = env.API_BASE_URL;
+  const originalTemplateApiBaseUrl = env.TEMPLATE_API_BASE_URL;
+  env.API_BASE_URL = "";
+  env.TEMPLATE_API_BASE_URL = "https://templates.example.com";
+  const harness = createWxHarness();
+  try {
+    const service = require(servicePath);
+    const pending = service.listTemplates({ page: 1 });
+    assert.equal(harness.requests.length, 1);
+    service.cancelPending();
+    assert.equal(harness.requests[0].aborted, true);
+    harness.requests[0].fail({ errMsg: "request:fail abort" });
+    await assert.rejects(pending, (error) => error && error.stale === true);
+  } finally {
+    env.API_BASE_URL = originalApiBaseUrl;
+    env.TEMPLATE_API_BASE_URL = originalTemplateApiBaseUrl;
     unload();
   }
 });

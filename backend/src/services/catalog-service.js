@@ -1,6 +1,15 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const Ajv2020 = require("ajv/dist/2020");
+const addFormats = require("ajv-formats");
+
+const CATALOG_SCHEMA_NAME = "schema.json";
+const CATALOG_SCHEMA_PATH = path.resolve(__dirname, "../../catalog/schema.json");
+const catalogSchema = JSON.parse(fs.readFileSync(CATALOG_SCHEMA_PATH, "utf8"));
+const ajv = new Ajv2020({ allErrors: true, strict: true });
+addFormats(ajv);
+const validateCatalogSchema = ajv.compile(catalogSchema);
 
 const REQUIRED_FIELDS = [
   "id", "title", "author", "category", "tags", "prompt", "referenceImages",
@@ -53,8 +62,17 @@ function isoDate(value) {
 
 function assetPathFor(value, assetRoot) {
   if (!assetRoot || !value || /^https?:\/\//i.test(value)) return null;
-  if (!String(value).startsWith("/")) return null;
-  return path.join(assetRoot, String(value).slice(1));
+  if (!String(value).startsWith("/")) throw new Error(`Invalid local asset path: ${value}`);
+  const root = fs.realpathSync(assetRoot);
+  const candidate = path.resolve(root, String(value).slice(1));
+  const relative = path.relative(root, candidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`Local asset escapes assetRoot: ${value}`);
+  if (fs.existsSync(candidate)) {
+    const real = fs.realpathSync(candidate);
+    const realRelative = path.relative(root, real);
+    if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) throw new Error(`Local asset symlink escapes assetRoot: ${value}`);
+  }
+  return candidate;
 }
 
 function assertLocalAssets(record, assetRoot) {
@@ -103,14 +121,43 @@ function assertSourceRecord(record) {
     if (typeof value !== "string" || !value.trim()) throw new Error(`Invalid catalog source record ${record.id || "unknown"}: missing ${name}`);
   }
   for (const key of ["likes", "saves", "shares"]) {
-    if (record[key] != null && !Number.isFinite(Number(record[key]))) {
+    if (record[key] != null && (typeof record[key] !== "number" || !Number.isFinite(record[key]) || record[key] < 0)) {
       throw new Error(`Invalid catalog source record ${record.id}: ${key} must be numeric`);
+    }
+  }
+}
+
+const METRIC_TYPES = {
+  likes: "number",
+  saves: "number",
+  shares: "number",
+  likesText: "string",
+  savesText: "string",
+  sharesText: "string",
+  followers: "number",
+  followersText: "string",
+  potentialRatio: "number",
+  likeFollowerRatio: "number",
+  potentialScore: "number",
+  potentialRank: "number",
+  isPotentialHit: "boolean",
+};
+
+function assertMetrics(metrics, label, required = false) {
+  if (metrics == null && !required) return;
+  if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) throw new Error(`${label} metrics must be an object`);
+  for (const [key, value] of Object.entries(metrics)) {
+    if (!(key in METRIC_TYPES)) throw new Error(`${label} metrics.${key} is not supported`);
+    if (typeof value !== METRIC_TYPES[key] || (typeof value === "number" && !Number.isFinite(value))) {
+      throw new Error(`${label} metrics.${key} has an invalid type`);
     }
   }
 }
 
 function normalizeSourceRecord(record, sourceName, assetRoot, supplementalMetrics) {
   assertSourceRecord(record);
+  assertMetrics(record.metrics, `Catalog source record ${record.id}`);
+  assertMetrics(supplementalMetrics, `Catalog supplemental record ${record.id}`);
   const id = firstText(record.id);
   if (!id) throw new Error("Catalog record id is required");
   const images = uniqueStrings(record.images || record.referenceImages || []);
@@ -121,16 +168,14 @@ function normalizeSourceRecord(record, sourceName, assetRoot, supplementalMetric
   const metrics = {
     ...(supplementalMetrics && typeof supplementalMetrics === "object" ? supplementalMetrics : {}),
     ...(record.metrics && typeof record.metrics === "object" ? record.metrics : {}),
-    likes: Number(record.likes ?? record.metrics?.likes ?? 0),
-    saves: Number(record.saves ?? record.metrics?.saves ?? 0),
-    shares: Number(record.shares ?? record.metrics?.shares ?? 0),
+    likes: record.likes ?? record.metrics?.likes ?? 0,
+    saves: record.saves ?? record.metrics?.saves ?? 0,
+    shares: record.shares ?? record.metrics?.shares ?? 0,
     likesText: firstText(record.likesText, record.metrics?.likesText),
     savesText: firstText(record.savesText, record.metrics?.savesText),
     sharesText: firstText(record.sharesText, record.metrics?.sharesText),
   };
-  for (const key of ["likes", "saves", "shares"]) {
-    if (!Number.isFinite(metrics[key])) metrics[key] = 0;
-  }
+  assertMetrics(metrics, `Catalog normalized record ${record.id}`, true);
   const createdAt = isoDate(record.createdAt || record.date);
   const updatedAt = isoDate(record.updatedAt || record.createdAt || record.date);
   const normalized = {
@@ -221,7 +266,7 @@ function buildCatalogSnapshot({ sources, sourceRef, assetRoot, sourceCommit } = 
   const snapshot = {
     schemaVersion: 1,
     catalogVersion: `catalog-${commit.slice(0, 12)}-${checksum.slice(0, 16)}`,
-    schema: "catalog.schema.json",
+    schema: CATALOG_SCHEMA_NAME,
     source: {
       ref: firstText(sourceRef, commit),
       commit,
@@ -248,8 +293,9 @@ function buildCatalogSnapshot({ sources, sourceRef, assetRoot, sourceCommit } = 
 }
 
 function validateCatalog(snapshot, { assetRoot, expectedCount } = {}) {
-  if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.records)) {
-    throw new Error("Invalid catalog snapshot schema");
+  if (!validateCatalogSchema(snapshot)) {
+    const details = validateCatalogSchema.errors.map((error) => `${error.instancePath || "/"} ${error.message}`).join("; ");
+    throw new Error(`Invalid catalog snapshot schema: ${details}`);
   }
   const seen = new Set();
   for (const record of snapshot.records) {
@@ -270,6 +316,25 @@ function validateCatalog(snapshot, { assetRoot, expectedCount } = {}) {
     throw new Error(`Catalog expected ${expectedCount} records, got ${snapshot.records.length}`);
   }
   return snapshot;
+}
+
+function recordsChecksum(records) {
+  return catalogChecksum(records
+    .map((record) => {
+      const { catalogVersionId, ...catalogRecord } = record;
+      return catalogRecord;
+    })
+    .sort(compareId));
+}
+
+function validateCatalogVersionInput(input) {
+  const records = Array.isArray(input && input.records) ? input.records : [];
+  const expectedCount = Number(input && input.recordCount);
+  if (!input || !input.id || !/^[a-f0-9]{64}$/.test(String(input.checksum || ""))) throw new Error("Invalid catalog version metadata");
+  if (!Number.isInteger(expectedCount) || expectedCount !== records.length) throw new Error(`Catalog record count mismatch for ${input.id}`);
+  const checksum = recordsChecksum(records);
+  if (checksum !== input.checksum) throw new Error(`Catalog checksum mismatch for ${input.id}`);
+  return { records, checksum };
 }
 
 function metricNumber(record, key) {
@@ -409,6 +474,7 @@ async function importCatalog(store, snapshot, options = {}) {
 
 module.exports = {
   REQUIRED_FIELDS,
+  CATALOG_SCHEMA_NAME,
   buildCatalogSnapshot,
   catalogChecksum,
   categoryFacets,
@@ -417,4 +483,6 @@ module.exports = {
   queryCatalog,
   sortCatalog,
   validateCatalog,
+  validateCatalogVersionInput,
+  recordsChecksum,
 };

@@ -3,7 +3,11 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { assertSessionTokenHash } = require("./auth");
-const { queryCatalog } = require("./services/catalog-service");
+const {
+  queryCatalog,
+  recordsChecksum,
+  validateCatalogVersionInput,
+} = require("./services/catalog-service");
 
 const mockFulfillmentIdentity = Symbol("mockFulfillmentIdentity");
 
@@ -598,20 +602,34 @@ function createMemoryStore(options = {}) {
     return activeCatalogVersionId ? catalogVersions.get(activeCatalogVersionId) || null : null;
   }
 
+  function getCatalogVersionState(versionId) {
+    const version = getCatalogVersion(versionId);
+    if (!version) return null;
+    const records = Array.from((catalogRecords.get(versionId) || new Map()).values());
+    const persistedChecksum = recordsChecksum(records);
+    return {
+      version,
+      persistedRecordCount: records.length,
+      persistedChecksum,
+      complete: records.length === version.recordCount && persistedChecksum === version.checksum,
+    };
+  }
+
   function activateCatalogVersion(versionId) {
-    const version = catalogVersions.get(versionId);
-    if (!version) throw new Error(`Catalog version not found: ${versionId}`);
+    const state = getCatalogVersionState(versionId);
+    if (!state) throw new Error(`Catalog version not found: ${versionId}`);
+    if (state.persistedRecordCount !== state.version.recordCount) throw new Error(`Catalog version incomplete: ${versionId} record count mismatch`);
+    if (state.persistedChecksum !== state.version.checksum) throw new Error(`Catalog version checksum mismatch: ${versionId}`);
+    const version = state.version;
     for (const candidate of catalogVersions.values()) candidate.active = false;
     version.active = true;
     version.activatedAt = new Date().toISOString();
     activeCatalogVersionId = versionId;
-    templates.clear();
-    for (const [id, record] of (catalogRecords.get(versionId) || new Map()).entries()) templates.set(id, record);
     return version;
   }
 
   function importCatalogVersion(input) {
-    const records = Array.isArray(input.records) ? input.records : [];
+    const { records } = validateCatalogVersionInput(input);
     const ids = new Set();
     for (const record of records) {
       if (!record || !record.id || ids.has(record.id)) throw new Error(`Duplicate catalog id: ${record && record.id}`);
@@ -623,8 +641,6 @@ function createMemoryStore(options = {}) {
     catalogRecords.set(saved.id, savedRecords);
     activeCatalogVersionId = saved.id;
     for (const candidate of catalogVersions.values()) candidate.active = candidate.id === saved.id;
-    templates.clear();
-    for (const [id, record] of savedRecords.entries()) templates.set(id, record);
     return saved;
   }
 
@@ -633,10 +649,6 @@ function createMemoryStore(options = {}) {
     records.forEach((record) => target.set(record.id, record));
     if (input.catalogVersionId) {
       catalogRecords.set(input.catalogVersionId, target);
-      if (activeCatalogVersionId === input.catalogVersionId) {
-        templates.clear();
-        for (const [id, record] of target.entries()) templates.set(id, record);
-      }
     }
     return records.length;
   }
@@ -686,6 +698,7 @@ function createMemoryStore(options = {}) {
     listTasks,
     createCatalogVersion,
     getCatalogVersion,
+    getCatalogVersionState,
     getActiveCatalogVersion,
     activateCatalogVersion,
     importCatalogVersion,
@@ -1335,7 +1348,7 @@ function createSqliteStore(options = {}) {
     };
   }
 
-  function syncTemplates(records = []) {
+  function syncTemplates(records = [], input = {}) {
     const updatedAt = new Date().toISOString();
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -1343,35 +1356,17 @@ function createSqliteStore(options = {}) {
         INSERT INTO templates (
           id, catalog_version_id, title, subtitle, category, scenario_category, tags_json,
           source, source_id, source_url, thumbnail_url, preview_url, reference_images_json,
-          preview_images_json, prompt, use_case, author, metrics_json, seed_json, created_at, updated_at
+          preview_images_json, prompt, use_case, author, metrics_json, seed_json, metadata_json, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-          catalog_version_id = excluded.catalog_version_id,
-          title = excluded.title,
-          subtitle = excluded.subtitle,
-          category = excluded.category,
-          scenario_category = excluded.scenario_category,
-          tags_json = excluded.tags_json,
-          source = excluded.source,
-          source_id = excluded.source_id,
-          source_url = excluded.source_url,
-          thumbnail_url = excluded.thumbnail_url,
-          preview_url = excluded.preview_url,
-          reference_images_json = excluded.reference_images_json,
-          preview_images_json = excluded.preview_images_json,
-          prompt = excluded.prompt,
-          use_case = excluded.use_case,
-          author = excluded.author,
-          metrics_json = excluded.metrics_json,
-          seed_json = excluded.seed_json,
-          created_at = excluded.created_at,
-          updated_at = excluded.updated_at
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       records.forEach((record) => {
+        const versionId = input.catalogVersionId || record.catalogVersionId || null;
+        if (versionId) db.prepare("DELETE FROM templates WHERE catalog_version_id = ? AND id = ?").run(versionId, record.id);
+        else db.prepare("DELETE FROM templates WHERE catalog_version_id IS NULL AND id = ?").run(record.id);
         statement.run(
           record.id,
-          record.catalogVersionId || null,
+          versionId,
           record.title || "",
           record.subtitle || "",
           record.category || "",
@@ -1389,8 +1384,9 @@ function createSqliteStore(options = {}) {
           record.author || "",
           stringify(record.metrics || null),
           stringify(record.seed || null),
+          stringify(record.metadata || {}),
           record.createdAt || updatedAt,
-          updatedAt,
+          record.updatedAt || updatedAt,
         );
       });
       db.exec("COMMIT");
@@ -1420,11 +1416,26 @@ function createSqliteStore(options = {}) {
     return rowToCatalogVersion(db.prepare("SELECT * FROM template_catalog_versions WHERE active = 1 LIMIT 1").get());
   }
 
+  function getCatalogVersionState(versionId) {
+    const version = getCatalogVersion(versionId);
+    if (!version) return null;
+    const records = db.prepare("SELECT * FROM templates WHERE catalog_version_id = ? ORDER BY id ASC").all(versionId).map(rowToTemplate);
+    const persistedChecksum = recordsChecksum(records);
+    return {
+      version,
+      persistedRecordCount: records.length,
+      persistedChecksum,
+      complete: records.length === version.recordCount && persistedChecksum === version.checksum,
+    };
+  }
+
   function activateCatalogVersion(versionId) {
     db.exec("BEGIN IMMEDIATE");
     try {
-      const found = db.prepare("SELECT id FROM template_catalog_versions WHERE id = ?").get(versionId);
-      if (!found) throw new Error(`Catalog version not found: ${versionId}`);
+      const state = getCatalogVersionState(versionId);
+      if (!state) throw new Error(`Catalog version not found: ${versionId}`);
+      if (state.persistedRecordCount !== state.version.recordCount) throw new Error(`Catalog version incomplete: ${versionId} record count mismatch`);
+      if (state.persistedChecksum !== state.version.checksum) throw new Error(`Catalog version checksum mismatch: ${versionId}`);
       db.prepare("UPDATE template_catalog_versions SET active = 0, activated_at = NULL").run();
       db.prepare("UPDATE template_catalog_versions SET active = 1, activated_at = ? WHERE id = ?").run(new Date().toISOString(), versionId);
       db.exec("COMMIT");
@@ -1436,7 +1447,7 @@ function createSqliteStore(options = {}) {
   }
 
   function importCatalogVersion(input) {
-    const records = Array.isArray(input.records) ? input.records : [];
+    const { records } = validateCatalogVersionInput(input);
     const ids = new Set();
     for (const record of records) {
       if (!record || !record.id || ids.has(record.id)) throw new Error(`Duplicate catalog id: ${record && record.id}`);
@@ -1456,17 +1467,8 @@ function createSqliteStore(options = {}) {
         INSERT INTO templates (
           id, catalog_version_id, title, subtitle, category, scenario_category, tags_json,
           source, source_id, source_url, thumbnail_url, preview_url, reference_images_json,
-          preview_images_json, prompt, use_case, author, metrics_json, seed_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET catalog_version_id = excluded.catalog_version_id,
-          title = excluded.title, subtitle = excluded.subtitle, category = excluded.category,
-          scenario_category = excluded.scenario_category, tags_json = excluded.tags_json,
-          source = excluded.source, source_id = excluded.source_id, source_url = excluded.source_url,
-          thumbnail_url = excluded.thumbnail_url, preview_url = excluded.preview_url,
-          reference_images_json = excluded.reference_images_json, preview_images_json = excluded.preview_images_json,
-          prompt = excluded.prompt, use_case = excluded.use_case, author = excluded.author,
-          metrics_json = excluded.metrics_json, seed_json = excluded.seed_json,
-          created_at = excluded.created_at, updated_at = excluded.updated_at
+          preview_images_json, prompt, use_case, author, metrics_json, seed_json, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const record of records) {
         statement.run(
@@ -1476,9 +1478,11 @@ function createSqliteStore(options = {}) {
           record.thumbnailUrl || record.thumbnail_url || "", record.previewUrl || record.preview_url || "",
           stringify(record.referenceImages || record.reference_images || []), stringify(record.previewImages || record.preview_images || []),
           record.prompt || "", record.useCase || record.use_case || "", record.author || "",
-          stringify(record.metrics || null), stringify(record.seed || null), record.createdAt || now, record.updatedAt || now,
+          stringify(record.metrics || null), stringify(record.seed || null), stringify(record.metadata || {}), record.createdAt || now, record.updatedAt || now,
         );
       }
+      const state = getCatalogVersionState(input.id);
+      if (!state || !state.complete) throw new Error(`Catalog version incomplete after import: ${input.id}`);
       db.prepare("UPDATE template_catalog_versions SET active = 0, activated_at = NULL").run();
       db.prepare("UPDATE template_catalog_versions SET active = 1, activated_at = ? WHERE id = ?").run(now, input.id);
       db.exec("COMMIT");
@@ -1559,6 +1563,7 @@ function createSqliteStore(options = {}) {
     listTasks,
     createCatalogVersion,
     getCatalogVersion,
+    getCatalogVersionState,
     getActiveCatalogVersion,
     activateCatalogVersion,
     importCatalogVersion,
@@ -1638,7 +1643,8 @@ function migrate(db) {
       activated_at TEXT
     );
     CREATE TABLE IF NOT EXISTS templates (
-      id TEXT PRIMARY KEY,
+      row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL,
       catalog_version_id TEXT,
       title TEXT NOT NULL,
       subtitle TEXT,
@@ -1657,6 +1663,7 @@ function migrate(db) {
       author TEXT,
       metrics_json TEXT,
       seed_json TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT,
       updated_at TEXT NOT NULL
     );
@@ -1712,6 +1719,10 @@ function migrate(db) {
   ensureColumn(db, "templates", "tags_json", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(db, "templates", "preview_images_json", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(db, "templates", "created_at", "TEXT");
+  ensureColumn(db, "templates", "metadata_json", "TEXT NOT NULL DEFAULT '{}'");
+  migrateVersionedTemplateRows(db);
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS templates_catalog_version_template_id_unique ON templates (catalog_version_id, id) WHERE catalog_version_id IS NOT NULL");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS templates_legacy_template_id_unique ON templates (id) WHERE catalog_version_id IS NULL");
   ensureColumn(db, "template_catalog_versions", "metadata_json", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(db, "template_catalog_versions", "activated_at", "TEXT");
   ensureColumn(db, "orders", "payment_mode", "TEXT");
@@ -1730,6 +1741,59 @@ function migrate(db) {
   ensureColumn(db, "orders", "canceled_at", "TEXT");
   ensureColumn(db, "orders", "admin_note", "TEXT");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS orders_user_idempotency_key_unique ON orders (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL");
+}
+
+function migrateVersionedTemplateRows(db) {
+  const idColumn = db.prepare("PRAGMA table_info(templates)").all().find((column) => column.name === "id");
+  if (!idColumn || Number(idColumn.pk) !== 1) return;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec("ALTER TABLE templates RENAME TO templates_global_id_legacy");
+    db.exec(`
+      CREATE TABLE templates (
+        row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL,
+        catalog_version_id TEXT,
+        title TEXT NOT NULL,
+        subtitle TEXT,
+        category TEXT,
+        scenario_category TEXT,
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        source TEXT,
+        source_id TEXT,
+        source_url TEXT,
+        thumbnail_url TEXT,
+        preview_url TEXT,
+        reference_images_json TEXT NOT NULL,
+        preview_images_json TEXT NOT NULL DEFAULT '[]',
+        prompt TEXT,
+        use_case TEXT,
+        author TEXT,
+        metrics_json TEXT,
+        seed_json TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO templates (
+        id, catalog_version_id, title, subtitle, category, scenario_category, tags_json,
+        source, source_id, source_url, thumbnail_url, preview_url, reference_images_json,
+        preview_images_json, prompt, use_case, author, metrics_json, seed_json, metadata_json,
+        created_at, updated_at
+      )
+      SELECT
+        id, catalog_version_id, title, subtitle, category, scenario_category, tags_json,
+        source, source_id, source_url, thumbnail_url, preview_url, reference_images_json,
+        preview_images_json, prompt, use_case, author, metrics_json, seed_json, metadata_json,
+        created_at, updated_at
+      FROM templates_global_id_legacy;
+      DROP TABLE templates_global_id_legacy;
+    `);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 function ensureColumn(db, table, column, definition) {
@@ -1963,6 +2027,7 @@ function rowToTemplate(row) {
     author: row.author,
     metrics: parseJson(row.metrics_json, null),
     seed: parseJson(row.seed_json, null),
+    metadata: parseJson(row.metadata_json, {}),
     createdAt: row.created_at || row.updated_at,
     updatedAt: row.updated_at,
   };

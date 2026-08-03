@@ -6,7 +6,7 @@ const STORE_METHODS = [
   "createTask", "getTask", "listTasks", "claimTask", "renewTaskLease", "releaseTaskLease", "reclaimExpiredTasks", "updateTask",
   "createAsset", "createGeneratedAsset", "getAsset", "getGeneratedAsset", "findOwnedAsset", "findOwnedImageAsset", "listAssets", "listGeneratedAssets", "deleteAsset",
   "createReferenceAsset", "getReferenceAsset", "listReferenceAssets", "deleteReferenceAsset",
-  "createCatalogVersion", "getCatalogVersion", "getActiveCatalogVersion", "activateCatalogVersion",
+  "createCatalogVersion", "getCatalogVersion", "getCatalogVersionState", "getActiveCatalogVersion", "activateCatalogVersion",
   "importCatalogVersion",
   "syncTemplates", "listTemplates", "getTemplate",
   "createOrder", "getOrder", "getOrderByIdempotencyKey", "listOrders", "listAllOrders",

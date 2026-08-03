@@ -5,6 +5,7 @@ const { newDb } = require("pg-mem");
 const migrationPath = require.resolve("../../migrations/001_initial.sql");
 const identityMigrationPath = require.resolve("../../migrations/002_payment_and_retry_identity.sql");
 const orderIdentityMigrationPath = require.resolve("../../migrations/003_order_request_identity.sql");
+const versionedTemplatesMigrationPath = require.resolve("../../migrations/004_versioned_template_rows.sql");
 
 function createPgMemPool() {
   const db = newDb({ autoCreateForeignKeyIndices: true });
@@ -35,13 +36,25 @@ async function applyPgMemSchema(pool) {
   const raw = fs.readFileSync(migrationPath, "utf8");
   const unsupported = raw.indexOf("CREATE OR REPLACE FUNCTION reject_credit_transaction_mutation");
   if (unsupported < 0) throw new Error("Expected PostgreSQL trigger boundary was not found");
-  const supportedSchema = raw.slice(0, unsupported).replace(
-    "CHECK (remaining_credits + frozen_credits <= initial_credits)",
-    "CHECK (TRUE)",
-  );
+  const supportedSchema = raw.slice(0, unsupported)
+    .replace(
+      "CHECK (remaining_credits + frozen_credits <= initial_credits)",
+      "CHECK (TRUE)",
+    )
+    // pg-mem retains a stale id index after DROP CONSTRAINT.
+    .replace(
+      "CREATE TABLE IF NOT EXISTS templates (\n  id TEXT PRIMARY KEY,",
+      "CREATE TABLE IF NOT EXISTS templates (\n  id TEXT NOT NULL,",
+    );
   await pool.query(supportedSchema);
   await pool.query(fs.readFileSync(identityMigrationPath, "utf8"));
   await pool.query(fs.readFileSync(orderIdentityMigrationPath, "utf8"));
+  // pg-mem also misroutes equality lookups through partial indexes. Its harness
+  // uses the equivalent versioned composite index without partial predicates.
+  const versionedTemplatesMigration = fs.readFileSync(versionedTemplatesMigrationPath, "utf8")
+    .replace(/\n\s+WHERE catalog_version_id IS NOT NULL;/, ";")
+    .replace(/\nCREATE UNIQUE INDEX IF NOT EXISTS templates_legacy_template_id_unique[\s\S]+?;/, "");
+  await pool.query(versionedTemplatesMigration);
 }
 
 module.exports = {

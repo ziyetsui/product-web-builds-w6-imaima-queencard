@@ -52,6 +52,37 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("runtime waits for application initialization before accepting traffic", async () => {
+  const initialization = deferred();
+  let initializeCalls = 0;
+  const app = {
+    fetch: () => Response.json({ success: true }),
+    initialize() {
+      initializeCalls += 1;
+      return initialization.promise;
+    },
+  };
+
+  let resolved = false;
+  const runtimePromise = createServer({
+    env: { NODE_ENV: "test", PORT: "0", MINIAPP_BACKEND_HOST: "127.0.0.1" },
+    app,
+    dependencies: { store: { ready: true } },
+    logger: quietLogger(),
+  }).then((runtime) => {
+    resolved = true;
+    return runtime;
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(initializeCalls, 1);
+  assert.equal(resolved, false);
+
+  initialization.resolve();
+  const runtime = await runtimePromise;
+  await runtime.shutdown();
+});
+
 test("health returns 503 and dependency details while any runtime dependency is unready", async (t) => {
   const runtime = await createServer({
     env: { NODE_ENV: "test", PORT: "0", MINIAPP_BACKEND_HOST: "127.0.0.1" },

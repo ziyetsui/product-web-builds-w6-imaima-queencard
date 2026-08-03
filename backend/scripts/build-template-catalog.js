@@ -2,8 +2,8 @@
 
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
+const JSON5 = require("json5");
 const path = require("node:path");
-const vm = require("node:vm");
 
 const { buildCatalogSnapshot } = require("../src/services/catalog-service");
 
@@ -67,7 +67,7 @@ function readSource(value) {
 
 function parseSource(value, exportName) {
   const literal = extractArray(readSource(value), exportName);
-  return vm.runInNewContext(`(${literal})`, {}, { timeout: 10000 });
+  return JSON5.parse(literal);
 }
 
 function parseObjectSource(value, exportName) {
@@ -95,7 +95,7 @@ function parseObjectSource(value, exportName) {
     if (char === "{") depth += 1;
     if (char === "}") {
       depth -= 1;
-      if (depth === 0) return vm.runInNewContext(`(${source.slice(start, index + 1)})`, {}, { timeout: 10000 });
+      if (depth === 0) return JSON5.parse(source.slice(start, index + 1));
     }
   }
   throw new Error(`${exportName} object did not terminate`);

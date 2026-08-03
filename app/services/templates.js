@@ -165,7 +165,7 @@ function requestPublicTemplates(query) {
   }
 
   return new Promise(function (resolve, reject) {
-    wx.request({
+    pendingRequest = wx.request({
       url: env.TEMPLATE_API_BASE_URL.replace(/\/$/, "") + "/api/templates" + buildQuery(query),
       method: "GET",
       timeout: env.REQUEST_TIMEOUT,

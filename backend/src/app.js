@@ -1,5 +1,4 @@
 const fs = require("node:fs/promises");
-const fsSync = require("node:fs");
 const pathModule = require("node:path");
 const crypto = require("node:crypto");
 
@@ -8,7 +7,7 @@ const { serveAsset } = require("./assets");
 const { createImageProvider } = require("./providers");
 const { createSqliteStore } = require("./store");
 const { fetchTemplateById, fetchTemplateList } = require("./templates");
-const { importCatalog } = require("./services/catalog-service");
+const { importCatalog, validateCatalog } = require("./services/catalog-service");
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -385,27 +384,39 @@ function createApp(options = {}) {
     env,
     fetch: fetchImpl,
   });
-  let templatesSynced = false;
+  const remoteTemplateSource = getEnv(env, "MINIAPP_TEMPLATE_SOURCE", "") === "remote"
+    || Boolean(getEnv(env, "MINIAPP_TEMPLATE_API_BASE_URL", ""));
+  const configuredSnapshot = options.catalogSnapshot === false
+    ? null
+    : options.catalogSnapshot !== undefined
+      ? options.catalogSnapshot
+      : remoteTemplateSource ? null : pathModule.resolve(__dirname, "../catalog/catalog.snapshot.json");
+  let catalogSnapshotPromise = configuredSnapshot && typeof configuredSnapshot !== "object"
+    ? fs.readFile(configuredSnapshot, "utf8").then((contents) => JSON.parse(contents))
+    : Promise.resolve(configuredSnapshot);
+  let initializationPromise = null;
 
-  async function ensureTemplatesSynced(request) {
-    if (templatesSynced || !store.syncTemplates) return;
-    const remoteTemplateSource = getEnv(env, "MINIAPP_TEMPLATE_SOURCE", "") === "remote"
-      || Boolean(getEnv(env, "MINIAPP_TEMPLATE_API_BASE_URL", ""));
-    const configuredSnapshot = options.catalogSnapshot === false
-      ? null
-      : options.catalogSnapshot !== undefined
-        ? options.catalogSnapshot
-        : remoteTemplateSource ? null : pathModule.resolve(__dirname, "../catalog/catalog.snapshot.json");
-    if (configuredSnapshot && store.importCatalogVersion) {
-      const snapshot = typeof configuredSnapshot === "object"
-        ? configuredSnapshot
-        : fsSync.existsSync(configuredSnapshot) ? JSON.parse(fsSync.readFileSync(configuredSnapshot, "utf8")) : null;
-      if (snapshot) {
-        const active = store.getActiveCatalogVersion ? await store.getActiveCatalogVersion() : null;
-        if (!active || active.id !== snapshot.catalogVersion) await importCatalog(store, snapshot);
-        templatesSynced = true;
-        return;
-      }
+  async function initializeTemplates(request) {
+    if (!store.syncTemplates) return;
+    const snapshot = await catalogSnapshotPromise;
+    catalogSnapshotPromise = null;
+    if (snapshot && store.importCatalogVersion) {
+      const active = store.getActiveCatalogVersion ? await store.getActiveCatalogVersion() : null;
+      const state = store.getCatalogVersionState
+        ? await store.getCatalogVersionState(snapshot.catalogVersion)
+        : null;
+      const expectedCount = Array.isArray(snapshot.records) ? snapshot.records.length : -1;
+      const complete = active
+        && active.id === snapshot.catalogVersion
+        && active.checksum === snapshot.checksum
+        && active.recordCount === expectedCount
+        && state
+        && state.persistedRecordCount === expectedCount
+        && state.persistedChecksum === snapshot.checksum
+        && state.complete;
+      if (complete) validateCatalog(snapshot);
+      else await importCatalog(store, snapshot);
+      return;
     }
     const syncQuery = new URLSearchParams({
       page: "1",
@@ -418,7 +429,15 @@ function createApp(options = {}) {
       fetch: fetchImpl,
     });
     await store.syncTemplates(data.records || []);
-    templatesSynced = true;
+  }
+
+  function initialize(request) {
+    if (!initializationPromise) initializationPromise = initializeTemplates(request);
+    return initializationPromise;
+  }
+
+  async function ensureTemplatesSynced(request) {
+    await initialize(request);
   }
 
   async function getTemplate(templateId, request) {
@@ -1011,6 +1030,7 @@ function createApp(options = {}) {
 
   return {
     fetch: handle,
+    initialize,
     close() {
       if (store.close) return store.close();
     },
