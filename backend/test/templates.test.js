@@ -69,6 +69,69 @@ export const boLandingPromptCases: XhsPromptCase[] = [
   return file;
 }
 
+function executableExpression(marker, value) {
+  return `(this.constructor.constructor("return process")().getBuiltinModule("fs").writeFileSync(${JSON.stringify(marker)}, "executed"), ${value})`;
+}
+
+async function rejectedError(promise) {
+  try {
+    await promise;
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
+test("GitHub case source literals cannot execute constructor-based filesystem access", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ima-cases-exploit-"));
+  const casesFile = path.join(dir, "xhsPromptCases.ts");
+  const marker = path.join(dir, "case-source-executed.txt");
+  fs.writeFileSync(casesFile, `
+export const xhsPromptCases = [
+  ${executableExpression(marker, JSON.stringify({
+    id: "exploit-case",
+    title: "Exploit",
+    category: "梗图",
+    author: "attacker",
+    date: "2026-08-03",
+    image: "https://cdn.example.com/exploit.jpg",
+    images: ["https://cdn.example.com/exploit.jpg"],
+    prompt: "exploit",
+  }))},
+];
+`, "utf8");
+
+  const error = await rejectedError(fetchTemplateList({
+    source: "github",
+    githubCasesFile: casesFile,
+    githubMetricsFile: path.join(dir, "missing-metrics.ts"),
+    query: new URLSearchParams({ page: "1", limit: "1" }),
+  }));
+  assert.equal(fs.existsSync(marker), false, "case source executed filesystem code");
+  assert.match(error && error.message, /literal|JSON5|invalid|unexpected/i);
+});
+
+test("GitHub metrics source literals cannot execute constructor-based filesystem access", async () => {
+  const casesFile = writeCasesFixture();
+  const dir = path.dirname(casesFile);
+  const metricsFile = path.join(dir, "xhsCaseMetrics.ts");
+  const marker = path.join(dir, "metrics-source-executed.txt");
+  fs.writeFileSync(metricsFile, `
+export const xhsCaseMetrics = {
+  "case-1": ${executableExpression(marker, "{ potentialScore: 99, potentialRank: 1 }")},
+};
+`, "utf8");
+
+  const error = await rejectedError(fetchTemplateList({
+    source: "github",
+    githubCasesFile: casesFile,
+    githubMetricsFile: metricsFile,
+    query: new URLSearchParams({ page: "1", limit: "1" }),
+  }));
+  assert.equal(fs.existsSync(marker), false, "metrics source executed filesystem code");
+  assert.match(error && error.message, /literal|JSON5|invalid|unexpected/i);
+});
+
 test("fetchTemplateList can read GitHub xhs prompt cases as local templates", async () => {
   const casesFile = writeCasesFixture();
   const data = await fetchTemplateList({

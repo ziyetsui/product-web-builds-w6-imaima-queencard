@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const vm = require("node:vm");
 const { queryCatalog } = require("./services/catalog-service");
+const { parseExportedArray, parseExportedObject } = require("./source-literal-parser");
 
 function firstText() {
   for (let index = 0; index < arguments.length; index += 1) {
@@ -59,79 +59,6 @@ function normalizeTemplate(record) {
   };
 }
 
-function extractCasesArray(sourceText, exportName) {
-  const marker = `export const ${exportName}`;
-  const markerIndex = sourceText.indexOf(marker);
-  if (markerIndex < 0) throw new Error(`${exportName} export not found`);
-  const equalsIndex = sourceText.indexOf("=", markerIndex);
-  if (equalsIndex < 0) throw new Error(`${exportName} assignment not found`);
-  const start = sourceText.indexOf("[", equalsIndex);
-  if (start < 0) throw new Error(`${exportName} array not found`);
-
-  let depth = 0;
-  let quote = "";
-  let escaped = false;
-  for (let index = start; index < sourceText.length; index += 1) {
-    const char = sourceText[index];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === quote) {
-        quote = "";
-      }
-      continue;
-    }
-    if (char === "\"" || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "[") depth += 1;
-    if (char === "]") {
-      depth -= 1;
-      if (depth === 0) return sourceText.slice(start, index + 1);
-    }
-  }
-  throw new Error(`${exportName} array did not terminate`);
-}
-
-function extractExportObject(sourceText, marker) {
-  const markerIndex = sourceText.indexOf(marker);
-  if (markerIndex < 0) throw new Error(marker + " export not found");
-  const equalsIndex = sourceText.indexOf("=", markerIndex);
-  if (equalsIndex < 0) throw new Error(marker + " assignment not found");
-  const start = sourceText.indexOf("{", equalsIndex);
-  if (start < 0) throw new Error(marker + " object not found");
-
-  let depth = 0;
-  let quote = "";
-  let escaped = false;
-  for (let index = start; index < sourceText.length; index += 1) {
-    const char = sourceText[index];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === quote) {
-        quote = "";
-      }
-      continue;
-    }
-    if (char === "\"" || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "{") depth += 1;
-    if (char === "}") {
-      depth -= 1;
-      if (depth === 0) return sourceText.slice(start, index + 1);
-    }
-  }
-  throw new Error(marker + " object did not terminate");
-}
-
 function exportedCaseArrayName(filePath) {
   const baseName = path.basename(filePath);
   if (baseName === "boLandingPromptCases.ts") return "boLandingPromptCases";
@@ -140,18 +67,12 @@ function exportedCaseArrayName(filePath) {
 
 function loadGithubCases(filePath) {
   const sourceText = fs.readFileSync(filePath, "utf8");
-  const literal = extractCasesArray(sourceText, exportedCaseArrayName(filePath));
-  return vm.runInNewContext("(" + literal + ")", {}, {
-    timeout: 1000,
-  });
+  return parseExportedArray(sourceText, exportedCaseArrayName(filePath));
 }
 
 function loadGithubCaseMetrics(filePath) {
   const sourceText = fs.readFileSync(filePath, "utf8");
-  const literal = extractExportObject(sourceText, "export const xhsCaseMetrics");
-  return vm.runInNewContext("(" + literal + ")", {}, {
-    timeout: 1000,
-  });
+  return parseExportedObject(sourceText, "xhsCaseMetrics");
 }
 
 function noteIdFor(record) {

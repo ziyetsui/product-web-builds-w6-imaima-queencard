@@ -2,10 +2,10 @@
 
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
-const JSON5 = require("json5");
 const path = require("node:path");
 
 const { buildCatalogSnapshot } = require("../src/services/catalog-service");
+const { parseExportedArray, parseExportedObject } = require("../src/source-literal-parser");
 
 function usage() {
   return [
@@ -22,36 +22,6 @@ function argument(name, args, required = true) {
   return value || "";
 }
 
-function extractArray(sourceText, exportName) {
-  const marker = `export const ${exportName}`;
-  const markerIndex = sourceText.indexOf(marker);
-  if (markerIndex < 0) throw new Error(`${exportName} export not found`);
-  const start = sourceText.indexOf("[", sourceText.indexOf("=", markerIndex));
-  if (start < 0) throw new Error(`${exportName} array not found`);
-  let depth = 0;
-  let quote = "";
-  let escaped = false;
-  for (let index = start; index < sourceText.length; index += 1) {
-    const char = sourceText[index];
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === quote) quote = "";
-      continue;
-    }
-    if (char === "\"" || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "[") depth += 1;
-    if (char === "]") {
-      depth -= 1;
-      if (depth === 0) return sourceText.slice(start, index + 1);
-    }
-  }
-  throw new Error(`${exportName} array did not terminate`);
-}
-
 function readSource(value) {
   const separator = value.indexOf(":");
   if (separator > 0 && !path.isAbsolute(value.slice(0, separator)) && !fs.existsSync(value)) {
@@ -66,39 +36,11 @@ function readSource(value) {
 }
 
 function parseSource(value, exportName) {
-  const literal = extractArray(readSource(value), exportName);
-  return JSON5.parse(literal);
+  return parseExportedArray(readSource(value), exportName);
 }
 
 function parseObjectSource(value, exportName) {
-  const source = readSource(value);
-  const marker = `export const ${exportName}`;
-  const markerIndex = source.indexOf(marker);
-  if (markerIndex < 0) throw new Error(`${exportName} export not found`);
-  const start = source.indexOf("{", source.indexOf("=", markerIndex));
-  if (start < 0) throw new Error(`${exportName} object not found`);
-  let depth = 0;
-  let quote = "";
-  let escaped = false;
-  for (let index = start; index < source.length; index += 1) {
-    const char = source[index];
-    if (quote) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === quote) quote = "";
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      quote = char;
-      continue;
-    }
-    if (char === "{") depth += 1;
-    if (char === "}") {
-      depth -= 1;
-      if (depth === 0) return JSON5.parse(source.slice(start, index + 1));
-    }
-  }
-  throw new Error(`${exportName} object did not terminate`);
+  return parseExportedObject(readSource(value), exportName);
 }
 
 function main() {
