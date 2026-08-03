@@ -3,6 +3,38 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 
+const mockFulfillmentIdentity = Symbol("mockFulfillmentIdentity");
+
+function developmentMockIdentity(environment, order, input) {
+  const expected = `mock:${order.id}`;
+  const requestIsValid = input.fulfillmentKey === expected
+    && input.provider === "mock"
+    && input.paymentMode === "mock"
+    && input.eventId === expected
+    && input.providerTransactionId === expected
+    && input.status === "FULFILLED"
+    && input.paymentVerified === true;
+  const pendingMockOrder = order.paymentMode === "mock"
+    && order.status === "pending"
+    && order.paymentStatus === "mock_pending"
+    && !order.fulfilledAt;
+  const completedMockOrder = order.paymentMode === "mock"
+    && order.status === "paid"
+    && order.paymentStatus === "fulfilled"
+    && Boolean(order.fulfilledAt)
+    && order.mockFulfillmentKey === expected
+    && order.mockEventId === expected
+    && order.mockProviderTransactionId === expected;
+  if (["production", "prod"].includes(environment)
+    || !requestIsValid
+    || (!pendingMockOrder && !completedMockOrder)) {
+    const error = new Error("Development mock payment required");
+    error.status = 409;
+    throw error;
+  }
+  return { expected, completed: completedMockOrder };
+}
+
 function metricNumber(record, key) {
   const metrics = record.metrics || {};
   const value = Number(metrics[key] || 0);
@@ -52,6 +84,7 @@ function sortTemplates(records, sort) {
 
 function createMemoryStore(options = {}) {
   const initialCredits = Number(options.initialCredits || 10);
+  const environment = String(options.environment || process.env.NODE_ENV || "development").toLowerCase();
   const users = new Map();
   const tasks = new Map();
   const creditTransactions = [];
@@ -176,6 +209,9 @@ function createMemoryStore(options = {}) {
       productSnapshot: order.productSnapshot || null,
       paymentParams: order.paymentParams || null,
       externalPaymentId: order.externalPaymentId || "",
+      mockFulfillmentKey: order.mockFulfillmentKey || "",
+      mockEventId: order.mockEventId || "",
+      mockProviderTransactionId: order.mockProviderTransactionId || "",
       creditsGranted: 0,
       creditsRevoked: 0,
       createdAt,
@@ -232,6 +268,13 @@ function createMemoryStore(options = {}) {
     order.paidAt = order.paidAt || input.paidAt || now;
     order.fulfilledAt = now;
     order.creditsGranted = credits;
+    const mockIdentity = input[mockFulfillmentIdentity];
+    if (mockIdentity) {
+      order.mockFulfillmentKey = mockIdentity;
+      order.mockEventId = mockIdentity;
+      order.mockProviderTransactionId = mockIdentity;
+      order.externalPaymentId = mockIdentity;
+    }
     order.updatedAt = now;
     return { order, fulfilled: true };
   }
@@ -239,12 +282,13 @@ function createMemoryStore(options = {}) {
   function fulfillMockOrder(id, input = {}) {
     const order = getOrder(id);
     if (!order) return null;
-    if (order.paymentMode !== "mock" || input.provider !== "mock" || input.paymentMode !== "mock" || input.paymentVerified !== true) {
-      const error = new Error("Development mock payment required");
-      error.status = 409;
-      throw error;
-    }
-    return fulfillOrder(id, input);
+    const identity = developmentMockIdentity(environment, order, input);
+    if (identity.completed) return { order, fulfilled: false };
+    return fulfillOrder(id, {
+      paidAt: input.paidAt,
+      reason: input.reason,
+      [mockFulfillmentIdentity]: identity.expected,
+    });
   }
 
   function cancelOrder(id, input = {}) {
@@ -463,6 +507,7 @@ function createMemoryStore(options = {}) {
 
 function createSqliteStore(options = {}) {
   const initialCredits = Number(options.initialCredits || 10);
+  const environment = String(options.environment || process.env.NODE_ENV || "development").toLowerCase();
   const dbPath = options.dbPath || process.env.MINIAPP_DB_PATH || path.resolve(__dirname, "../data/miniapp.sqlite");
   if (dbPath !== ":memory:") fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -711,9 +756,25 @@ function createSqliteStore(options = {}) {
       db.prepare(`
         UPDATE orders
         SET status = ?, payment_status = ?, paid_at = COALESCE(paid_at, ?),
-            fulfilled_at = ?, credits_granted = ?, updated_at = ?
+            fulfilled_at = ?, credits_granted = ?, updated_at = ?,
+            mock_fulfillment_key = COALESCE(?, mock_fulfillment_key),
+            mock_event_id = COALESCE(?, mock_event_id),
+            mock_provider_transaction_id = COALESCE(?, mock_provider_transaction_id),
+            external_payment_id = COALESCE(?, external_payment_id)
         WHERE id = ?
-      `).run("paid", "fulfilled", input.paidAt || now, now, credits, now, order.id);
+      `).run(
+        "paid",
+        "fulfilled",
+        input.paidAt || now,
+        now,
+        credits,
+        now,
+        input[mockFulfillmentIdentity] || null,
+        input[mockFulfillmentIdentity] || null,
+        input[mockFulfillmentIdentity] || null,
+        input[mockFulfillmentIdentity] || null,
+        order.id,
+      );
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -725,12 +786,13 @@ function createSqliteStore(options = {}) {
   function fulfillMockOrder(id, input = {}) {
     const order = getOrder(id);
     if (!order) return null;
-    if (order.paymentMode !== "mock" || input.provider !== "mock" || input.paymentMode !== "mock" || input.paymentVerified !== true) {
-      const error = new Error("Development mock payment required");
-      error.status = 409;
-      throw error;
-    }
-    return fulfillOrder(id, input);
+    const identity = developmentMockIdentity(environment, order, input);
+    if (identity.completed) return { order, fulfilled: false };
+    return fulfillOrder(id, {
+      paidAt: input.paidAt,
+      reason: input.reason,
+      [mockFulfillmentIdentity]: identity.expected,
+    });
   }
 
   function cancelOrder(id, input = {}) {
@@ -1205,6 +1267,9 @@ function migrate(db) {
       product_json TEXT NOT NULL,
       payment_params_json TEXT,
       external_payment_id TEXT,
+      mock_fulfillment_key TEXT,
+      mock_event_id TEXT,
+      mock_provider_transaction_id TEXT,
       credits_granted INTEGER NOT NULL DEFAULT 0,
       credits_revoked INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
@@ -1236,6 +1301,9 @@ function migrate(db) {
   ensureColumn(db, "orders", "payment_mode", "TEXT");
   ensureColumn(db, "orders", "payment_params_json", "TEXT");
   ensureColumn(db, "orders", "external_payment_id", "TEXT");
+  ensureColumn(db, "orders", "mock_fulfillment_key", "TEXT");
+  ensureColumn(db, "orders", "mock_event_id", "TEXT");
+  ensureColumn(db, "orders", "mock_provider_transaction_id", "TEXT");
   ensureColumn(db, "orders", "credits_granted", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "orders", "credits_revoked", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "orders", "paid_at", "TEXT");
@@ -1396,6 +1464,9 @@ function rowToOrder(row) {
     productSnapshot: parseJson(row.product_json, null),
     paymentParams: parseJson(row.payment_params_json, null),
     externalPaymentId: row.external_payment_id || "",
+    mockFulfillmentKey: row.mock_fulfillment_key || "",
+    mockEventId: row.mock_event_id || "",
+    mockProviderTransactionId: row.mock_provider_transaction_id || "",
     creditsGranted: row.credits_granted || 0,
     creditsRevoked: row.credits_revoked || 0,
     createdAt: row.created_at,

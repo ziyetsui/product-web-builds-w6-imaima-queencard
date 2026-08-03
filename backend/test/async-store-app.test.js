@@ -41,15 +41,15 @@ async function body(response) {
   return response.json();
 }
 
-async function login(app) {
+async function login(app, code = "async-user") {
   const response = await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: "async-user" }),
+    body: JSON.stringify({ code }),
   }));
   const payload = await body(response);
   assert.equal(response.status, 200);
-  assert.equal(payload.data.user.id, "wechat:wx-async-store:dev_async-user");
+  assert.equal(payload.data.user.id, `wechat:wx-async-store:dev_${code}`);
   assert.equal(payload.data.user.balance, 10);
   return `Bearer ${payload.data.token}`;
 }
@@ -222,6 +222,51 @@ test("development mock-pay completes a PostgreSQL mock order and rejects non-moc
   }));
   assert.equal(manualResponse.status, 403);
   assert.equal((await store.getUser(created.data.order.userId)).balance, 30);
+  await app.close();
+  await pool.end();
+});
+
+test("HTTP order retries are owner scoped, immutable, and audited only on creation", async () => {
+  const { pool } = createPgMemPool();
+  await applyPgMemSchema(pool);
+  const store = createPostgresStore({ pool, environment: "test", initialCredits: 10 });
+  const app = createApp({ env: testEnv(), store });
+  const firstAuthorization = await login(app, "order-owner-a");
+  const secondAuthorization = await login(app, "order-owner-b");
+
+  async function createOrder(authorization, payload) {
+    const response = await app.fetch(new Request("http://local/api/miniapp/orders", {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }));
+    return { response, payload: await body(response) };
+  }
+
+  const request = { orderId: "client-order-retry-1", productId: "credits_20" };
+  const first = await createOrder(firstAuthorization, request);
+  const otherOwner = await createOrder(secondAuthorization, request);
+  const replay = await createOrder(firstAuthorization, request);
+  const collision = await createOrder(firstAuthorization, { ...request, productId: "credits_60" });
+
+  assert.equal(first.response.status, 201);
+  assert.notEqual(first.payload.data.order.id, request.orderId);
+  assert.equal(first.payload.data.order.userId, "wechat:wx-async-store:dev_order-owner-a");
+  assert.equal(otherOwner.response.status, 201);
+  assert.equal(otherOwner.payload.data.order.userId, "wechat:wx-async-store:dev_order-owner-b");
+  assert.notEqual(otherOwner.payload.data.order.id, first.payload.data.order.id);
+  assert.equal(replay.response.status, 200);
+  assert.equal(replay.payload.data.order.id, first.payload.data.order.id);
+  assert.equal(collision.response.status, 409);
+  assert.equal(collision.payload.error, "Order idempotency conflict");
+
+  const firstAudits = await store.listPaymentAudit(new URLSearchParams({ orderId: first.payload.data.order.id }));
+  const secondAudits = await store.listPaymentAudit(new URLSearchParams({ orderId: otherOwner.payload.data.order.id }));
+  assert.equal(firstAudits.records.filter((event) => event.type === "create").length, 1);
+  assert.equal(firstAudits.records[0].userId, first.payload.data.order.userId);
+  assert.equal(secondAudits.records.filter((event) => event.type === "create").length, 1);
+  assert.equal(secondAudits.records[0].userId, otherOwner.payload.data.order.userId);
+
   await app.close();
   await pool.end();
 });

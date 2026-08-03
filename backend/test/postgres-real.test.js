@@ -27,6 +27,7 @@ test("real PostgreSQL migration, trigger, binding, accounting, and concurrency",
     const migrations = await migrateDatabase({ pool: testPool });
     assert.equal(migrations.some((entry) => entry.version === 1 && entry.applied), true);
     assert.equal(migrations.some((entry) => entry.version === 2 && entry.applied), true);
+    assert.equal(migrations.some((entry) => entry.version === 3 && entry.applied), true);
 
     const storeA = createPostgresStore({ pool: testPool, initialCredits: 10 });
     const storeB = createPostgresStore({ pool: testPool, initialCredits: 10 });

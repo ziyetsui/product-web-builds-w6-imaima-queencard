@@ -183,6 +183,8 @@ test("postgres repository contract persists identity, sessions, credits, tasks, 
     idempotencyKey: "order-key-1",
     amountCents: 500,
     credits: 5,
+    paymentMode: "wechat",
+    productSnapshot: { id: "credits-5", credits: 5 },
   })).id, order.id);
   const verifiedFulfillment = await store.fulfillPayment({
     fulfillmentKey: "verified-fulfillment-key-1",
@@ -392,6 +394,67 @@ test("concurrent hold, task, and order retries return one resource", async () =>
   assert.equal(state.balance, 8);
   assert.equal(state.available, 8);
   assert.equal(state.frozen, 2);
+  await pool.end();
+});
+
+test("explicit order id collisions never disclose an order owned by another user", async () => {
+  const { pool, store } = await setup();
+  const firstUser = await store.ensureUser({ sub: "order-owner-a", appid: "wx-order-owner", openid: "order-owner-a" });
+  const secondUser = await store.ensureUser({ sub: "order-owner-b", appid: "wx-order-owner", openid: "order-owner-b" });
+  const sharedId = "legacy-shared-order-id";
+
+  const first = await store.createOrder({
+    id: sharedId,
+    userId: firstUser.id,
+    productId: "credits-5",
+    amountCents: 500,
+    credits: 5,
+  });
+  await assert.rejects(
+    store.createOrder({
+      id: sharedId,
+      userId: secondUser.id,
+      productId: "credits-10",
+      amountCents: 900,
+      credits: 10,
+    }),
+    (error) => error.status === 409 && error.message === "Order idempotency conflict",
+  );
+
+  assert.equal(first.userId, firstUser.id);
+  assert.equal((await store.listOrders(secondUser.id)).pagination.total, 0);
+  assert.equal((await store.getOrder(sharedId)).userId, firstUser.id);
+  await pool.end();
+});
+
+test("same-owner order replay requires a complete immutable payload match", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "order-replay-owner", appid: "wx-order-replay", openid: "order-replay-owner" });
+  const request = {
+    userId: user.id,
+    idempotencyKey: "owner-order-retry-key",
+    productId: "credits-5",
+    channel: "wechat",
+    status: "pending",
+    paymentStatus: "created",
+    paymentMode: "manual",
+    amountCents: 500,
+    currency: "CNY",
+    credits: 5,
+    productSnapshot: { id: "credits-5", amountCents: 500, credits: 5 },
+    metadata: { source: "order-replay-test" },
+  };
+
+  const first = await store.createOrder({ id: "owner-order-first", ...request });
+  const replay = await store.createOrder({ id: "owner-order-retry", ...request });
+  await assert.rejects(
+    store.createOrder({ id: "owner-order-collision", ...request, amountCents: 600 }),
+    (error) => error.status === 409 && error.message === "Order idempotency conflict",
+  );
+
+  assert.equal(replay.id, first.id);
+  assert.equal((await store.listOrders(user.id)).pagination.total, 1);
+  assert.equal((await store.getUser(user.id)).balance, 10);
   await pool.end();
 });
 

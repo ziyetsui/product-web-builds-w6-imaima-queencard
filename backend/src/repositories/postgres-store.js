@@ -86,6 +86,29 @@ function holdMatchesRequest(row, expected, requestFingerprint) {
     && row.request_fingerprint === requestFingerprint;
 }
 
+function orderRequest(input) {
+  return {
+    userId: input.userId,
+    idempotencyKey: input.idempotencyKey || "",
+    productId: input.productId,
+    channel: input.channel || "wechat",
+    status: input.status || "pending",
+    paymentStatus: input.paymentStatus || "created",
+    paymentMode: input.paymentMode || "manual",
+    amountCents: Number(input.amountCents || 0),
+    currency: input.currency || "CNY",
+    credits: Number(input.credits || 0),
+    productSnapshot: parseJson(input.productSnapshot, {}),
+    metadata: parseJson(input.metadata, {}),
+  };
+}
+
+function markOrderCreation(order, created) {
+  if (!order) return order;
+  Object.defineProperty(order, "created", { value: created, enumerable: false });
+  return order;
+}
+
 function positiveInt(value, fallback = 1) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -1037,26 +1060,36 @@ function createPostgresStore(options = {}) {
   async function createOrderOnce(input) {
     const now = input.createdAt || timestamp(clock);
     const orderIdValue = input.id || id("order");
-    const conflict = input.idempotencyKey
-      ? "ON CONFLICT (user_id, idempotency_key) DO NOTHING"
-      : "ON CONFLICT (id) DO NOTHING";
+    const requestFingerprint = fingerprint(orderRequest(input));
     const result = await pool.query(`
-      INSERT INTO miniapp_orders (id, user_id, idempotency_key, product_id, channel, status, payment_status, payment_mode, payment_verified, amount_cents, currency, credits, product_snapshot, payment_params, external_payment_id, metadata, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9, $10, $11, $12, $13, $14, $15, $16, $16)
-      ${conflict}
+      INSERT INTO miniapp_orders (id, user_id, idempotency_key, product_id, channel, status, payment_status, payment_mode, payment_verified, amount_cents, currency, credits, product_snapshot, payment_params, external_payment_id, metadata, request_fingerprint, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17)
+      ON CONFLICT DO NOTHING
       RETURNING *
-    `, [orderIdValue, input.userId, input.idempotencyKey || null, input.productId, input.channel || "wechat", input.status || "pending", input.paymentStatus || "created", input.paymentMode || "manual", Number(input.amountCents || 0), input.currency || "CNY", Number(input.credits || 0), JSON.stringify(input.productSnapshot || {}), JSON.stringify(input.paymentParams || null), input.externalPaymentId || null, JSON.stringify(input.metadata || {}), now]);
-    if (!result.rowCount) {
-      const existing = input.idempotencyKey
-        ? await pool.query("SELECT * FROM miniapp_orders WHERE user_id = $1 AND idempotency_key = $2", [input.userId, input.idempotencyKey])
-        : await pool.query("SELECT * FROM miniapp_orders WHERE id = $1", [orderIdValue]);
-      return rowToOrder(existing.rows[0]);
+    `, [orderIdValue, input.userId, input.idempotencyKey || null, input.productId, input.channel || "wechat", input.status || "pending", input.paymentStatus || "created", input.paymentMode || "manual", Number(input.amountCents || 0), input.currency || "CNY", Number(input.credits || 0), JSON.stringify(input.productSnapshot || {}), JSON.stringify(input.paymentParams || null), input.externalPaymentId || null, JSON.stringify(input.metadata || {}), requestFingerprint, now]);
+    if (result.rowCount) return markOrderCreation(rowToOrder(result.rows[0]), true);
+
+    if (input.idempotencyKey) {
+      const replay = await pool.query(
+        "SELECT * FROM miniapp_orders WHERE user_id = $1 AND idempotency_key = $2",
+        [input.userId, input.idempotencyKey],
+      );
+      const row = replay.rows[0];
+      if (row && row.user_id === input.userId && row.request_fingerprint === requestFingerprint) {
+        return markOrderCreation(rowToOrder(row), false);
+      }
     }
-    return rowToOrder(result.rows[0]);
+
+    const legacyReplay = await pool.query("SELECT * FROM miniapp_orders WHERE id = $1", [orderIdValue]);
+    const row = legacyReplay.rows[0];
+    if (row && row.user_id === input.userId && row.request_fingerprint === requestFingerprint) {
+      return markOrderCreation(rowToOrder(row), false);
+    }
+    throw err("Order idempotency conflict", 409);
   }
 
   function createOrder(input) {
-    return singleFlight(input.idempotencyKey ? `order:${input.userId}:${input.idempotencyKey}` : null, () => createOrderOnce(input));
+    return createOrderOnce(input);
   }
 
   async function getOrder(orderId) {

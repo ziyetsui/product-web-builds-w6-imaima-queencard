@@ -216,6 +216,7 @@ async function createDependencies(config, sourceEnv, options, acquiredResources)
     store = createSqliteStore({
       dbPath: config.database.sqlitePath,
       initialCredits: runtimeEnv.MINIAPP_INITIAL_CREDITS || "10",
+      environment: config.server.environment,
     });
   }
   trackResource(acquiredResources, store);

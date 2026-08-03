@@ -13,7 +13,7 @@ function json(data, status = 200) {
     status,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "content-type, authorization",
+      "Access-Control-Allow-Headers": "content-type, authorization, idempotency-key",
       "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
     },
   });
@@ -408,6 +408,7 @@ function createApp(options = {}) {
   const store = options.store || createSqliteStore({
     dbPath: getEnv(env, "MINIAPP_DB_PATH"),
     initialCredits: getEnv(env, "MINIAPP_INITIAL_CREDITS", "10"),
+    environment: getEnv(env, "NODE_ENV", "development"),
   });
   const imageProvider = options.imageProvider || createImageProvider({
     env,
@@ -623,9 +624,13 @@ function createApp(options = {}) {
         const product = findProduct(env, productId);
         if (!product) return json({ success: false, error: "Unknown productId" }, 400);
         const channel = String(body.channel || "wechat").trim() || "wechat";
+        const idempotencyKey = String(
+          request.headers.get("idempotency-key") || body.idempotencyKey || body.orderId || "",
+        ).trim() || undefined;
         const draft = {
-          id: body.orderId || appOrderId(),
+          id: appOrderId(),
           userId: user.id,
+          idempotencyKey,
           productId: product.id,
           channel,
           status: "pending",
@@ -641,14 +646,16 @@ function createApp(options = {}) {
           paymentMode: payment.paymentMode,
           paymentParams: payment.paymentParams,
         });
-        await store.recordPaymentEvent({
-          orderId: order.id,
-          userId: user.id,
-          type: "create",
-          actorId: user.id,
-          message: "Order created",
-          metadata: { productId: product.id, channel },
-        });
+        if (order.created !== false) {
+          await store.recordPaymentEvent({
+            orderId: order.id,
+            userId: user.id,
+            type: "create",
+            actorId: user.id,
+            message: "Order created",
+            metadata: { productId: product.id, channel },
+          });
+        }
         return json({
           success: true,
           data: {
@@ -656,7 +663,7 @@ function createApp(options = {}) {
             paymentParams: order.paymentParams || null,
             payment: order.paymentParams ? { mode: order.paymentMode, status: order.paymentStatus } : paymentInstructions(order),
           },
-        }, 201);
+        }, order.created === false ? 200 : 201);
       }
 
       if (path === "/api/miniapp/orders" && request.method === "GET") {

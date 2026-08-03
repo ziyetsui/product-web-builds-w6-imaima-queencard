@@ -4,7 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createSqliteStore } = require("../src/store");
+const { createMemoryStore, createSqliteStore } = require("../src/store");
 
 function tempDbPath() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ima-db-")), "miniapp.sqlite");
@@ -15,6 +15,117 @@ const identity = {
   appid: "wx-test",
   openid: "openid-1",
 };
+
+const mockAdapters = [
+  {
+    name: "memory",
+    create(options) {
+      return createMemoryStore(options);
+    },
+  },
+  {
+    name: "sqlite",
+    create(options) {
+      return createSqliteStore({ ...options, dbPath: tempDbPath() });
+    },
+  },
+];
+
+function createMockOrder(store, suffix) {
+  const user = store.ensureUser({
+    sub: `mock-user-${suffix}`,
+    appid: "wx-mock-adapter",
+    openid: `mock-openid-${suffix}`,
+  });
+  const order = store.createOrder({
+    id: `mock-order-${suffix}`,
+    userId: user.id,
+    productId: "credits-5",
+    status: "pending",
+    paymentStatus: "mock_pending",
+    paymentMode: "mock",
+    amountCents: 500,
+    credits: 5,
+  });
+  return { order, user };
+}
+
+function completeMockIdentity(orderId) {
+  const identityValue = `mock:${orderId}`;
+  return {
+    fulfillmentKey: identityValue,
+    provider: "mock",
+    paymentMode: "mock",
+    eventId: identityValue,
+    providerTransactionId: identityValue,
+    status: "FULFILLED",
+    paymentVerified: true,
+  };
+}
+
+for (const adapter of mockAdapters) {
+  test(`${adapter.name} mock fulfillment is intrinsically disabled in production`, () => {
+    const store = adapter.create({ environment: "production", initialCredits: 10 });
+    try {
+      const { order } = createMockOrder(store, `${adapter.name}-production`);
+      assert.throws(
+        () => store.fulfillMockOrder(order.id, completeMockIdentity(order.id)),
+        (error) => error.status === 409 && /development mock payment required/i.test(error.message),
+      );
+    } finally {
+      store.close();
+    }
+  });
+
+  test(`${adapter.name} mock fulfillment requires pending persisted mock state and deterministic identities`, () => {
+    const store = adapter.create({ environment: "test", initialCredits: 10 });
+    try {
+      const incomplete = createMockOrder(store, `${adapter.name}-incomplete`);
+      const incompleteIdentity = completeMockIdentity(incomplete.order.id);
+      delete incompleteIdentity.eventId;
+      assert.throws(
+        () => store.fulfillMockOrder(incomplete.order.id, incompleteIdentity),
+        (error) => error.status === 409 && /development mock payment required/i.test(error.message),
+      );
+
+      const mismatch = createMockOrder(store, `${adapter.name}-mismatch`);
+      assert.throws(
+        () => store.fulfillMockOrder(mismatch.order.id, {
+          ...completeMockIdentity(mismatch.order.id),
+          providerTransactionId: "mock:another-order",
+        }),
+        (error) => error.status === 409 && /development mock payment required/i.test(error.message),
+      );
+
+      const wrongState = createMockOrder(store, `${adapter.name}-wrong-state`);
+      store.cancelOrder(wrongState.order.id, { reason: "test-state" });
+      assert.throws(
+        () => store.fulfillMockOrder(wrongState.order.id, completeMockIdentity(wrongState.order.id)),
+        (error) => error.status === 409 && /development mock payment required/i.test(error.message),
+      );
+    } finally {
+      store.close();
+    }
+  });
+
+  test(`${adapter.name} mock fulfillment grants fixed order credits exactly once`, () => {
+    const store = adapter.create({ environment: "test", initialCredits: 10 });
+    try {
+      const { order, user } = createMockOrder(store, `${adapter.name}-fixed-credit`);
+      const input = { ...completeMockIdentity(order.id), credits: 999 };
+
+      const first = store.fulfillMockOrder(order.id, input);
+      const replay = store.fulfillMockOrder(order.id, input);
+
+      assert.equal(first.fulfilled, true);
+      assert.equal(first.order.creditsGranted, 5);
+      assert.equal(replay.fulfilled, false);
+      assert.equal(store.getUser(user.id).balance, 15);
+    } finally {
+      store.close();
+    }
+  });
+}
 
 test("sqlite store persists users, credit charges, and generation tasks", () => {
   const dbPath = tempDbPath();
