@@ -2,9 +2,19 @@
   "name": "ima-queencard-miniapp/backend",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:watch": "node --test --watch"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.879.0",
+    "@aws-sdk/s3-request-presigner": "^3.879.0",
+    "pg": "^8.16.3",
+    "sharp": "^0.35.3"
   }
 }
