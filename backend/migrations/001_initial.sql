@@ -45,8 +45,7 @@ CREATE TABLE IF NOT EXISTS credit_packages (
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CHECK (remaining_credits <= initial_credits),
-  CHECK (frozen_credits <= initial_credits)
+  CHECK (remaining_credits + frozen_credits <= initial_credits)
 );
 
 CREATE INDEX IF NOT EXISTS credit_packages_user_status_idx ON credit_packages (user_id, status);

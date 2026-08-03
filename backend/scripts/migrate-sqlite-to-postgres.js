@@ -8,6 +8,7 @@ const { migrateDatabase, withTransaction } = require("../src/db/migrate");
 
 function parseJson(value, fallback = null) {
   if (!value) return fallback;
+  if (typeof value === "object") return value;
   try {
     return JSON.parse(value);
   } catch {
@@ -54,43 +55,136 @@ function readLegacySnapshot({ dbPath }) {
   }
 }
 
-function reconciliationIds(snapshot) {
+function normalizedTime(value) {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
+function normalizedRows(rows, mapper) {
+  return rows.map(mapper).sort((left, right) => String(left.id).localeCompare(String(right.id)));
+}
+
+function legacyContent(snapshot) {
   return {
-    users: snapshot.users.map((row) => String(row.id)),
-    transactions: snapshot.transactions.map((row) => String(row.id)),
-    tasks: snapshot.tasks.map((row) => String(row.id)),
-    templates: snapshot.templates.map((row) => String(row.id)),
-    orders: snapshot.orders.map((row) => String(row.id)),
-    paymentAudit: snapshot.paymentAudit.map((row) => String(row.id)),
-    totalBalance: snapshot.users.reduce((sum, row) => sum + Number(row.balance || 0), 0),
+    users: normalizedRows(snapshot.users, (row) => ({
+      id: String(row.id), provider: row.provider || "wechat", appid: row.appid || "", openid: row.openid || "",
+      unionid: row.unionid || null, name: row.name || "微信用户", balance: Number(row.balance || 0), createdAt: normalizedTime(row.created_at),
+    })),
+    transactions: normalizedRows(snapshot.transactions, (row) => ({
+      id: String(row.id), userId: String(row.user_id), credits: Number(row.amount), balanceAfter: Number(row.balance_after || 0),
+      reason: row.reason || "legacy_migration", createdAt: normalizedTime(row.created_at),
+    })),
+    tasks: normalizedRows(snapshot.tasks, (row) => ({
+      id: String(row.id), ownerId: String(row.owner_id), status: row.status || "completed", images: parseJson(row.images_json, []),
+      templateId: row.template_id || null, provider: row.provider || null, providerTaskId: row.provider_task_id || null,
+      mode: row.mode || null, prompt: row.prompt || "", topic: row.topic || "", referenceImages: parseJson(row.reference_images_json, []),
+      model: row.model || "", outputCount: Number(row.output_count || 1), aspectRatio: row.aspect_ratio || "", resolution: row.resolution || "",
+      rawProviderResult: parseJson(row.raw_provider_result_json, null), createdAt: normalizedTime(row.created_at),
+      updatedAt: normalizedTime(row.updated_at || row.created_at),
+    })),
+    templates: normalizedRows(snapshot.templates, (row) => ({
+      id: String(row.id), title: row.title || "", subtitle: row.subtitle || "", category: row.category || "",
+      scenarioCategory: row.scenario_category || "", source: row.source || "", sourceId: row.source_id || "", sourceUrl: row.source_url || "",
+      thumbnailUrl: row.thumbnail_url || "", previewUrl: row.preview_url || "", referenceImages: parseJson(row.reference_images_json, []),
+      prompt: row.prompt || "", useCase: row.use_case || "", author: row.author || "", metrics: parseJson(row.metrics_json, null),
+      seed: parseJson(row.seed_json, null), updatedAt: normalizedTime(row.updated_at),
+    })),
+    orders: normalizedRows(snapshot.orders, (row) => ({
+      id: String(row.id), userId: String(row.user_id), productId: row.product_id || "legacy", channel: row.channel || "wechat",
+      status: ["pending", "paid", "canceled", "refunded"].includes(row.status) ? row.status : "pending",
+      paymentStatus: row.payment_status || "unverified", paymentMode: row.payment_mode || "manual", paymentVerified: false,
+      paymentVerification: "not-verified", amountCents: Number(row.amount_cents || 0), currency: row.currency || "CNY",
+      credits: Number(row.credits || 0), productSnapshot: parseJson(row.product_json, {}) || {}, paymentParams: parseJson(row.payment_params_json, null),
+      externalPaymentId: row.external_payment_id || null, creditsGranted: Number(row.credits_granted || 0), creditsRevoked: Number(row.credits_revoked || 0),
+      createdAt: normalizedTime(row.created_at), updatedAt: normalizedTime(row.updated_at || row.created_at), paidAt: normalizedTime(row.paid_at),
+      fulfilledAt: normalizedTime(row.fulfilled_at), refundedAt: normalizedTime(row.refunded_at), canceledAt: normalizedTime(row.canceled_at),
+      adminNote: row.admin_note || "",
+    })),
+    paymentAudit: normalizedRows(snapshot.paymentAudit, (row) => ({
+      id: String(row.id), orderId: row.order_id || null, userId: row.user_id || null, type: row.type || "legacy",
+      actorId: row.actor_id || null, message: row.message || "", metadata: parseJson(row.metadata_json, null), createdAt: normalizedTime(row.created_at),
+    })),
   };
 }
 
-function reconciliationPayload(snapshot) {
-  const ids = reconciliationIds(snapshot);
+function importedContent(snapshot) {
   return {
-    users: ids.users.length,
-    transactions: ids.transactions.length,
-    tasks: ids.tasks.length,
-    templates: ids.templates.length,
-    orders: ids.orders.length,
-    paymentAudit: ids.paymentAudit.length,
-    totalBalance: ids.totalBalance,
-    checksum: checksum(ids),
+    users: normalizedRows(snapshot.users, (row) => ({
+      id: String(row.id), provider: row.provider, appid: row.appid, openid: row.openid, unionid: row.unionid || null,
+      name: row.name, balance: Number(row.balance || 0), createdAt: normalizedTime(row.created_at),
+    })),
+    transactions: normalizedRows(snapshot.transactions, (row) => ({
+      id: String(row.id), userId: String(row.user_id), credits: Number(row.credits), balanceAfter: Number(row.balance_after || 0),
+      reason: row.reason || "legacy_migration", createdAt: normalizedTime(row.created_at),
+    })),
+    tasks: normalizedRows(snapshot.tasks, (row) => ({
+      id: String(row.id), ownerId: String(row.owner_id), status: row.status, images: parseJson(row.images, []), templateId: row.template_id || null,
+      provider: row.provider || null, providerTaskId: row.provider_task_id || null, mode: row.mode || null, prompt: row.prompt || "", topic: row.topic || "",
+      referenceImages: parseJson(row.reference_images, []), model: row.model || "", outputCount: Number(row.output_count || 1),
+      aspectRatio: row.aspect_ratio || "", resolution: row.resolution || "", rawProviderResult: parseJson(row.raw_provider_result, null),
+      createdAt: normalizedTime(row.created_at), updatedAt: normalizedTime(row.updated_at),
+    })),
+    templates: normalizedRows(snapshot.templates, (row) => ({
+      id: String(row.id), title: row.title || "", subtitle: row.subtitle || "", category: row.category || "", scenarioCategory: row.scenario_category || "",
+      source: row.source || "", sourceId: row.source_id || "", sourceUrl: row.source_url || "", thumbnailUrl: row.thumbnail_url || "",
+      previewUrl: row.preview_url || "", referenceImages: parseJson(row.reference_images, []), prompt: row.prompt || "", useCase: row.use_case || "",
+      author: row.author || "", metrics: parseJson(row.metrics, null), seed: parseJson(row.seed, null), updatedAt: normalizedTime(row.updated_at),
+    })),
+    orders: normalizedRows(snapshot.orders, (row) => {
+      const metadata = parseJson(row.metadata, {});
+      return {
+        id: String(row.id), userId: String(row.user_id), productId: row.product_id, channel: row.channel, status: row.status,
+        paymentStatus: row.payment_status, paymentMode: row.payment_mode, paymentVerified: Boolean(row.payment_verified),
+        paymentVerification: metadata.paymentVerification || null, amountCents: Number(row.amount_cents || 0), currency: row.currency,
+        credits: Number(row.credits || 0), productSnapshot: parseJson(row.product_snapshot, {}), paymentParams: parseJson(row.payment_params, null),
+        externalPaymentId: row.external_payment_id || null, creditsGranted: Number(row.credits_granted || 0), creditsRevoked: Number(row.credits_revoked || 0),
+        createdAt: normalizedTime(row.created_at), updatedAt: normalizedTime(row.updated_at), paidAt: normalizedTime(row.paid_at),
+        fulfilledAt: normalizedTime(row.fulfilled_at), refundedAt: normalizedTime(row.refunded_at), canceledAt: normalizedTime(row.canceled_at),
+        adminNote: row.admin_note || "",
+      };
+    }),
+    paymentAudit: normalizedRows(snapshot.paymentAudit, (row) => {
+      const metadata = parseJson(row.metadata, {});
+      return {
+        id: String(row.id), orderId: row.order_id || null, userId: row.user_id || null, type: row.type,
+        actorId: row.actor_id || null, message: row.message || "", metadata: metadata.legacyMetadata ?? null, createdAt: normalizedTime(row.created_at),
+      };
+    }),
   };
+}
+
+function reconciliationSummary(content) {
+  const totalBalance = content.users.reduce((sum, row) => sum + row.balance, 0);
+  return {
+    users: content.users.length,
+    transactions: content.transactions.length,
+    tasks: content.tasks.length,
+    templates: content.templates.length,
+    orders: content.orders.length,
+    paymentAudit: content.paymentAudit.length,
+    totalBalance,
+    checksum: checksum({ ...content, totalBalance }),
+  };
+}
+
+function legacyReconciliation(snapshot) {
+  return reconciliationSummary(legacyContent(snapshot));
 }
 
 function buildLegacyMigrationPlan({ dbPath }) {
   const snapshot = readLegacySnapshot({ dbPath });
-  const expected = reconciliationPayload(snapshot);
+  const expected = legacyReconciliation(snapshot);
   return { snapshot, expected };
 }
 
 function reconcileMigration(expected, actual) {
   const checks = [
     ["users", expected.users, actual.users],
+    ["transactions", expected.transactions, actual.transactions],
     ["tasks", expected.tasks, actual.tasks],
+    ["templates", expected.templates, actual.templates],
     ["orders", expected.orders, actual.orders],
+    ["payment audit", expected.paymentAudit, actual.paymentAudit],
     ["total balance", expected.totalBalance, actual.totalBalance],
     ["checksum", expected.checksum, actual.checksum],
   ];
@@ -106,12 +200,12 @@ function reconcileMigration(expected, actual) {
 
 async function importedSnapshot(client) {
   const [users, transactions, tasks, templates, orders, paymentAudit] = await Promise.all([
-    client.query("SELECT id, balance FROM miniapp_users ORDER BY id"),
-    client.query("SELECT id FROM credit_transactions ORDER BY id"),
-    client.query("SELECT id FROM generation_tasks ORDER BY id"),
-    client.query("SELECT id FROM templates ORDER BY id"),
-    client.query("SELECT id FROM miniapp_orders ORDER BY id"),
-    client.query("SELECT id FROM payment_audit_events ORDER BY id"),
+    client.query("SELECT id, provider, appid, openid, unionid, name, balance, created_at FROM miniapp_users ORDER BY id"),
+    client.query("SELECT id, user_id, credits, balance_after, reason, created_at FROM credit_transactions ORDER BY id"),
+    client.query("SELECT id, owner_id, status, images, template_id, provider, provider_task_id, mode, prompt, topic, reference_images, model, output_count, aspect_ratio, resolution, raw_provider_result, created_at, updated_at FROM generation_tasks ORDER BY id"),
+    client.query("SELECT id, title, subtitle, category, scenario_category, source, source_id, source_url, thumbnail_url, preview_url, reference_images, prompt, use_case, author, metrics, seed, updated_at FROM templates ORDER BY id"),
+    client.query("SELECT id, user_id, product_id, channel, status, payment_status, payment_mode, payment_verified, amount_cents, currency, credits, product_snapshot, payment_params, external_payment_id, credits_granted, credits_revoked, created_at, updated_at, paid_at, fulfilled_at, refunded_at, canceled_at, admin_note, metadata FROM miniapp_orders ORDER BY id"),
+    client.query("SELECT id, order_id, user_id, type, actor_id, message, metadata, created_at FROM payment_audit_events ORDER BY id"),
   ]);
   return {
     users: users.rows,
@@ -123,17 +217,12 @@ async function importedSnapshot(client) {
   };
 }
 
-function importedReconciliation(snapshot) {
-  const ids = {
-    users: snapshot.users.map((row) => String(row.id)),
-    transactions: snapshot.transactions.map((row) => String(row.id)),
-    tasks: snapshot.tasks.map((row) => String(row.id)),
-    templates: snapshot.templates.map((row) => String(row.id)),
-    orders: snapshot.orders.map((row) => String(row.id)),
-    paymentAudit: snapshot.paymentAudit.map((row) => String(row.id)),
-    totalBalance: snapshot.users.reduce((sum, row) => sum + Number(row.balance || 0), 0),
-  };
-  return { users: ids.users.length, transactions: ids.transactions.length, tasks: ids.tasks.length, templates: ids.templates.length, orders: ids.orders.length, paymentAudit: ids.paymentAudit.length, totalBalance: ids.totalBalance, checksum: checksum(ids) };
+async function readImportedReconciliation(queryable) {
+  return reconciliationSummary(await readImportedContent(queryable));
+}
+
+async function readImportedContent(queryable) {
+  return importedContent(await importedSnapshot(queryable));
 }
 
 async function importSnapshot(client, snapshot, expected) {
@@ -179,7 +268,7 @@ async function importSnapshot(client, snapshot, expected) {
       INSERT INTO miniapp_orders (id, user_id, product_id, channel, status, payment_status, payment_mode, payment_verified, amount_cents, currency, credits, product_snapshot, payment_params, external_payment_id, credits_granted, credits_revoked, created_at, updated_at, paid_at, fulfilled_at, refunded_at, canceled_at, admin_note, metadata)
       VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
       ON CONFLICT (id) DO NOTHING
-    `, [row.id, row.user_id, row.product_id || "legacy", row.channel || "wechat", status, row.payment_status || "unverified", row.payment_mode || "manual", Number(row.amount_cents || 0), row.currency || "CNY", Number(row.credits || 0), row.product_json || "{}", row.payment_params_json || null, row.external_payment_id || null, Number(row.credits_granted || 0), Number(row.credits_revoked || 0), row.created_at || now, row.updated_at || row.created_at || now, row.paid_at || null, row.fulfilled_at || null, row.refunded_at || null, row.canceled_at || null, row.admin_note || "", JSON.stringify(metadata)]);
+    `, [row.id, row.user_id, row.product_id || "legacy", row.channel || "wechat", status, row.payment_status || "unverified", row.payment_mode || "manual", Number(row.amount_cents || 0), row.currency || "CNY", Number(row.credits || 0), JSON.stringify(parseJson(row.product_json, {}) || {}), row.payment_params_json || null, row.external_payment_id || null, Number(row.credits_granted || 0), Number(row.credits_revoked || 0), row.created_at || now, row.updated_at || row.created_at || now, row.paid_at || null, row.fulfilled_at || null, row.refunded_at || null, row.canceled_at || null, row.admin_note || "", JSON.stringify(metadata)]);
   }
   for (const row of snapshot.paymentAudit) {
     await client.query("INSERT INTO payment_audit_events (id, order_id, user_id, type, actor_id, message, metadata, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING", [row.id, row.order_id || null, row.user_id || null, row.type || "legacy", row.actor_id || null, row.message || "", JSON.stringify({ legacyId: row.id, legacyRow: row, legacyMetadata: parseJson(row.metadata_json, null) }), row.created_at || now]);
@@ -195,7 +284,7 @@ async function migrateSqliteToPostgres({ dbPath, pool, apply = false, logger = c
   if (!pool) throw new Error("A PostgreSQL pool is required with --apply");
   const result = await withTransaction(pool, async (client) => {
     await importSnapshot(client, plan.snapshot, plan.expected);
-    const actual = importedReconciliation(await importedSnapshot(client));
+    const actual = await readImportedReconciliation(client);
     reconcileMigration(plan.expected, actual);
     return actual;
   });
@@ -236,7 +325,11 @@ if (require.main === module) {
 
 module.exports = {
   buildLegacyMigrationPlan,
+  legacyContent,
+  legacyReconciliation,
   migrateSqliteToPostgres,
+  readImportedContent,
+  readImportedReconciliation,
   reconcileMigration,
   readLegacySnapshot,
 };

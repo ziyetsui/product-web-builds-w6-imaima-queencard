@@ -42,11 +42,11 @@ function getAuthPayload(request, env) {
   });
 }
 
-function getCurrentUser(request, env, store) {
+async function getCurrentUser(request, env, store) {
   const payload = getAuthPayload(request, env);
   return {
     payload,
-    user: store.ensureUser(payload),
+    user: await store.ensureUser(payload),
   };
 }
 
@@ -57,8 +57,8 @@ function envList(value) {
     .filter(Boolean);
 }
 
-function requireAdmin(request, env, store) {
-  const { payload, user } = getCurrentUser(request, env, store);
+async function requireAdmin(request, env, store) {
+  const { payload, user } = await getCurrentUser(request, env, store);
   const adminOpenids = envList(getEnv(env, "MINIAPP_ADMIN_OPENIDS"));
   const adminUserIds = envList(getEnv(env, "MINIAPP_ADMIN_USER_IDS"));
   if (!adminOpenids.includes(payload.openid) && !adminUserIds.includes(user.id)) {
@@ -427,7 +427,7 @@ function createApp(options = {}) {
       ...templateOptions(env, syncQuery, request),
       fetch: fetchImpl,
     });
-    store.syncTemplates(data.records || []);
+    await store.syncTemplates(data.records || []);
     templatesSynced = true;
   }
 
@@ -435,7 +435,7 @@ function createApp(options = {}) {
     let template;
     if (store.getTemplate) {
       await ensureTemplatesSynced(request);
-      template = store.getTemplate(templateId);
+      template = await store.getTemplate(templateId);
     } else {
       template = await fetchTemplateById({
         id: templateId,
@@ -457,7 +457,7 @@ function createApp(options = {}) {
         user: input.user,
         request: input.body,
       });
-      store.createTask({
+      await store.createTask({
         id,
         taskId: id,
         ownerId: input.user.id,
@@ -472,7 +472,7 @@ function createApp(options = {}) {
         createdAt: input.createdAt,
       });
     } catch (error) {
-      store.createTask({
+      await store.createTask({
         id,
         taskId: id,
         ownerId: input.user.id,
@@ -491,13 +491,13 @@ function createApp(options = {}) {
     }
   }
 
-  function createGenerationTask(input) {
+  async function createGenerationTask(input) {
     const metadata = taskMetadata(input.template, input.body);
     const requestedCredits = input.requestedCredits || metadata.outputCount;
-    store.charge(input.user.id, requestedCredits, input.reason);
+    await store.charge(input.user.id, requestedCredits, input.reason);
     const id = taskId();
     const createdAt = new Date().toISOString();
-    const task = store.createTask({
+    const task = await store.createTask({
       id,
       taskId: id,
       ownerId: input.user.id,
@@ -514,10 +514,10 @@ function createApp(options = {}) {
       createdAt,
     });
     setTimeout(() => {
-      runGenerationTask({
+      void runGenerationTask({
         ...input,
         createdAt,
-      }, id);
+      }, id).catch(() => {});
     }, 0);
     return task;
   }
@@ -555,13 +555,13 @@ function createApp(options = {}) {
           secret: getEnv(env, "MINIAPP_AUTH_TOKEN_SECRET"),
           expectedAppid: appid,
         });
-        const user = store.ensureUser(payload);
+        const user = await store.ensureUser(payload);
         return json({ success: true, data: { token, user } });
       }
 
       if (path === "/api/miniapp/auth/me" && request.method === "GET") {
         const payload = getAuthPayload(request, env);
-        const user = store.ensureUser(payload);
+        const user = await store.ensureUser(payload);
         return json({ success: true, data: { user } });
       }
 
@@ -574,45 +574,50 @@ function createApp(options = {}) {
       }
 
       if (path === "/api/miniapp/account/me" && request.method === "GET") {
-        const { user } = getCurrentUser(request, env, store);
+        const { user } = await getCurrentUser(request, env, store);
         return json({ success: true, data: { user } });
       }
 
       if (path === "/api/miniapp/account/me" && request.method === "PATCH") {
-        const { user } = getCurrentUser(request, env, store);
+        const { user } = await getCurrentUser(request, env, store);
         const body = await readJson(request);
         const name = String(body.name || "").trim();
         if (!name || name.length > 40) return json({ success: false, error: "Name must be 1 to 40 characters" }, 400);
-        return json({ success: true, data: { user: store.updateUserProfile(user.id, { name }) } });
+        return json({ success: true, data: { user: await store.updateUserProfile(user.id, { name }) } });
       }
 
       if (path === "/api/miniapp/credit/balance" && request.method === "GET") {
         const payload = getAuthPayload(request, env);
-        const user = store.ensureUser(payload);
+        const user = await store.ensureUser(payload);
         return json({ success: true, data: { balance: user.balance, currency: "credits" } });
       }
 
       if (path === "/api/miniapp/billing" && request.method === "GET") {
-        const { user } = getCurrentUser(request, env, store);
+        const { user } = await getCurrentUser(request, env, store);
         const orderParams = new URLSearchParams(url.searchParams);
         const transactionParams = new URLSearchParams(url.searchParams);
         const auditParams = new URLSearchParams(url.searchParams);
         auditParams.set("userId", user.id);
+        const [orders, creditTransactions, paymentEvents] = await Promise.all([
+          store.listOrders(user.id, orderParams),
+          store.listCreditTransactions(user.id, transactionParams),
+          store.listPaymentAudit(auditParams),
+        ]);
         return json({
           success: true,
           data: {
             user,
             balance: user.balance,
             currency: "credits",
-            orders: store.listOrders(user.id, orderParams),
-            creditTransactions: store.listCreditTransactions(user.id, transactionParams),
-            paymentEvents: store.listPaymentAudit(auditParams),
+            orders,
+            creditTransactions,
+            paymentEvents,
           },
         });
       }
 
       if (path === "/api/miniapp/orders" && request.method === "POST") {
-        const { user } = getCurrentUser(request, env, store);
+        const { user } = await getCurrentUser(request, env, store);
         const body = await readJson(request);
         const productId = String(body.productId || "").trim();
         const product = findProduct(env, productId);
@@ -630,13 +635,13 @@ function createApp(options = {}) {
           productSnapshot: product,
         };
         const payment = paymentCreatePayload(env, draft, product);
-        const order = store.createOrder({
+        const order = await store.createOrder({
           ...draft,
           paymentStatus: payment.paymentStatus,
           paymentMode: payment.paymentMode,
           paymentParams: payment.paymentParams,
         });
-        store.recordPaymentEvent({
+        await store.recordPaymentEvent({
           orderId: order.id,
           userId: user.id,
           type: "create",
@@ -655,25 +660,25 @@ function createApp(options = {}) {
       }
 
       if (path === "/api/miniapp/orders" && request.method === "GET") {
-        const { user } = getCurrentUser(request, env, store);
-        const data = store.listOrders(user.id, url.searchParams);
+        const { user } = await getCurrentUser(request, env, store);
+        const data = await store.listOrders(user.id, url.searchParams);
         return json({ success: true, data });
       }
 
       const mockPayMatch = path.match(/^\/api\/miniapp\/orders\/([^/]+)\/mock-pay$/);
       if (mockPayMatch && request.method === "POST") {
-        const { user } = getCurrentUser(request, env, store);
-        const order = store.getOrder(decodeURIComponent(mockPayMatch[1]));
+        const { user } = await getCurrentUser(request, env, store);
+        const order = await store.getOrder(decodeURIComponent(mockPayMatch[1]));
         if (!order || order.userId !== user.id) return json({ success: false, error: "Order not found" }, 404);
         if (paymentMode(env) !== "mock") {
           return json({ success: false, error: "Mock payment is disabled" }, 403);
         }
-        const result = store.fulfillOrder(order.id, {
+        const result = await store.fulfillOrder(order.id, {
           paidAt: new Date().toISOString(),
           reason: `order:${order.id}`,
         });
         if (result && result.fulfilled) {
-          store.recordPaymentEvent({
+          await store.recordPaymentEvent({
             orderId: order.id,
             userId: user.id,
             type: "pay",
@@ -681,7 +686,7 @@ function createApp(options = {}) {
             message: "Mock payment completed",
             metadata: { mode: "mock" },
           });
-          store.recordPaymentEvent({
+          await store.recordPaymentEvent({
             orderId: order.id,
             userId: user.id,
             type: "fulfill",
@@ -690,83 +695,87 @@ function createApp(options = {}) {
             metadata: { credits: result.order.creditsGranted },
           });
         }
-        return json({ success: true, data: { order: result ? result.order : store.getOrder(order.id), idempotent: !(result && result.fulfilled) } });
+        return json({ success: true, data: { order: result ? result.order : await store.getOrder(order.id), idempotent: !(result && result.fulfilled) } });
       }
 
       const orderMatch = path.match(/^\/api\/miniapp\/orders\/([^/]+)$/);
       if (orderMatch && request.method === "GET") {
-        const { user } = getCurrentUser(request, env, store);
-        const order = store.getOrder(decodeURIComponent(orderMatch[1]));
+        const { user } = await getCurrentUser(request, env, store);
+        const order = await store.getOrder(decodeURIComponent(orderMatch[1]));
         if (!order || order.userId !== user.id) return json({ success: false, error: "Order not found" }, 404);
         return json({ success: true, data: { order } });
       }
 
       if (path === "/api/miniapp/admin/payment-audit" && request.method === "GET") {
-        requireAdmin(request, env, store);
-        return json({ success: true, data: store.listPaymentAudit(url.searchParams) });
+        await requireAdmin(request, env, store);
+        return json({ success: true, data: await store.listPaymentAudit(url.searchParams) });
       }
 
       if (path === "/api/miniapp/admin/users" && request.method === "GET") {
-        requireAdmin(request, env, store);
-        return json({ success: true, data: store.listUsers(url.searchParams) });
+        await requireAdmin(request, env, store);
+        return json({ success: true, data: await store.listUsers(url.searchParams) });
       }
 
       if (path === "/api/miniapp/admin/credits/add" && request.method === "POST") {
-        const admin = requireAdmin(request, env, store);
+        const admin = await requireAdmin(request, env, store);
         const body = await readJson(request);
         const userId = String(body.userId || body.targetUserId || "").trim();
         const amount = Number.parseInt(body.amount, 10);
         if (!userId) return json({ success: false, error: "Missing userId" }, 400);
         if (!Number.isFinite(amount) || amount <= 0) return json({ success: false, error: "Amount must be a positive integer" }, 400);
-        const user = store.addCredits(userId, amount, body.reason || `admin:${admin.user.id}`);
+        const user = await store.addCredits(userId, amount, body.reason || `admin:${admin.user.id}`);
         return json({ success: true, data: { user } });
       }
 
       const adminUserCreditsMatch = path.match(/^\/api\/miniapp\/admin\/users\/([^/]+)\/credits$/);
       if (adminUserCreditsMatch && request.method === "POST") {
-        const admin = requireAdmin(request, env, store);
+        const admin = await requireAdmin(request, env, store);
         const userId = decodeURIComponent(adminUserCreditsMatch[1]);
         const body = await readJson(request);
         const amount = Number.parseInt(body.amount, 10);
         if (!Number.isFinite(amount) || amount <= 0) return json({ success: false, error: "Amount must be a positive integer" }, 400);
-        const user = store.addCredits(userId, amount, body.reason || `admin:${admin.user.id}`);
+        const user = await store.addCredits(userId, amount, body.reason || `admin:${admin.user.id}`);
         return json({ success: true, data: { user } });
       }
 
       const adminUserMatch = path.match(/^\/api\/miniapp\/admin\/users\/([^/]+)$/);
       if (adminUserMatch && request.method === "GET") {
-        requireAdmin(request, env, store);
+        await requireAdmin(request, env, store);
         const userId = decodeURIComponent(adminUserMatch[1]);
-        const user = store.getUser(userId);
+        const user = await store.getUser(userId);
         if (!user) return json({ success: false, error: "User not found" }, 404);
+        const [orders, creditTransactions] = await Promise.all([
+          store.listOrders(user.id, new URLSearchParams({ page: "1", limit: "20" })),
+          store.listCreditTransactions(user.id, new URLSearchParams({ page: "1", limit: "20" })),
+        ]);
         return json({
           success: true,
           data: {
             user,
-            orders: store.listOrders(user.id, new URLSearchParams({ page: "1", limit: "20" })),
-            creditTransactions: store.listCreditTransactions(user.id, new URLSearchParams({ page: "1", limit: "20" })),
+            orders,
+            creditTransactions,
           },
         });
       }
 
       if (path === "/api/miniapp/admin/orders" && request.method === "GET") {
-        requireAdmin(request, env, store);
-        return json({ success: true, data: store.listAllOrders(url.searchParams) });
+        await requireAdmin(request, env, store);
+        return json({ success: true, data: await store.listAllOrders(url.searchParams) });
       }
 
       const adminOrderActionMatch = path.match(/^\/api\/miniapp\/admin\/orders\/([^/]+)\/(refund|cancel)$/);
       if (adminOrderActionMatch && request.method === "POST") {
-        const admin = requireAdmin(request, env, store);
+        const admin = await requireAdmin(request, env, store);
         const orderId = decodeURIComponent(adminOrderActionMatch[1]);
         const action = adminOrderActionMatch[2];
         const body = await readJson(request);
         const reason = body.reason || `admin:${action}`;
         const result = action === "refund"
-          ? store.refundOrder(orderId, { reason, revokeCredits: body.revokeCredits !== false })
-          : store.cancelOrder(orderId, { reason });
+          ? await store.refundOrder(orderId, { reason, revokeCredits: body.revokeCredits !== false })
+          : await store.cancelOrder(orderId, { reason });
         if (!result) return json({ success: false, error: "Order not found" }, 404);
         if ((action === "refund" && result.refunded) || (action === "cancel" && result.canceled)) {
-          store.recordPaymentEvent({
+          await store.recordPaymentEvent({
             orderId,
             userId: result.order.userId,
             type: action === "refund" ? "refund" : "fail",
@@ -780,7 +789,7 @@ function createApp(options = {}) {
 
       if (path === "/api/miniapp/uploads/reference-image" && request.method === "POST") {
         const payload = getAuthPayload(request, env);
-        store.ensureUser(payload);
+        await store.ensureUser(payload);
         const upload = await saveReferenceImage(request, env);
         return json({ success: true, data: upload });
       }
@@ -789,7 +798,7 @@ function createApp(options = {}) {
         let data;
         if (store.listTemplates) {
           await ensureTemplatesSynced(request);
-          data = store.listTemplates(url.searchParams);
+          data = await store.listTemplates(url.searchParams);
         } else {
           data = await fetchTemplateList({
             ...templateOptions(env, url.searchParams, request),
@@ -816,14 +825,14 @@ function createApp(options = {}) {
       const generateMatch = path.match(/^\/api\/miniapp\/templates\/([^/]+)\/generate$/);
       if (generateMatch && request.method === "POST") {
         const payload = getAuthPayload(request, env);
-        const user = store.ensureUser(payload);
+        const user = await store.ensureUser(payload);
         if (user.balance < 1) return json({ success: false, error: "Insufficient credits" }, 402);
         const body = await readJson(request);
         const templateId = decodeURIComponent(generateMatch[1]);
         const template = await getTemplate(templateId, request);
         if (!template) return json({ success: false, error: "Template not found" }, 404);
 
-        const task = createGenerationTask({
+        const task = await createGenerationTask({
           user,
           template,
           body,
@@ -835,8 +844,8 @@ function createApp(options = {}) {
 
       if (path === "/api/miniapp/image-generations" && request.method === "GET") {
         const payload = getAuthPayload(request, env);
-        const user = store.ensureUser(payload);
-        const data = store.listTasks(user.id, url.searchParams);
+        const user = await store.ensureUser(payload);
+        const data = await store.listTasks(user.id, url.searchParams);
         return json({
           success: true,
           data: {
@@ -864,8 +873,8 @@ function createApp(options = {}) {
 
       if (path === "/api/miniapp/credit/history" && request.method === "GET") {
         const payload = getAuthPayload(request, env);
-        const user = store.ensureUser(payload);
-        const data = store.listCreditTransactions(user.id, url.searchParams);
+        const user = await store.ensureUser(payload);
+        const data = await store.listCreditTransactions(user.id, url.searchParams);
         return json({
           success: true,
           data: {
@@ -877,9 +886,9 @@ function createApp(options = {}) {
 
       const imageAssetDownloadMatch = path.match(/^\/api\/miniapp\/image-assets\/([^/]+)\/download$/);
       if (imageAssetDownloadMatch && request.method === "GET") {
-        const { user } = getCurrentUser(request, env, store);
+        const { user } = await getCurrentUser(request, env, store);
         const assetId = decodeURIComponent(imageAssetDownloadMatch[1]);
-        const asset = store.findOwnedImageAsset(user.id, assetId);
+        const asset = await store.findOwnedImageAsset(user.id, assetId);
         if (!asset) return json({ success: false, error: "Image asset not found" }, 404);
         return new Response(null, {
           status: 302,
@@ -895,7 +904,7 @@ function createApp(options = {}) {
 
       if (path === "/api/miniapp/image-generations" && request.method === "POST") {
         const payload = getAuthPayload(request, env);
-        const user = store.ensureUser(payload);
+        const user = await store.ensureUser(payload);
         const body = await readJson(request);
         const validation = validateGenerationBody(body);
         const requestedCredits = estimateCredits(body);
@@ -917,7 +926,7 @@ function createApp(options = {}) {
         };
         if (!template) return json({ success: false, error: "Template not found" }, 404);
         if (!body.prompt && !template.prompt) return json({ success: false, error: "Missing prompt" }, 400);
-        const task = createGenerationTask({
+        const task = await createGenerationTask({
           user,
           template,
           body: {
@@ -933,8 +942,8 @@ function createApp(options = {}) {
       const regenerateMatch = path.match(/^\/api\/miniapp\/image-generations\/([^/]+)\/regenerate$/);
       if (regenerateMatch && request.method === "POST") {
         const payload = getAuthPayload(request, env);
-        const user = store.ensureUser(payload);
-        const original = store.getTask(decodeURIComponent(regenerateMatch[1]));
+        const user = await store.ensureUser(payload);
+        const original = await store.getTask(decodeURIComponent(regenerateMatch[1]));
         if (!original || original.ownerId !== user.id) {
           return json({ success: false, error: "Task not found" }, 404);
         }
@@ -964,7 +973,7 @@ function createApp(options = {}) {
             resolution: original.resolution,
           },
         };
-        const task = createGenerationTask({
+        const task = await createGenerationTask({
           user,
           template,
           body: generationBody,
@@ -977,7 +986,7 @@ function createApp(options = {}) {
       const taskMatch = path.match(/^\/api\/miniapp\/image-generations\/([^/]+)$/);
       if (taskMatch && request.method === "GET") {
         const payload = getAuthPayload(request, env);
-        const task = store.getTask(decodeURIComponent(taskMatch[1]));
+        const task = await store.getTask(decodeURIComponent(taskMatch[1]));
         if (!task || task.ownerId !== payload.sub) {
           return json({ success: false, error: "Task not found" }, 404);
         }

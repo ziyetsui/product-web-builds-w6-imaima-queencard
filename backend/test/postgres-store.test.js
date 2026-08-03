@@ -5,11 +5,11 @@ const test = require("node:test");
 const { createPostgresStore } = require("../src/repositories/postgres-store");
 const { migrateDatabase } = require("../src/db/migrate");
 const { assertStoreContract } = require("../src/repositories/store-contract");
-const { createPgMemPool } = require("./support/pg-mem");
+const { applyPgMemSchema, createPgMemPool } = require("./support/pg-mem");
 
 async function setup() {
   const { pool } = createPgMemPool();
-  await migrateDatabase({ pool });
+  await applyPgMemSchema(pool);
   const store = createPostgresStore({
     pool,
     clock: () => new Date("2026-08-03T00:00:00.000Z"),
@@ -17,6 +17,20 @@ async function setup() {
   });
   assertStoreContract(store);
   return { pool, store };
+}
+
+async function creditState(pool, userId) {
+  const user = (await pool.query("SELECT balance FROM miniapp_users WHERE id = $1", [userId])).rows[0];
+  const packages = (await pool.query(`
+    SELECT id, initial_credits, remaining_credits, frozen_credits, order_no
+    FROM credit_packages WHERE user_id = $1 ORDER BY created_at ASC, id ASC
+  `, [userId])).rows;
+  return {
+    balance: Number(user.balance),
+    available: packages.reduce((sum, row) => sum + Number(row.remaining_credits), 0),
+    frozen: packages.reduce((sum, row) => sum + Number(row.frozen_credits), 0),
+    packages,
+  };
 }
 
 test("initial schema declares the production invariants", () => {
@@ -29,6 +43,7 @@ test("initial schema declares the production invariants", () => {
   assert.match(sql, /UNIQUE \(appid, openid\)/);
   assert.match(sql, /UNIQUE \(owner_id, idempotency_key\)/);
   assert.match(sql, /UNIQUE \(user_id, idempotency_key\)/);
+  assert.match(sql, /CHECK \(remaining_credits \+ frozen_credits <= initial_credits\)/);
   assert.match(sql, /credit_transactions_immutable/);
   assert.match(sql, /generation_tasks_lease_idx/);
 });
@@ -154,6 +169,7 @@ test("postgres repository contract persists identity, sessions, credits, tasks, 
     idempotencyKey: "order-key-1",
     amountCents: 500,
     credits: 5,
+    paymentMode: "wechat",
     productSnapshot: { id: "credits-5", credits: 5 },
   });
   assert.equal((await store.createOrder({
@@ -163,8 +179,26 @@ test("postgres repository contract persists identity, sessions, credits, tasks, 
     amountCents: 500,
     credits: 5,
   })).id, order.id);
-  assert.equal((await store.fulfillOrder(order.id, { paidAt: "2026-08-03T00:00:00.000Z" })).fulfilled, true);
-  assert.equal((await store.fulfillOrder(order.id)).fulfilled, false);
+  const verifiedFulfillment = await store.fulfillPayment({
+    fulfillmentKey: "verified-fulfillment-key-1",
+    orderId: order.id,
+    provider: "wechat",
+    eventId: "verified-event-1",
+    providerTransactionId: "verified-transaction-1",
+    status: "FULFILLED",
+    paymentVerified: true,
+    paidAt: "2026-08-03T00:00:00.000Z",
+  });
+  assert.equal((await store.fulfillPayment({
+    fulfillmentKey: "verified-fulfillment-key-1",
+    orderId: order.id,
+    provider: "wechat",
+    eventId: "verified-event-1",
+    providerTransactionId: "verified-transaction-1",
+    status: "FULFILLED",
+    paymentVerified: true,
+  })).id, verifiedFulfillment.id);
+  assert.equal((await store.getOrder(order.id)).creditsGranted, 5);
 
   const fulfillment = await store.recordPaymentFulfillment({
     fulfillmentKey: "fulfillment-key-1",
@@ -207,5 +241,279 @@ test("postgres repository exposes parameterized SQL and explicit transaction bou
   assert.ok(history.some((entry) => entry.sql === "BEGIN"));
   assert.ok(history.some((entry) => entry.sql === "COMMIT"));
   assert.ok(history.every((entry) => !/openid-2|wx-test/.test(entry.sql)));
+  await pool.end();
+});
+
+test("pg-mem repository tests use driver parameter binding instead of SQL substitution", async () => {
+  const { pool } = createPgMemPool();
+  await assert.rejects(pool.query("SELECT $1::text AS value", []), /parameter|bind|expected/i);
+  const result = await pool.query("SELECT $1::text AS value", ["quote-'-$2"]);
+  assert.equal(result.rows[0].value, "quote-'-$2");
+  await pool.end();
+});
+
+test("migration runner submits the raw production migration unchanged", async () => {
+  const raw = fs.readFileSync(require.resolve("../migrations/001_initial.sql"), "utf8");
+  const queries = [];
+  const client = {
+    async query(sql) {
+      queries.push(sql);
+      if (/SELECT version FROM miniapp_schema_migrations/.test(sql)) return { rows: [] };
+      return { rows: [], rowCount: 0 };
+    },
+    release() {},
+  };
+  const pool = { async connect() { return client; } };
+
+  await migrateDatabase({ pool });
+
+  assert.equal(queries.includes(raw), true);
+});
+
+test("package grants are retry-safe and charges and revokes consume package remainder", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "credit-user-1", appid: "wx-credit", openid: "credit-openid-1" });
+
+  const first = await store.createCreditPackage({ id: "retry-package-1", userId: user.id, initialCredits: 5, transType: "SYSTEM_ADJUST" });
+  const replay = await store.createCreditPackage({ id: "retry-package-1", userId: user.id, initialCredits: 5, transType: "SYSTEM_ADJUST" });
+  assert.equal(first.id, replay.id);
+  assert.deepEqual(await store.charge(user.id, 12, "large-generation"), 3);
+  assert.equal((await store.addCredits(user.id, -2, "admin-revoke")).balance, 1);
+
+  const state = await creditState(pool, user.id);
+  assert.equal(state.balance, 1);
+  assert.equal(state.available, 1);
+  assert.equal(state.frozen, 0);
+  assert.equal(state.packages.filter((row) => row.id === "retry-package-1").length, 1);
+  await pool.end();
+});
+
+test("credit packages cannot create spendable remainder without matching user balance", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "credit-user-detached", appid: "wx-credit", openid: "credit-openid-detached" });
+  await store.createCreditPackage({
+    id: "detached-package",
+    userId: user.id,
+    initialCredits: 1,
+    remainingCredits: 1,
+    transType: "SYSTEM_ADJUST",
+    addToBalance: false,
+  });
+  const state = await creditState(pool, user.id);
+  assert.equal(state.balance, 11);
+  assert.equal(state.available, 11);
+  await pool.end();
+});
+
+test("independent package grants without caller ids are not coalesced", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "credit-user-independent", appid: "wx-credit", openid: "credit-openid-independent" });
+  const packages = await Promise.all([
+    store.createCreditPackage({ userId: user.id, initialCredits: 1, transType: "SYSTEM_ADJUST" }),
+    store.createCreditPackage({ userId: user.id, initialCredits: 1, transType: "SYSTEM_ADJUST" }),
+  ]);
+
+  assert.notEqual(packages[0].id, packages[1].id);
+  const state = await creditState(pool, user.id);
+  assert.equal(state.balance, 12);
+  assert.equal(state.available, 12);
+  await pool.end();
+});
+
+test("holds cannot outspend balance and multi-package settlement releases the residual once", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "credit-user-2", appid: "wx-credit", openid: "credit-openid-2" });
+  await store.createCreditPackage({ id: "settle-package-a", userId: user.id, initialCredits: 5, transType: "SYSTEM_ADJUST" });
+  await store.createCreditPackage({ id: "settle-package-b", userId: user.id, initialCredits: 5, transType: "SYSTEM_ADJUST" });
+
+  const hold = await store.createCreditHold({
+    id: "settle-hold-1",
+    userId: user.id,
+    taskId: "settle-task-1",
+    idempotencyKey: "settle-key-1",
+    credits: 10,
+    packageAllocation: [
+      { packageId: "settle-package-a", credits: 5 },
+      { packageId: "settle-package-b", credits: 5 },
+    ],
+  });
+  await store.settleCreditHold(hold.id, 7, { reason: "settle-task-1" });
+
+  const state = await creditState(pool, user.id);
+  const settledPackages = state.packages.filter((row) => row.id.startsWith("settle-package-"));
+  assert.equal(settledPackages.reduce((sum, row) => sum + Number(row.remaining_credits), 0), 3);
+  assert.equal(settledPackages.reduce((sum, row) => sum + Number(row.frozen_credits), 0), 0);
+  assert.equal(state.balance, state.available);
+
+  await store.charge(user.id, state.balance, "drain-all");
+  await assert.rejects(
+    store.createCreditHold({ userId: user.id, idempotencyKey: "free-hold-key", credits: 1 }),
+    /insufficient credits/i,
+  );
+  await pool.end();
+});
+
+test("concurrent hold, task, and order retries return one resource", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "concurrent-user-1", appid: "wx-concurrent", openid: "concurrent-openid-1" });
+
+  const holds = await Promise.all([
+    store.createCreditHold({ id: "concurrent-hold-a", userId: user.id, idempotencyKey: "concurrent-hold-key", credits: 2 }),
+    store.createCreditHold({ id: "concurrent-hold-b", userId: user.id, idempotencyKey: "concurrent-hold-key", credits: 2 }),
+  ]);
+  assert.equal(holds[0].id, holds[1].id);
+
+  const tasks = await Promise.all([
+    store.createTask({ id: "concurrent-task-a", ownerId: user.id, idempotencyKey: "concurrent-task-key", status: "pending" }),
+    store.createTask({ id: "concurrent-task-b", ownerId: user.id, idempotencyKey: "concurrent-task-key", status: "pending" }),
+  ]);
+  assert.equal(tasks[0].id, tasks[1].id);
+
+  const orders = await Promise.all([
+    store.createOrder({ id: "concurrent-order-a", userId: user.id, idempotencyKey: "concurrent-order-key", productId: "credits-5", amountCents: 500, credits: 5 }),
+    store.createOrder({ id: "concurrent-order-b", userId: user.id, idempotencyKey: "concurrent-order-key", productId: "credits-5", amountCents: 500, credits: 5 }),
+  ]);
+  assert.equal(orders[0].id, orders[1].id);
+
+  assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM credit_holds WHERE idempotency_key = $1", ["concurrent-hold-key"])).rows[0].count, 1);
+  assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM generation_tasks WHERE owner_id = $1 AND idempotency_key = $2", [user.id, "concurrent-task-key"])).rows[0].count, 1);
+  assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM miniapp_orders WHERE user_id = $1 AND idempotency_key = $2", [user.id, "concurrent-order-key"])).rows[0].count, 1);
+  const state = await creditState(pool, user.id);
+  assert.equal(state.balance, 8);
+  assert.equal(state.available, 8);
+  assert.equal(state.frozen, 2);
+  await pool.end();
+});
+
+test("concurrent charges cannot overspend package or user balance", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "concurrent-user-2", appid: "wx-concurrent", openid: "concurrent-openid-2" });
+
+  const results = await Promise.allSettled([
+    store.charge(user.id, 8, "concurrent-charge-a"),
+    store.charge(user.id, 8, "concurrent-charge-b"),
+  ]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  assert.match(results.find((result) => result.status === "rejected").reason.message, /insufficient credits/i);
+
+  const state = await creditState(pool, user.id);
+  assert.equal(state.balance, 2);
+  assert.equal(state.available, 2);
+  assert.equal(state.frozen, 0);
+  await pool.end();
+});
+
+test("manual, mock, and direct fulfillment paths cannot grant unverified credits", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "payment-user-1", appid: "wx-payment", openid: "payment-openid-1" });
+  const manual = await store.createOrder({
+    id: "manual-order-1",
+    userId: user.id,
+    productId: "credits-5",
+    status: "paid",
+    paymentStatus: "fulfilled",
+    paymentMode: "manual",
+    amountCents: 500,
+    credits: 5,
+    metadata: { paymentVerification: "not-verified" },
+  });
+  const mock = await store.createOrder({
+    id: "mock-order-1",
+    userId: user.id,
+    productId: "credits-5",
+    status: "paid",
+    paymentStatus: "fulfilled",
+    paymentMode: "mock",
+    amountCents: 500,
+    credits: 5,
+  });
+
+  await store.recordPaymentFulfillment({
+    fulfillmentKey: "manual-record-1",
+    orderId: manual.id,
+    provider: "manual",
+    eventId: "manual-record-event-1",
+    providerTransactionId: "manual-record-transaction-1",
+    status: "FULFILLED",
+  });
+  await store.recordPaymentEvent({
+    orderId: manual.id,
+    userId: user.id,
+    type: "admin_fulfill",
+    actorId: user.id,
+    message: "manual admin replay",
+  });
+
+  await assert.rejects(store.fulfillOrder(manual.id, { paymentVerified: true, paymentMode: "wechat" }), /verified payment event required/i);
+  await assert.rejects(store.fulfillOrder(mock.id, { paymentVerified: true, paymentMode: "mock" }), /verified payment event required/i);
+  await assert.rejects(store.fulfillPayment({
+    fulfillmentKey: "manual-replay-1",
+    orderId: manual.id,
+    provider: "manual",
+    eventId: "manual-event-1",
+    providerTransactionId: "manual-transaction-1",
+    status: "FULFILLED",
+    paymentVerified: true,
+  }), /verified wechat payment required/i);
+  await assert.rejects(store.fulfillPayment({
+    fulfillmentKey: "manual-wechat-replay-1",
+    orderId: manual.id,
+    provider: "wechat",
+    eventId: "manual-wechat-event-1",
+    providerTransactionId: "manual-wechat-transaction-1",
+    status: "FULFILLED",
+    paymentVerified: true,
+  }), /verified wechat payment required/i);
+
+  const state = await creditState(pool, user.id);
+  assert.equal(state.balance, 10);
+  assert.equal(state.available, 10);
+  assert.equal((await store.getOrder(manual.id)).creditsGranted, 0);
+  assert.equal((await store.getOrder(mock.id)).creditsGranted, 0);
+  await pool.end();
+});
+
+test("verified payment fulfillment is atomic, replay-safe, and refunds its remaining package credits", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "payment-user-2", appid: "wx-payment", openid: "payment-openid-2" });
+  const order = await store.createOrder({
+    id: "wechat-order-1",
+    userId: user.id,
+    idempotencyKey: "wechat-order-key-1",
+    productId: "credits-5",
+    paymentMode: "wechat",
+    amountCents: 500,
+    credits: 5,
+  });
+  const event = {
+    fulfillmentKey: "wechat-fulfillment-1",
+    orderId: order.id,
+    provider: "wechat",
+    eventId: "wechat-event-1",
+    providerTransactionId: "wechat-transaction-1",
+    status: "FULFILLED",
+    paymentVerified: true,
+    paidAt: "2026-08-03T00:00:00.000Z",
+  };
+
+  const first = await store.fulfillPayment(event);
+  const replay = await store.fulfillPayment(event);
+  assert.equal(first.id, replay.id);
+  const fulfilledOrder = await store.getOrder(order.id);
+  assert.equal(fulfilledOrder.paymentVerified, true);
+  assert.equal(fulfilledOrder.creditsGranted, 5);
+  let state = await creditState(pool, user.id);
+  assert.equal(state.balance, 15);
+  assert.equal(state.available, 15);
+  assert.equal(state.packages.filter((row) => row.order_no === order.id).length, 1);
+
+  await store.charge(user.id, 3, "spend-order-credit");
+  const refunded = await store.refundOrder(order.id, { reason: "verified-refund" });
+  assert.equal(refunded.revokedCredits, 2);
+  state = await creditState(pool, user.id);
+  assert.equal(state.balance, 10);
+  assert.equal(state.available, 10);
+  assert.equal(state.packages.find((row) => row.order_no === order.id).remaining_credits, 0);
   await pool.end();
 });

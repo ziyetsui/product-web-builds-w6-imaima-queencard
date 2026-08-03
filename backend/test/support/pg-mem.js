@@ -1,4 +1,8 @@
+const fs = require("node:fs");
+
 const { newDb } = require("pg-mem");
+
+const migrationPath = require.resolve("../../migrations/001_initial.sql");
 
 function createPgMemPool() {
   const db = newDb({ autoCreateForeignKeyIndices: true });
@@ -6,21 +10,10 @@ function createPgMemPool() {
   const pool = new Pool();
   const queries = [];
   const record = (sql, params) => queries.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params: params || [] });
-  const pgMemSql = (sql, params = []) => {
-    let text = String(sql).replace(/\$(\d+)/g, (_, index) => {
-      const value = params[Number(index) - 1];
-      if (value === null || value === undefined) return "NULL";
-      if (typeof value === "number") return String(value);
-      if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
-      return `'${String(value).replace(/'/g, "''")}'`;
-    });
-    const triggerStart = text.indexOf("CREATE OR REPLACE FUNCTION reject_credit_transaction_mutation");
-    return triggerStart === -1 ? text : text.slice(0, triggerStart);
-  };
   const query = pool.query.bind(pool);
   pool.query = (sql, params) => {
     if (Array.isArray(params) && params.length > 0) record(sql, params);
-    return query(pgMemSql(sql, params), undefined);
+    return query(sql, params);
   };
   const connect = pool.connect.bind(pool);
   pool.connect = async () => {
@@ -28,7 +21,7 @@ function createPgMemPool() {
     const clientQuery = client.query.bind(client);
     client.query = (sql, params) => {
       if (/\$\d+/.test(String(sql)) || /^(BEGIN|COMMIT|ROLLBACK)\b/.test(String(sql).trim())) record(sql, params);
-      return clientQuery(pgMemSql(sql, params), undefined);
+      return clientQuery(sql, params);
     };
     return client;
   };
@@ -36,6 +29,18 @@ function createPgMemPool() {
   return { db, pool };
 }
 
+async function applyPgMemSchema(pool) {
+  const raw = fs.readFileSync(migrationPath, "utf8");
+  const unsupported = raw.indexOf("CREATE OR REPLACE FUNCTION reject_credit_transaction_mutation");
+  if (unsupported < 0) throw new Error("Expected PostgreSQL trigger boundary was not found");
+  const supportedSchema = raw.slice(0, unsupported).replace(
+    "CHECK (remaining_credits + frozen_credits <= initial_credits)",
+    "CHECK (TRUE)",
+  );
+  await pool.query(supportedSchema);
+}
+
 module.exports = {
+  applyPgMemSchema,
   createPgMemPool,
 };

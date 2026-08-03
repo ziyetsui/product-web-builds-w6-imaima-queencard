@@ -364,6 +364,72 @@ function createPostgresStore(options = {}) {
   if (!pool || typeof pool.query !== "function") throw new TypeError("createPostgresStore requires a PostgreSQL pool");
   const clock = options.clock || (() => new Date());
   const initialCredits = Number(options.initialCredits || 10);
+  const inFlight = new Map();
+
+  function singleFlight(key, operation) {
+    if (!key) return operation();
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+    const pending = Promise.resolve().then(operation);
+    inFlight.set(key, pending);
+    return pending.finally(() => {
+      if (inFlight.get(key) === pending) inFlight.delete(key);
+    });
+  }
+
+  async function changeUserBalance(client, userId, amount, changedAt) {
+    const value = Number(amount);
+    const result = value < 0
+      ? await client.query(
+        "UPDATE miniapp_users SET balance = balance + $1, updated_at = $2 WHERE id = $3 AND balance >= $4 RETURNING balance",
+        [value, changedAt, userId, Math.abs(value)],
+      )
+      : await client.query(
+        "UPDATE miniapp_users SET balance = balance + $1, updated_at = $2 WHERE id = $3 RETURNING balance",
+        [value, changedAt, userId],
+      );
+    if (!result.rowCount) {
+      const exists = await client.query("SELECT id FROM miniapp_users WHERE id = $1", [userId]);
+      if (!exists.rowCount) throw err("User not found", 404);
+      throw err("Insufficient credits", 402);
+    }
+    return Number(result.rows[0].balance);
+  }
+
+  async function consumePackageCredits(client, userId, credits, changedAt, input = {}) {
+    let remaining = Number(credits);
+    const values = [userId, changedAt];
+    let orderFilter = "";
+    if (input.orderNo && input.onlyOrder) {
+      values.push(input.orderNo);
+      orderFilter = `AND order_no = $${values.length}`;
+    }
+    const packages = await client.query(`
+      SELECT id, remaining_credits, frozen_credits FROM credit_packages
+      WHERE user_id = $1 AND status = 'ACTIVE'
+        AND (expired_at IS NULL OR expired_at > $2)
+        AND remaining_credits > 0 ${orderFilter}
+      ORDER BY expired_at NULLS LAST, created_at ASC, id ASC FOR UPDATE
+    `, values);
+    const allocations = [];
+    for (const pkg of packages.rows) {
+      if (remaining <= 0) break;
+      const amount = Math.min(Number(pkg.remaining_credits), remaining);
+      const nextRemaining = Number(pkg.remaining_credits) - amount;
+      const nextStatus = nextRemaining === 0 && Number(pkg.frozen_credits) === 0 ? "DEPLETED" : "ACTIVE";
+      const updated = await client.query(`
+        UPDATE credit_packages
+        SET remaining_credits = $1, status = $2, updated_at = $3
+        WHERE id = $4 AND user_id = $5 AND remaining_credits >= $6
+        RETURNING id
+      `, [nextRemaining, nextStatus, changedAt, pkg.id, userId, amount]);
+      if (!updated.rowCount) throw err("Insufficient package credits", 409);
+      allocations.push({ packageId: pkg.id, credits: amount });
+      remaining -= amount;
+    }
+    if (remaining > 0) throw err("Insufficient package credits", 409);
+    return allocations;
+  }
 
   async function ensureUser(identity) {
     const createdAt = timestamp(clock);
@@ -462,25 +528,36 @@ function createPostgresStore(options = {}) {
     return result.rowCount;
   }
 
-  async function createCreditPackage(input) {
+  async function createCreditPackageOnce(input) {
     const createdAt = timestamp(clock);
     const initial = Number(input.initialCredits || 0);
     const remaining = input.remainingCredits == null ? initial : Number(input.remainingCredits);
     const frozen = Number(input.frozenCredits || 0);
     const packageId = input.id || id("package");
+    if (remaining < 0 || frozen < 0 || remaining + frozen > initial) throw err("Invalid credit package allocation", 400);
     const result = await withTransaction(pool, async (client) => {
+      const replay = await client.query("SELECT * FROM credit_packages WHERE id = $1", [packageId]);
+      if (replay.rowCount) return replay.rows[0];
       const inserted = await client.query(`
         INSERT INTO credit_packages (id, user_id, initial_credits, remaining_credits, frozen_credits, trans_type, order_no, status, expired_at, metadata, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
-        ON CONFLICT (id) DO UPDATE SET updated_at = credit_packages.updated_at
+        ON CONFLICT (id) DO NOTHING
         RETURNING *
       `, [packageId, input.userId, initial, remaining, frozen, input.transType || "SYSTEM_ADJUST", input.orderNo || null, input.status || "ACTIVE", input.expiredAt || null, JSON.stringify(json(input.metadata)), createdAt]);
-      if (Number(remaining) > 0 && input.addToBalance !== false) {
-        await client.query("UPDATE miniapp_users SET balance = balance + $1, updated_at = $2 WHERE id = $3", [remaining, createdAt, input.userId]);
+      if (!inserted.rowCount) {
+        const existing = await client.query("SELECT * FROM credit_packages WHERE id = $1", [packageId]);
+        return existing.rows[0];
+      }
+      if (Number(remaining) > 0) {
+        await changeUserBalance(client, input.userId, remaining, createdAt);
       }
       return inserted.rows[0];
     });
     return rowToPackage(result);
+  }
+
+  function createCreditPackage(input) {
+    return singleFlight(input.id ? `package:${input.id}` : null, () => createCreditPackageOnce(input));
   }
 
   async function listCreditPackages(userId, options = new URLSearchParams()) {
@@ -495,11 +572,19 @@ function createPostgresStore(options = {}) {
     return rowToPackage(result.rows[0]);
   }
 
-  async function createCreditHold(input) {
+  async function createCreditHoldOnce(input) {
     const createdAt = timestamp(clock);
     return withTransaction(pool, async (client) => {
-      const existing = await client.query("SELECT * FROM credit_holds WHERE idempotency_key = $1", [input.idempotencyKey]);
-      if (existing.rowCount) return rowToHold(existing.rows[0]);
+      const inserted = await client.query(`
+        INSERT INTO credit_holds (id, user_id, task_id, idempotency_key, credits, package_allocation, created_at)
+        VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, $6)
+        ON CONFLICT (idempotency_key) DO NOTHING RETURNING *
+      `, [input.id || id("hold"), input.userId, input.taskId || null, input.idempotencyKey, Number(input.credits), createdAt]);
+      if (!inserted.rowCount) {
+        const existing = await client.query("SELECT * FROM credit_holds WHERE idempotency_key = $1", [input.idempotencyKey]);
+        return rowToHold(existing.rows[0]);
+      }
+      await changeUserBalance(client, input.userId, -Number(input.credits), createdAt);
       const allocations = Array.isArray(input.packageAllocation) ? input.packageAllocation : [];
       let remainingToAllocate = Number(input.credits);
       const selected = allocations.length ? allocations : (await client.query(`
@@ -511,22 +596,29 @@ function createPostgresStore(options = {}) {
       for (const allocation of selected) {
         const amount = Math.min(Number(allocation.credits), remainingToAllocate);
         if (amount <= 0) continue;
+        const locked = await client.query("SELECT remaining_credits, frozen_credits FROM credit_packages WHERE id = $1 AND user_id = $2 FOR UPDATE", [allocation.packageId, input.userId]);
+        if (!locked.rowCount || Number(locked.rows[0].remaining_credits) < amount) throw err("Insufficient credits", 402);
+        const nextRemaining = Number(locked.rows[0].remaining_credits) - amount;
+        const nextFrozen = Number(locked.rows[0].frozen_credits) + amount;
         const updated = await client.query(`
-          UPDATE credit_packages SET remaining_credits = remaining_credits - $1, frozen_credits = frozen_credits + $1, updated_at = $2
-          WHERE id = $3 AND user_id = $4 AND remaining_credits >= $1 RETURNING id
-        `, [amount, createdAt, allocation.packageId, input.userId]);
+          UPDATE credit_packages SET remaining_credits = $1, frozen_credits = $2, status = 'ACTIVE', updated_at = $3
+          WHERE id = $4 AND user_id = $5 AND remaining_credits >= $6 RETURNING id
+        `, [nextRemaining, nextFrozen, createdAt, allocation.packageId, input.userId, amount]);
         if (!updated.rowCount) throw err("Insufficient credits", 402);
         normalized.push({ packageId: allocation.packageId, credits: amount });
         remainingToAllocate -= amount;
       }
       if (remainingToAllocate > 0) throw err("Insufficient credits", 402);
-      const result = await client.query(`
-        INSERT INTO credit_holds (id, user_id, task_id, idempotency_key, credits, package_allocation, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
-      `, [input.id || id("hold"), input.userId, input.taskId || null, input.idempotencyKey, Number(input.credits), JSON.stringify(normalized), createdAt]);
-      await client.query("UPDATE miniapp_users SET balance = balance - $1, updated_at = $2 WHERE id = $3 AND balance >= $1", [Number(input.credits), createdAt, input.userId]);
+      const result = await client.query(
+        "UPDATE credit_holds SET package_allocation = $1 WHERE id = $2 RETURNING *",
+        [JSON.stringify(normalized), inserted.rows[0].id],
+      );
       return rowToHold(result.rows[0]);
     });
+  }
+
+  function createCreditHold(input) {
+    return singleFlight(`hold:${input.idempotencyKey}`, () => createCreditHoldOnce(input));
   }
 
   async function getCreditHold(holdId) {
@@ -543,14 +635,25 @@ function createPostgresStore(options = {}) {
       const settledCredits = Number(actualCredits);
       if (!Number.isInteger(settledCredits) || settledCredits < 0 || settledCredits > hold.credits) throw err("Invalid settled credit amount", 400);
       const released = hold.credits - settledCredits;
+      let releasedRemaining = released;
       const now = timestamp(clock);
       for (const allocation of hold.packageAllocation) {
         const allocated = Number(allocation.credits || 0);
-        const packageRelease = released ? Math.min(allocated, released) : 0;
-        await client.query("UPDATE credit_packages SET frozen_credits = frozen_credits - $1, remaining_credits = remaining_credits + $1, updated_at = $2 WHERE id = $3", [allocated, now, allocation.packageId]);
-        if (packageRelease) await client.query("UPDATE credit_packages SET remaining_credits = remaining_credits - $1, updated_at = $2 WHERE id = $3", [packageRelease, now, allocation.packageId]);
+        const packageRelease = Math.min(allocated, releasedRemaining);
+        releasedRemaining -= packageRelease;
+        const locked = await client.query("SELECT remaining_credits, frozen_credits FROM credit_packages WHERE id = $1 FOR UPDATE", [allocation.packageId]);
+        if (!locked.rowCount || Number(locked.rows[0].frozen_credits) < allocated) throw err("Credit hold package allocation is inconsistent", 409);
+        const nextRemaining = Number(locked.rows[0].remaining_credits) + packageRelease;
+        const nextFrozen = Number(locked.rows[0].frozen_credits) - allocated;
+        const updated = await client.query(`
+          UPDATE credit_packages
+          SET frozen_credits = $1, remaining_credits = $2, status = $3, updated_at = $4
+          WHERE id = $5 AND frozen_credits >= $6 RETURNING id
+        `, [nextFrozen, nextRemaining, nextRemaining > 0 || nextFrozen > 0 ? "ACTIVE" : "DEPLETED", now, allocation.packageId, allocated]);
+        if (!updated.rowCount) throw err("Credit hold package allocation is inconsistent", 409);
       }
-      const user = await client.query("UPDATE miniapp_users SET balance = balance + $1, updated_at = $2 WHERE id = $3 RETURNING balance", [released, now, hold.userId]);
+      if (releasedRemaining !== 0) throw err("Credit hold release is inconsistent", 409);
+      const balanceAfter = await changeUserBalance(client, hold.userId, released, now);
       if (settledCredits > 0) {
         await insertTransaction(client, {
           id: input.transactionId,
@@ -558,7 +661,7 @@ function createPostgresStore(options = {}) {
           userId: hold.userId,
           transType: "GENERATION",
           credits: -settledCredits,
-          balanceAfter: Number(user.rows[0].balance),
+          balanceAfter,
           holdId,
           taskId: hold.taskId,
           reason: input.reason || `hold:${holdId}`,
@@ -578,9 +681,19 @@ function createPostgresStore(options = {}) {
       if (hold.status !== "HOLDING") return hold;
       const now = timestamp(clock);
       for (const allocation of hold.packageAllocation) {
-        await client.query("UPDATE credit_packages SET frozen_credits = frozen_credits - $1, remaining_credits = remaining_credits + $1, updated_at = $2 WHERE id = $3", [Number(allocation.credits), now, allocation.packageId]);
+        const amount = Number(allocation.credits);
+        const locked = await client.query("SELECT remaining_credits, frozen_credits FROM credit_packages WHERE id = $1 FOR UPDATE", [allocation.packageId]);
+        if (!locked.rowCount || Number(locked.rows[0].frozen_credits) < amount) throw err("Credit hold package allocation is inconsistent", 409);
+        const nextRemaining = Number(locked.rows[0].remaining_credits) + amount;
+        const nextFrozen = Number(locked.rows[0].frozen_credits) - amount;
+        const updated = await client.query(`
+          UPDATE credit_packages
+          SET frozen_credits = $1, remaining_credits = $2, status = 'ACTIVE', updated_at = $3
+          WHERE id = $4 AND frozen_credits >= $5 RETURNING id
+        `, [nextFrozen, nextRemaining, now, allocation.packageId, amount]);
+        if (!updated.rowCount) throw err("Credit hold package allocation is inconsistent", 409);
       }
-      await client.query("UPDATE miniapp_users SET balance = balance + $1, updated_at = $2 WHERE id = $3", [hold.credits, now, hold.userId]);
+      await changeUserBalance(client, hold.userId, hold.credits, now);
       const result = await client.query("UPDATE credit_holds SET status = 'RELEASED', settled_at = $1 WHERE id = $2 RETURNING *", [now, holdId]);
       return rowToHold(result.rows[0]);
     });
@@ -591,18 +704,15 @@ function createPostgresStore(options = {}) {
     if (!Number.isInteger(value) || value === 0) throw err("Credit amount must be non-zero", 400);
     return withTransaction(pool, async (client) => {
       const now = timestamp(clock);
-      const userResult = await client.query("SELECT * FROM miniapp_users WHERE id = $1 FOR UPDATE", [userId]);
-      if (!userResult.rowCount) throw err("User not found", 404);
-      const user = rowToUser(userResult.rows[0]);
-      if (value < 0 && user.balance < Math.abs(value)) throw err("Insufficient credits to revoke", 402);
-      const next = user.balance + value;
       let packageId = null;
+      let allocations = [];
       if (value > 0) {
         packageId = id("package");
         await client.query("INSERT INTO credit_packages (id, user_id, initial_credits, remaining_credits, trans_type, metadata, created_at, updated_at) VALUES ($1, $2, $3, $3, 'SYSTEM_ADJUST', $4, $5, $5)", [packageId, userId, value, JSON.stringify({ reason: reason || "admin:adjust" }), now]);
       }
-      await client.query("UPDATE miniapp_users SET balance = $1, updated_at = $2 WHERE id = $3", [next, now, userId]);
-      await insertTransaction(client, { userId, transType: "SYSTEM_ADJUST", credits: value, balanceAfter: next, packageId, reason: reason || "admin:adjust", createdAt: now });
+      const next = await changeUserBalance(client, userId, value, now);
+      if (value < 0) allocations = await consumePackageCredits(client, userId, Math.abs(value), now);
+      await insertTransaction(client, { userId, transType: "SYSTEM_ADJUST", credits: value, balanceAfter: next, packageId, reason: reason || "admin:adjust", metadata: { allocations }, createdAt: now });
       const result = await client.query("SELECT * FROM miniapp_users WHERE id = $1", [userId]);
       return rowToUser(result.rows[0]);
     });
@@ -613,13 +723,9 @@ function createPostgresStore(options = {}) {
     if (!Number.isInteger(value) || value <= 0) throw err("Credit amount must be positive", 400);
     return withTransaction(pool, async (client) => {
       const now = timestamp(clock);
-      const userResult = await client.query("SELECT * FROM miniapp_users WHERE id = $1 FOR UPDATE", [userId]);
-      if (!userResult.rowCount) throw err("User not found", 404);
-      const balance = Number(userResult.rows[0].balance);
-      if (balance < value) throw err("Insufficient credits", 402);
-      const next = balance - value;
-      await client.query("UPDATE miniapp_users SET balance = $1, updated_at = $2 WHERE id = $3", [next, now, userId]);
-      await insertTransaction(client, { userId, transType: "GENERATION", credits: -value, balanceAfter: next, reason, createdAt: now });
+      const next = await changeUserBalance(client, userId, -value, now);
+      const allocations = await consumePackageCredits(client, userId, value, now);
+      await insertTransaction(client, { userId, transType: "GENERATION", credits: -value, balanceAfter: next, reason, metadata: { allocations }, createdAt: now });
       return next;
     });
   }
@@ -631,19 +737,27 @@ function createPostgresStore(options = {}) {
     return { records: rows.rows.map(rowToTransaction), pagination: pagination(page, limit, total.rows[0].total) };
   }
 
-  async function createTask(input) {
-    if (input.idempotencyKey) {
-      const existing = await pool.query("SELECT * FROM generation_tasks WHERE owner_id = $1 AND idempotency_key = $2", [input.ownerId, input.idempotencyKey]);
-      if (existing.rowCount) return rowToTask(existing.rows[0]);
-    }
+  async function createTaskOnce(input) {
     const createdAt = input.createdAt || timestamp(clock);
+    const taskIdValue = input.id || id("task");
+    const conflict = input.idempotencyKey
+      ? "ON CONFLICT (owner_id, idempotency_key) DO NOTHING"
+      : "ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, images = EXCLUDED.images, provider = EXCLUDED.provider, provider_task_id = EXCLUDED.provider_task_id, prompt = EXCLUDED.prompt, topic = EXCLUDED.topic, reference_images = EXCLUDED.reference_images, model = EXCLUDED.model, output_count = EXCLUDED.output_count, aspect_ratio = EXCLUDED.aspect_ratio, resolution = EXCLUDED.resolution, requested_credits = EXCLUDED.requested_credits, settled_credits = EXCLUDED.settled_credits, credit_hold_id = EXCLUDED.credit_hold_id, raw_provider_result = EXCLUDED.raw_provider_result, error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message, updated_at = EXCLUDED.updated_at, completed_at = EXCLUDED.completed_at";
     const result = await pool.query(`
       INSERT INTO generation_tasks (id, owner_id, idempotency_key, status, images, template_id, provider, provider_task_id, provider_result_url, mode, prompt, topic, reference_images, model, output_count, aspect_ratio, resolution, requested_credits, settled_credits, credit_hold_id, raw_provider_result, error_code, error_message, created_at, updated_at, started_at, completed_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $24, $25, $26)
-      ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, images = EXCLUDED.images, provider = EXCLUDED.provider, provider_task_id = EXCLUDED.provider_task_id, prompt = EXCLUDED.prompt, topic = EXCLUDED.topic, reference_images = EXCLUDED.reference_images, model = EXCLUDED.model, output_count = EXCLUDED.output_count, aspect_ratio = EXCLUDED.aspect_ratio, resolution = EXCLUDED.resolution, requested_credits = EXCLUDED.requested_credits, settled_credits = EXCLUDED.settled_credits, credit_hold_id = EXCLUDED.credit_hold_id, raw_provider_result = EXCLUDED.raw_provider_result, error_code = EXCLUDED.error_code, error_message = EXCLUDED.error_message, updated_at = EXCLUDED.updated_at, completed_at = EXCLUDED.completed_at
+      ${conflict}
       RETURNING *
-    `, [input.id, input.ownerId, input.idempotencyKey || null, input.status || "completed", JSON.stringify(input.images || []), input.templateId || null, input.provider || null, input.providerTaskId || null, input.providerResultUrl || null, input.mode || null, input.prompt || "", input.topic || "", JSON.stringify(input.referenceImages || []), input.model || "", positiveInt(input.outputCount, 1), input.aspectRatio || "", input.resolution || "", Number(input.requestedCredits || 0), Number(input.settledCredits || 0), input.creditHoldId || null, JSON.stringify(input.rawProviderResult || null), input.errorCode || null, input.errorMessage || null, createdAt, input.startedAt || null, input.completedAt || null]);
+    `, [taskIdValue, input.ownerId, input.idempotencyKey || null, input.status || "completed", JSON.stringify(input.images || []), input.templateId || null, input.provider || null, input.providerTaskId || null, input.providerResultUrl || null, input.mode || null, input.prompt || "", input.topic || "", JSON.stringify(input.referenceImages || []), input.model || "", positiveInt(input.outputCount, 1), input.aspectRatio || "", input.resolution || "", Number(input.requestedCredits || 0), Number(input.settledCredits || 0), input.creditHoldId || null, JSON.stringify(input.rawProviderResult || null), input.errorCode || null, input.errorMessage || null, createdAt, input.startedAt || null, input.completedAt || null]);
+    if (!result.rowCount && input.idempotencyKey) {
+      const existing = await pool.query("SELECT * FROM generation_tasks WHERE owner_id = $1 AND idempotency_key = $2", [input.ownerId, input.idempotencyKey]);
+      return rowToTask(existing.rows[0]);
+    }
     return rowToTask(result.rows[0]);
+  }
+
+  function createTask(input) {
+    return singleFlight(input.idempotencyKey ? `task:${input.ownerId}:${input.idempotencyKey}` : null, () => createTaskOnce(input));
   }
 
   async function getTask(taskId) {
@@ -844,18 +958,29 @@ function createPostgresStore(options = {}) {
     return rowToTemplate(result.rows[0]);
   }
 
-  async function createOrder(input) {
-    if (input.idempotencyKey) {
-      const existing = await pool.query("SELECT * FROM miniapp_orders WHERE user_id = $1 AND idempotency_key = $2", [input.userId, input.idempotencyKey]);
-      if (existing.rowCount) return rowToOrder(existing.rows[0]);
-    }
+  async function createOrderOnce(input) {
     const now = input.createdAt || timestamp(clock);
+    const orderIdValue = input.id || id("order");
+    const conflict = input.idempotencyKey
+      ? "ON CONFLICT (user_id, idempotency_key) DO NOTHING"
+      : "ON CONFLICT (id) DO NOTHING";
     const result = await pool.query(`
-      INSERT INTO miniapp_orders (id, user_id, idempotency_key, product_id, channel, status, payment_status, payment_mode, payment_verified, amount_cents, currency, credits, product_snapshot, payment_params, external_payment_id, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9, $10, $11, $12, $13, $14, $15, $15)
+      INSERT INTO miniapp_orders (id, user_id, idempotency_key, product_id, channel, status, payment_status, payment_mode, payment_verified, amount_cents, currency, credits, product_snapshot, payment_params, external_payment_id, metadata, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, $9, $10, $11, $12, $13, $14, $15, $16, $16)
+      ${conflict}
       RETURNING *
-    `, [input.id || id("order"), input.userId, input.idempotencyKey || null, input.productId, input.channel || "wechat", input.status || "pending", input.paymentStatus || "created", input.paymentMode || "manual", Number(input.amountCents || 0), input.currency || "CNY", Number(input.credits || 0), JSON.stringify(input.productSnapshot || {}), JSON.stringify(input.paymentParams || null), input.externalPaymentId || null, now]);
+    `, [orderIdValue, input.userId, input.idempotencyKey || null, input.productId, input.channel || "wechat", input.status || "pending", input.paymentStatus || "created", input.paymentMode || "manual", Number(input.amountCents || 0), input.currency || "CNY", Number(input.credits || 0), JSON.stringify(input.productSnapshot || {}), JSON.stringify(input.paymentParams || null), input.externalPaymentId || null, JSON.stringify(input.metadata || {}), now]);
+    if (!result.rowCount) {
+      const existing = input.idempotencyKey
+        ? await pool.query("SELECT * FROM miniapp_orders WHERE user_id = $1 AND idempotency_key = $2", [input.userId, input.idempotencyKey])
+        : await pool.query("SELECT * FROM miniapp_orders WHERE id = $1", [orderIdValue]);
+      return rowToOrder(existing.rows[0]);
+    }
     return rowToOrder(result.rows[0]);
+  }
+
+  function createOrder(input) {
+    return singleFlight(input.idempotencyKey ? `order:${input.userId}:${input.idempotencyKey}` : null, () => createOrderOnce(input));
   }
 
   async function getOrder(orderId) {
@@ -893,25 +1018,36 @@ function createPostgresStore(options = {}) {
     return queryOrders(filters.length ? `WHERE ${filters.join(" AND ")}` : "", values, options);
   }
 
-  async function fulfillOrder(orderId, input = {}) {
-    return withTransaction(pool, async (client) => {
-      const found = await client.query("SELECT * FROM miniapp_orders WHERE id = $1 FOR UPDATE", [orderId]);
-      if (!found.rowCount) return null;
-      const order = rowToOrder(found.rows[0]);
-      if (order.fulfilledAt) return { order, fulfilled: false };
-      if (order.status === "canceled" || order.status === "refunded") throw err("Order cannot be fulfilled", 409);
-      const now = timestamp(clock);
-      const credits = positiveInt(input.credits || order.credits, 0);
-      const user = await client.query("UPDATE miniapp_users SET balance = balance + $1, updated_at = $2 WHERE id = $3 RETURNING balance", [credits, now, order.userId]);
-      if (!user.rowCount) throw err("User not found", 404);
-      if (credits > 0) {
-        await client.query("INSERT INTO credit_packages (id, user_id, initial_credits, remaining_credits, trans_type, order_no, metadata, created_at, updated_at) VALUES ($1, $2, $3, $3, 'ORDER_PAY', $4, $5, $6, $6)", [`order_${order.id}`, order.userId, credits, order.id, JSON.stringify({ orderId: order.id }), now]);
-        await insertTransaction(client, { userId: order.userId, transType: "ORDER_PAY", credits, balanceAfter: Number(user.rows[0].balance), orderNo: order.id, reason: input.reason || `order:${order.id}`, createdAt: now });
-      }
-      await client.query("UPDATE miniapp_orders SET status = 'paid', payment_status = 'fulfilled', payment_verified = COALESCE($1, payment_verified), paid_at = COALESCE(paid_at, $2), fulfilled_at = $2, credits_granted = $3, updated_at = $2 WHERE id = $4", [input.paymentVerified == null ? null : Boolean(input.paymentVerified), input.paidAt || now, credits, order.id]);
-      const updated = await client.query("SELECT * FROM miniapp_orders WHERE id = $1", [order.id]);
-      return { order: rowToOrder(updated.rows[0]), fulfilled: true };
-    });
+  async function fulfillVerifiedOrder(client, orderId, input) {
+    const found = await client.query("SELECT * FROM miniapp_orders WHERE id = $1 FOR UPDATE", [orderId]);
+    if (!found.rowCount) return null;
+    const order = rowToOrder(found.rows[0]);
+    if (order.fulfilledAt) return { order, fulfilled: false };
+    if (order.status === "canceled" || order.status === "refunded") throw err("Order cannot be fulfilled", 409);
+    if (order.paymentMode !== "wechat" || input.provider !== "wechat") throw err("Verified WeChat payment required", 409);
+    const now = timestamp(clock);
+    const credits = positiveInt(order.credits, 0);
+    let balanceAfter = Number((await client.query("SELECT balance FROM miniapp_users WHERE id = $1", [order.userId])).rows[0]?.balance);
+    if (!Number.isFinite(balanceAfter)) throw err("User not found", 404);
+    if (credits > 0) {
+      await client.query("INSERT INTO credit_packages (id, user_id, initial_credits, remaining_credits, trans_type, order_no, metadata, created_at, updated_at) VALUES ($1, $2, $3, $3, 'ORDER_PAY', $4, $5, $6, $6)", [`order_${order.id}`, order.userId, credits, order.id, JSON.stringify({ orderId: order.id, paymentEventId: input.eventId }), now]);
+      balanceAfter = await changeUserBalance(client, order.userId, credits, now);
+      await insertTransaction(client, { userId: order.userId, transType: "ORDER_PAY", credits, balanceAfter, orderNo: order.id, reason: `verified-payment:${input.eventId}`, metadata: { provider: input.provider, providerTransactionId: input.providerTransactionId }, createdAt: now });
+    }
+    await client.query(`
+      UPDATE miniapp_orders
+      SET status = 'paid', payment_status = 'fulfilled', payment_verified = TRUE,
+          paid_at = COALESCE(paid_at, $1), fulfilled_at = $1, credits_granted = $2,
+          external_payment_id = COALESCE(external_payment_id, $3),
+          metadata = $4, updated_at = $1
+      WHERE id = $5
+    `, [input.paidAt || now, credits, input.providerTransactionId, JSON.stringify({ ...order.metadata, paymentVerification: "verified", paymentEventId: input.eventId }), order.id]);
+    const updated = await client.query("SELECT * FROM miniapp_orders WHERE id = $1", [order.id]);
+    return { order: rowToOrder(updated.rows[0]), fulfilled: true };
+  }
+
+  async function fulfillOrder() {
+    throw err("Verified payment event required", 409);
   }
 
   async function cancelOrder(orderId, input = {}) {
@@ -930,15 +1066,14 @@ function createPostgresStore(options = {}) {
       if (!found.rowCount) return null;
       const order = rowToOrder(found.rows[0]);
       if (order.refundedAt) return { order, refunded: false, revokedCredits: 0 };
-      const user = await client.query("SELECT * FROM miniapp_users WHERE id = $1 FOR UPDATE", [order.userId]);
-      if (!user.rowCount) throw err("User not found", 404);
       const remainder = Math.max(0, order.creditsGranted - order.creditsRevoked);
-      const revoked = input.revokeCredits === false ? 0 : Math.min(Number(user.rows[0].balance), remainder);
       const now = timestamp(clock);
-      const nextBalance = Number(user.rows[0].balance) - revoked;
+      const available = await client.query("SELECT COALESCE(SUM(remaining_credits), 0)::int AS credits FROM credit_packages WHERE user_id = $1 AND order_no = $2 AND status = 'ACTIVE'", [order.userId, order.id]);
+      const revoked = input.revokeCredits === false ? 0 : Math.min(Number(available.rows[0].credits), remainder);
       if (revoked) {
-        await client.query("UPDATE miniapp_users SET balance = $1, updated_at = $2 WHERE id = $3", [nextBalance, now, order.userId]);
-        await insertTransaction(client, { userId: order.userId, transType: "REFUND", credits: -revoked, balanceAfter: nextBalance, orderNo: order.id, reason: input.reason || `refund:${order.id}`, createdAt: now });
+        const nextBalance = await changeUserBalance(client, order.userId, -revoked, now);
+        const allocations = await consumePackageCredits(client, order.userId, revoked, now, { orderNo: order.id, onlyOrder: true });
+        await insertTransaction(client, { userId: order.userId, transType: "REFUND", credits: -revoked, balanceAfter: nextBalance, orderNo: order.id, reason: input.reason || `refund:${order.id}`, metadata: { allocations }, createdAt: now });
       }
       await client.query("UPDATE miniapp_orders SET status = 'refunded', payment_status = 'refunded', refunded_at = $1, credits_revoked = credits_revoked + $2, admin_note = $3, updated_at = $1 WHERE id = $4", [now, revoked, input.reason || order.adminNote || "", order.id]);
       const updated = await client.query("SELECT * FROM miniapp_orders WHERE id = $1", [order.id]);
@@ -961,9 +1096,32 @@ function createPostgresStore(options = {}) {
   }
 
   async function fulfillPayment(input) {
-    const fulfillment = await recordPaymentFulfillment(input);
-    if (fulfillment.status === "FULFILLED" && input.orderId) await fulfillOrder(input.orderId, { paymentVerified: false, paidAt: input.paidAt });
-    return fulfillment;
+    if (input.paymentVerified !== true || input.provider !== "wechat" || input.status !== "FULFILLED" || !input.orderId || !input.eventId || !input.providerTransactionId) {
+      throw err("Verified WeChat payment required", 409);
+    }
+    return withTransaction(pool, async (client) => {
+      const existing = await client.query("SELECT * FROM payment_fulfillments WHERE fulfillment_key = $1 FOR UPDATE", [input.fulfillmentKey]);
+      if (existing.rowCount) {
+        const fulfillment = rowToPaymentFulfillment(existing.rows[0]);
+        if (fulfillment.orderId !== input.orderId || fulfillment.provider !== input.provider || fulfillment.eventId !== input.eventId || fulfillment.providerTransactionId !== input.providerTransactionId) {
+          throw err("Payment fulfillment key conflict", 409);
+        }
+        await fulfillVerifiedOrder(client, input.orderId, input);
+        return fulfillment;
+      }
+      const createdAt = timestamp(clock);
+      const result = await client.query(`
+        INSERT INTO payment_fulfillments (id, fulfillment_key, order_id, provider, event_id, event_type, provider_order_id, provider_transaction_id, status, metadata, fulfilled_at, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'FULFILLED', $9, $10, $10, $10)
+        ON CONFLICT (fulfillment_key) DO NOTHING RETURNING *
+      `, [input.id || id("fulfillment"), input.fulfillmentKey, input.orderId, input.provider, input.eventId, input.eventType || null, input.providerOrderId || null, input.providerTransactionId, JSON.stringify({ ...json(input.metadata), paymentVerified: true }), createdAt]);
+      if (!result.rowCount) {
+        const replay = await client.query("SELECT * FROM payment_fulfillments WHERE fulfillment_key = $1", [input.fulfillmentKey]);
+        return rowToPaymentFulfillment(replay.rows[0]);
+      }
+      await fulfillVerifiedOrder(client, input.orderId, input);
+      return rowToPaymentFulfillment(result.rows[0]);
+    });
   }
 
   async function getPaymentFulfillment(key) {
