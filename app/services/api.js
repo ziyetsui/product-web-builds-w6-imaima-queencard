@@ -61,6 +61,12 @@ function loginForRetry() {
   return auth.loginWithWechatProfile({ source: "session-retry" }, { silent: true });
 }
 
+function loginThenRetry(retry) {
+  return loginForRetry().then(retry, function (error) {
+    return Promise.reject(error && error.authRequired ? error : terminalAuthFailure());
+  });
+}
+
 function request(options, authRetry) {
   if (!isConfigured()) {
     return Promise.reject(new Error("后端 API 未配置，请先设置 config/env.js 里的 API_BASE_URL"));
@@ -86,10 +92,9 @@ function request(options, authRetry) {
         }
         if (res.statusCode === 401) {
           if (!isPublicRequest(requestOptions) && !authRetry) {
-            loginForRetry()
-              .then(function () {
-                return request(requestOptions, true);
-              })
+            loginThenRetry(function () {
+              return request(requestOptions, true);
+            })
               .then(resolve)
               .catch(function (error) {
                 reject(error && error.authRequired ? error : error || new Error("请求失败"));
@@ -143,10 +148,9 @@ function uploadReferenceImage(filePath, authRetry) {
           return;
         }
         if (res.statusCode === 401 && !authRetry) {
-          loginForRetry()
-            .then(function () {
-              return uploadReferenceImage(filePath, true);
-            })
+          loginThenRetry(function () {
+            return uploadReferenceImage(filePath, true);
+          })
             .then(resolve)
             .catch(function (error) {
               reject(error && error.authRequired ? error : error || new Error("上传失败"));

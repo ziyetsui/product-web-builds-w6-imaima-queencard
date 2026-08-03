@@ -20,7 +20,6 @@ function productionEnv(overrides = {}) {
     STORAGE_BUCKET: "miniapp-assets",
     STORAGE_ACCESS_KEY_ID: "storage-access-key",
     STORAGE_SECRET_ACCESS_KEY: "storage-secret-key",
-    MINIAPP_AUTH_TOKEN_SECRET: "auth-token-secret-that-is-long-enough",
     WECHAT_MINIAPP_APP_ID: "wx-production",
     WECHAT_MINIAPP_APP_SECRET: "wechat-app-secret",
     ...overrides,
@@ -32,7 +31,6 @@ test("rejects incomplete production configuration without leaking secret values"
     DATABASE_URL: "",
     STORAGE_BUCKET: "",
     STORAGE_SECRET_ACCESS_KEY: "storage-secret-that-must-not-leak",
-    MINIAPP_AUTH_TOKEN_SECRET: "auth-secret-that-must-not-leak",
     WECHAT_MINIAPP_APP_SECRET: "wechat-secret-that-must-not-leak",
   });
 
@@ -43,7 +41,6 @@ test("rejects incomplete production configuration without leaking secret values"
       assert.match(error.message, /DATABASE_URL/);
       assert.match(error.message, /STORAGE_BUCKET/);
       assert.doesNotMatch(error.message, /storage-secret-that-must-not-leak/);
-      assert.doesNotMatch(error.message, /auth-secret-that-must-not-leak/);
       assert.doesNotMatch(error.message, /wechat-secret-that-must-not-leak/);
       assert.doesNotMatch(JSON.stringify(error), /db-password|storage-access-key/);
       return true;
@@ -51,7 +48,7 @@ test("rejects incomplete production configuration without leaking secret values"
   );
 });
 
-test("requires the production database, storage, auth, and WeChat credential groups", () => {
+test("requires the production database, storage, and WeChat credential groups", () => {
   const env = productionEnv();
   for (const key of [
     "DATABASE_URL",
@@ -59,7 +56,6 @@ test("requires the production database, storage, auth, and WeChat credential gro
     "STORAGE_BUCKET",
     "STORAGE_ACCESS_KEY_ID",
     "STORAGE_SECRET_ACCESS_KEY",
-    "MINIAPP_AUTH_TOKEN_SECRET",
     "WECHAT_MINIAPP_APP_ID",
     "WECHAT_MINIAPP_APP_SECRET",
   ]) {
@@ -78,7 +74,7 @@ test("keeps non-production defaults usable", () => {
   assert.equal(config.storage.driver, "local");
   assert.equal(config.wechat.appId, "wx-dev");
   assert.equal(config.wechat.devLogin, true);
-  assert.equal(config.auth.tokenSecret, "change-this-dev-secret");
+  assert.equal(config.auth.tokenSecret, undefined);
   assert.equal(config.generation.provider, "preview");
   assert.equal(config.payment.provider, "mock");
 });
@@ -104,7 +100,19 @@ test("returns typed runtime sections and redacted public diagnostics", () => {
   assert.equal(config.public.database.url, undefined);
   assert.equal(config.public.storage.secretAccessKey, undefined);
   assert.equal(config.public.auth.tokenSecret, undefined);
-  assert.doesNotMatch(JSON.stringify(config.public), /db-password|storage-secret-key|auth-token-secret/);
+  assert.doesNotMatch(JSON.stringify(config.public), /db-password|storage-secret-key/);
+});
+
+test("does not require or forward the obsolete auth token secret", () => {
+  const config = loadConfig(productionEnv());
+  const runtimeEnv = toRuntimeEnv(config, {
+    MINIAPP_AUTH_TOKEN_SECRET: "obsolete-secret",
+    AUTH_TOKEN_SECRET: "obsolete-alias",
+  });
+
+  assert.equal(config.auth.tokenSecret, undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(runtimeEnv, "MINIAPP_AUTH_TOKEN_SECRET"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(runtimeEnv, "AUTH_TOKEN_SECRET"), false);
 });
 
 test("rejects mock payment in production through either payment variable", () => {

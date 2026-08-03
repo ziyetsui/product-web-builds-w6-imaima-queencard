@@ -49,7 +49,6 @@ wechat:{appid}:{openid}
 cd "/Users/ziye/Library/Mobile Documents/com~apple~CloudDocs/wiki/30-39 Product and Web Builds/w6/product-web-builds-w6/miniapp/backend"
 MINIAPP_DEV_LOGIN=1 \
 WECHAT_MINIAPP_APP_ID=wx-dev \
-MINIAPP_AUTH_TOKEN_SECRET=change-this-dev-secret \
 MINIAPP_DB_PATH=./data/miniapp.sqlite \
 MINIAPP_UPLOAD_ROOT=./data/uploads \
 MINIAPP_TEMPLATE_SOURCE=github \

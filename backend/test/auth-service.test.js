@@ -105,13 +105,71 @@ test("login rejects a code2Session response for another appid", async () => {
       WECHAT_MINIAPP_APP_ID: "wx-app",
       WECHAT_MINIAPP_APP_SECRET: "secret",
     },
-    fetchImpl: async () => response({ appid: "wx-other", openid: "openid-1" }),
+    fetchImpl: async () => response({ appid: "wx-other", openid: "openid-1", session_key: "session-key" }),
   });
 
   await assert.rejects(
     service.loginWithCode({ code: "wx-code" }),
     (error) => error.status === 401 && error.code === "AUTH_REQUIRED",
   );
+});
+
+test("login requires strict code2Session identity and session fields", async () => {
+  const invalidPayloads = [
+    { openid: 123, session_key: "session-key" },
+    { openid: { value: "openid-1" }, session_key: "session-key" },
+    { openid: " ", session_key: "session-key" },
+    { openid: "openid-1" },
+    { openid: "openid-1", session_key: 123 },
+    { openid: "openid-1", session_key: " " },
+    { appid: 123, openid: "openid-1", session_key: "session-key" },
+    { appid: " wx-app ", openid: "openid-1", session_key: "session-key" },
+    { openid: "openid-1", session_key: "session-key", unionid: 123 },
+    { openid: "openid-1", session_key: "session-key", unionid: null },
+    { openid: "openid-1", session_key: "session-key", unionid: " " },
+  ];
+
+  for (const payload of invalidPayloads) {
+    const store = createStore();
+    const service = new AuthService({
+      store,
+      env: {
+        NODE_ENV: "test",
+        WECHAT_MINIAPP_APP_ID: "wx-app",
+        WECHAT_MINIAPP_APP_SECRET: "secret",
+      },
+      fetchImpl: async () => response(payload),
+    });
+
+    await assert.rejects(
+      service.loginWithCode({ code: "wx-code" }),
+      (error) => error.status === 401 && error.code === "AUTH_REQUIRED",
+    );
+    assert.equal(store.users.size, 0);
+    assert.equal(store.sessions.size, 0);
+  }
+});
+
+test("login accepts an optional exact appid and optional valid unionid", async () => {
+  const payloads = [
+    { openid: "openid-without-appid", session_key: "session-key" },
+    { appid: "wx-app", openid: "openid-with-unionid", session_key: "session-key", unionid: "unionid-1" },
+  ];
+
+  for (const payload of payloads) {
+    const service = new AuthService({
+      store: createStore(),
+      env: {
+        NODE_ENV: "test",
+        WECHAT_MINIAPP_APP_ID: "wx-app",
+        WECHAT_MINIAPP_APP_SECRET: "secret",
+      },
+      fetchImpl: async () => response(payload),
+    });
+    const result = await service.loginWithCode({ code: "wx-code" });
+    assert.equal(result.user.openid, payload.openid);
+    assert.equal(Object.prototype.hasOwnProperty.call(result, "session_key"), false);
+  }
 });
 
 test("login rejects code2Session upstream errors without leaking upstream payloads", async () => {
@@ -134,21 +192,33 @@ test("login rejects code2Session upstream errors without leaking upstream payloa
 });
 
 test("production never accepts development login even when direct app construction enables it", async () => {
-  const service = new AuthService({
-    store: createStore(),
-    env: {
-      NODE_ENV: "production",
-      MINIAPP_DEV_LOGIN: "1",
-      WECHAT_MINIAPP_APP_ID: "wx-production",
-      WECHAT_MINIAPP_APP_SECRET: "secret",
-    },
-    fetchImpl: async () => response({ openid: "should-not-be-used" }),
-  });
+  const environments = [
+    { NODE_ENV: "production" },
+    { NODE_ENV: "  ProD  " },
+    { APP_ENV: "production" },
+    { APP_ENV: " PROD " },
+    { RUNTIME_ENV: "Production " },
+    { NODE_ENV: "test", APP_ENV: " production " },
+    { APP_ENV: "development", RUNTIME_ENV: "prod" },
+  ];
 
-  await assert.rejects(
-    service.loginWithCode({ code: "dev-code" }),
-    (error) => error.status === 503 && error.code === "AUTH_CONFIG_INVALID",
-  );
+  for (const environment of environments) {
+    const service = new AuthService({
+      store: createStore(),
+      env: {
+        ...environment,
+        MINIAPP_DEV_LOGIN: "1",
+        WECHAT_MINIAPP_APP_ID: "wx-production",
+        WECHAT_MINIAPP_APP_SECRET: "secret",
+      },
+      fetchImpl: async () => response({ openid: "should-not-be-used", session_key: "session-key" }),
+    });
+
+    await assert.rejects(
+      service.loginWithCode({ code: "dev-code" }),
+      (error) => error.status === 503 && error.code === "AUTH_CONFIG_INVALID",
+    );
+  }
 });
 
 test("authenticate touches an active session and logout revokes the current session", async () => {
@@ -214,6 +284,25 @@ for (const adapter of ["memory", "sqlite"]) {
       assert.ok(saved.id);
       assert.equal(store.getSessionByTokenHash(tokenHash).tokenHash, tokenHash);
       assert.equal(JSON.stringify(store.getSession(saved.id)).includes(rawToken), false);
+    } finally {
+      store.close();
+    }
+  });
+
+  test(`${adapter} session adapter rejects raw tokens at the createSession boundary`, () => {
+    const store = adapter === "memory"
+      ? createMemoryStore({ environment: "test" })
+      : createSqliteStore({ environment: "test", dbPath: temporaryDbPath() });
+    try {
+      const user = store.ensureUser({ sub: `wechat:wx-${adapter}:raw`, appid: `wx-${adapter}`, openid: "raw" });
+      assert.throws(
+        () => store.createSession({
+          userId: user.id,
+          tokenHash: "raw-opaque-token",
+          expiresAt: "2026-08-04T00:00:00.000Z",
+        }),
+        /64-character SHA-256 hash/,
+      );
     } finally {
       store.close();
     }

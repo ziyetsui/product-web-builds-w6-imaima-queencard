@@ -1,5 +1,6 @@
 const crypto = require("node:crypto");
 
+const { assertSessionTokenHash } = require("../auth");
 const { withTransaction } = require("../db/migrate");
 
 function id(prefix) {
@@ -571,10 +572,11 @@ function createPostgresStore(options = {}) {
 
   async function createSession(input) {
     const createdAt = timestamp(clock);
+    const tokenHash = assertSessionTokenHash(input.tokenHash);
     const result = await pool.query(`
       INSERT INTO miniapp_sessions (id, user_id, token_hash, expires_at, ip_address, user_agent, created_at, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING *
-    `, [input.id || id("session"), input.userId, input.tokenHash, input.expiresAt, input.ipAddress || null, input.userAgent || null, createdAt]);
+    `, [input.id || id("session"), input.userId, tokenHash, input.expiresAt, input.ipAddress || null, input.userAgent || null, createdAt]);
     return rowToSession(result.rows[0]);
   }
 

@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
+const { assertSessionTokenHash } = require("./auth");
 
 const mockFulfillmentIdentity = Symbol("mockFulfillmentIdentity");
 
@@ -177,10 +178,11 @@ function createMemoryStore(options = {}) {
 
   function createSession(input) {
     const now = new Date().toISOString();
+    const tokenHash = assertSessionTokenHash(input.tokenHash);
     const saved = {
       id: input.id || `session_${crypto.randomUUID()}`,
       userId: input.userId,
-      tokenHash: input.tokenHash,
+      tokenHash,
       expiresAt: input.expiresAt,
       revokedAt: null,
       lastUsedAt: null,
@@ -690,13 +692,14 @@ function createSqliteStore(options = {}) {
   function createSession(input) {
     const now = new Date().toISOString();
     const sessionId = input.id || `session_${crypto.randomUUID()}`;
+    const tokenHash = assertSessionTokenHash(input.tokenHash);
     db.prepare(`
       INSERT INTO sessions (id, user_id, token_hash, expires_at, revoked_at, last_used_at, ip_address, user_agent, created_at, updated_at)
       VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
     `).run(
       sessionId,
       input.userId,
-      input.tokenHash,
+      tokenHash,
       input.expiresAt,
       input.ipAddress || "",
       input.userAgent || "",

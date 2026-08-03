@@ -1,7 +1,6 @@
 const path = require("node:path");
 
 const REDACTED_SECRET = "[REDACTED_SECRET]";
-const PRODUCTION_SECRET_MIN_LENGTH = 16;
 
 function valueFor(env, keys, fallback = "") {
   for (const key of keys) {
@@ -138,13 +137,6 @@ function loadConfig(env = process.env) {
   const invalid = [];
   const defaultRoot = path.resolve(__dirname, "../data");
 
-  const authTokenSecret = production
-    ? requiredValue(env, ["MINIAPP_AUTH_TOKEN_SECRET", "AUTH_TOKEN_SECRET"], "MINIAPP_AUTH_TOKEN_SECRET", missing)
-    : valueFor(env, ["MINIAPP_AUTH_TOKEN_SECRET", "AUTH_TOKEN_SECRET"], "change-this-dev-secret");
-  if (production && authTokenSecret.length < PRODUCTION_SECRET_MIN_LENGTH) {
-    invalid.push("MINIAPP_AUTH_TOKEN_SECRET");
-  }
-
   const appId = production
     ? requiredValue(env, ["WECHAT_MINIAPP_APP_ID", "WECHAT_APP_ID"], "WECHAT_MINIAPP_APP_ID", missing)
     : valueFor(env, ["WECHAT_MINIAPP_APP_ID", "WECHAT_APP_ID"], "wx-dev");
@@ -212,7 +204,6 @@ function loadConfig(env = process.env) {
       loginEndpoint: valueFor(env, ["WECHAT_LOGIN_ENDPOINT"], "https://api.weixin.qq.com/sns/jscode2session"),
     },
     auth: {
-      tokenSecret: authTokenSecret,
       tokenTtlSeconds: numberFor(env, ["MINIAPP_AUTH_TOKEN_TTL_SECONDS"], 30 * 24 * 60 * 60, { min: 60 }),
     },
     storage: {
@@ -258,8 +249,11 @@ function loadConfig(env = process.env) {
 }
 
 function toRuntimeEnv(config, sourceEnv = {}) {
+  const runtimeSource = { ...sourceEnv };
+  delete runtimeSource.MINIAPP_AUTH_TOKEN_SECRET;
+  delete runtimeSource.AUTH_TOKEN_SECRET;
   return {
-    ...sourceEnv,
+    ...runtimeSource,
     NODE_ENV: config.server.environment,
     PORT: String(config.server.port),
     MINIAPP_BACKEND_HOST: config.server.host,
@@ -267,7 +261,6 @@ function toRuntimeEnv(config, sourceEnv = {}) {
     WECHAT_MINIAPP_APP_ID: config.wechat.appId,
     WECHAT_MINIAPP_APP_SECRET: config.wechat.appSecret,
     WECHAT_LOGIN_ENDPOINT: config.wechat.loginEndpoint,
-    MINIAPP_AUTH_TOKEN_SECRET: config.auth.tokenSecret,
     MINIAPP_AUTH_TOKEN_TTL_SECONDS: String(config.auth.tokenTtlSeconds),
     MINIAPP_DB_PATH: config.database.sqlitePath,
     MINIAPP_UPLOAD_ROOT: config.storage.localRoot,

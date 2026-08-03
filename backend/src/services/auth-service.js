@@ -8,7 +8,9 @@ const {
 } = require("../auth");
 
 function isProduction(env) {
-  return ["production", "prod"].includes(String(env.NODE_ENV || "").toLowerCase());
+  return ["NODE_ENV", "APP_ENV", "RUNTIME_ENV"].some((key) => (
+    ["production", "prod"].includes(String(env[key] || "").trim().toLowerCase())
+  ));
 }
 
 function authError(code, message, status = 401) {
@@ -102,15 +104,22 @@ class AuthService {
       throw authError("AUTH_REQUIRED", "微信登录失败");
     }
 
-    if (!response.ok || !payload || payload.errcode || !String(payload.openid || "").trim()) {
-      throw authError("AUTH_REQUIRED", "微信登录失败");
-    }
-    if (payload.appid && String(payload.appid).trim() !== appid) {
+    const validOpenid = typeof payload?.openid === "string" && payload.openid.trim();
+    const validSessionKey = typeof payload?.session_key === "string" && payload.session_key.trim();
+    const hasAppid = payload && Object.prototype.hasOwnProperty.call(payload, "appid");
+    const hasUnionid = payload && Object.prototype.hasOwnProperty.call(payload, "unionid");
+    if (!response.ok
+      || !payload
+      || payload.errcode
+      || !validOpenid
+      || !validSessionKey
+      || (hasAppid && (typeof payload.appid !== "string" || payload.appid !== appid))
+      || (hasUnionid && (typeof payload.unionid !== "string" || !payload.unionid.trim()))) {
       throw authError("AUTH_REQUIRED", "微信登录失败");
     }
     return {
-      openid: String(payload.openid).trim(),
-      unionid: payload.unionid ? String(payload.unionid).trim() : null,
+      openid: payload.openid.trim(),
+      unionid: hasUnionid ? payload.unionid.trim() : null,
     };
   }
 

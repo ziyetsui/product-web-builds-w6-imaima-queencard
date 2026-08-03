@@ -54,7 +54,6 @@ test("uses the configured WeChat login endpoint when dev login is disabled", asy
       WECHAT_MINIAPP_APP_ID: "wx-real",
       WECHAT_MINIAPP_APP_SECRET: "secret-real",
       WECHAT_LOGIN_ENDPOINT: "https://wechat-gateway.example/code2session",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_DB_PATH: tempDbPath(),
     },
     fetch: async (url) => {
@@ -88,14 +87,13 @@ test("production payment provider blocks legacy mock-pay without granting credit
     MINIAPP_DEV_LOGIN: "0",
     WECHAT_MINIAPP_APP_ID: "wx-production",
     WECHAT_MINIAPP_APP_SECRET: "production-test-secret",
-    MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
     MINIAPP_PAYMENT_MODE: "mock",
   };
   const store = createMemoryStore({ initialCredits: 10 });
   const app = createApp({
     env,
     store,
-    fetch: async () => Response.json({ openid: "payment-user" }),
+    fetch: async () => Response.json({ openid: "payment-user", session_key: "session-key" }),
   });
   const loginResponse = await readJson(await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
     method: "POST",
@@ -131,7 +129,6 @@ for (const adapter of ["memory", "sqlite"]) {
         MINIAPP_DEV_LOGIN: "1",
         MINIAPP_PAYMENT_MODE: "mock",
         WECHAT_MINIAPP_APP_ID: "wx-order-http",
-        MINIAPP_AUTH_TOKEN_SECRET: "order-http-test-secret",
       },
       store,
     });
@@ -167,7 +164,6 @@ test("supports standalone login, balance, templates, generation task and result"
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_TEMPLATE_API_BASE_URL: "https://templates.example",
       MINIAPP_GENERATION_MODE: "preview",
@@ -243,7 +239,6 @@ test("template generation delegates image creation to the configured provider", 
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_TEMPLATE_API_BASE_URL: "https://templates.example",
       MINIAPP_DB_PATH: tempDbPath(),
@@ -306,7 +301,6 @@ test("generic generation returns a pending task before slow image creation compl
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_DB_PATH: tempDbPath(),
     },
@@ -474,7 +468,6 @@ test("uploads a reference image and creates a generic generation task", async ()
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_DB_PATH: tempDbPath(),
       MINIAPP_UPLOAD_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), "ima-uploads-")),
@@ -591,7 +584,6 @@ test("lists completed image generations with reusable request metadata", async (
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_DB_PATH: tempDbPath(),
     },
@@ -645,7 +637,6 @@ test("filters image generation history by prompt, model, and template id", async
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_TEMPLATE_API_BASE_URL: "https://templates.example",
       MINIAPP_DB_PATH: tempDbPath(),
@@ -715,7 +706,6 @@ test("estimates requested credits for image generation", async () => {
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_DB_PATH: tempDbPath(),
     },
   });
@@ -742,7 +732,6 @@ test("validates text and reference image generation modes", async () => {
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_DB_PATH: tempDbPath(),
     },
@@ -794,7 +783,6 @@ test("regenerates a task from the original prompt, references, and model", async
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_DB_PATH: tempDbPath(),
     },
@@ -855,7 +843,6 @@ test("returns credit transaction history with pagination", async () => {
     env: {
       MINIAPP_DEV_LOGIN: "1",
       WECHAT_MINIAPP_APP_ID: "wx-test",
-      MINIAPP_AUTH_TOKEN_SECRET: "test-secret",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_DB_PATH: tempDbPath(),
     },

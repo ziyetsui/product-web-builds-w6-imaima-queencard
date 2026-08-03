@@ -21,7 +21,6 @@ function productionEnv(overrides = {}) {
     STORAGE_BUCKET: "miniapp-assets",
     STORAGE_ACCESS_KEY_ID: "runtime-access-key",
     STORAGE_SECRET_ACCESS_KEY: "runtime-storage-secret",
-    MINIAPP_AUTH_TOKEN_SECRET: "runtime-auth-secret-that-is-long-enough",
     WECHAT_MINIAPP_APP_ID: "wx-runtime",
     WECHAT_MINIAPP_APP_SECRET: "runtime-wechat-secret",
     GENERATION_WORKER_MODE: "durable",

@@ -7,6 +7,8 @@ const { migrateDatabase } = require("../src/db/migrate");
 const { assertStoreContract } = require("../src/repositories/store-contract");
 const { applyPgMemSchema, createPgMemPool } = require("./support/pg-mem");
 
+const SESSION_TOKEN_HASH = "a".repeat(64);
+
 async function setup(options = {}) {
   const { pool } = createPgMemPool();
   await applyPgMemSchema(pool);
@@ -71,15 +73,15 @@ test("postgres repository contract persists identity, sessions, credits, tasks, 
   const session = await store.createSession({
     id: "session-1",
     userId: user.id,
-    tokenHash: "hash-session-1",
+    tokenHash: SESSION_TOKEN_HASH,
     expiresAt: "2026-08-04T00:00:00.000Z",
     ipAddress: "127.0.0.1",
     userAgent: "test",
   });
-  assert.equal((await store.getSessionByTokenHash("hash-session-1")).id, session.id);
+  assert.equal((await store.getSessionByTokenHash(SESSION_TOKEN_HASH)).id, session.id);
   await store.touchSession(session.id);
   await store.revokeSession(session.id);
-  assert.equal((await store.getSessionByTokenHash("hash-session-1")).revokedAt !== null, true);
+  assert.equal((await store.getSessionByTokenHash(SESSION_TOKEN_HASH)).revokedAt !== null, true);
 
   const pkg = await store.createCreditPackage({
     id: "package-1",
@@ -237,6 +239,27 @@ test("postgres repository contract persists identity, sessions, credits, tasks, 
   });
   assert.equal((await store.listAdminAudit({ targetUserId: user.id })).records[0].id, audit.id);
 
+  await pool.end();
+});
+
+test("postgres rejects raw tokens at the createSession boundary", async () => {
+  const { pool, store } = await setup();
+  await store.ensureUser({
+    sub: "wechat:wx-test:raw-session",
+    appid: "wx-test",
+    openid: "raw-session",
+  });
+
+  await assert.rejects(
+    store.createSession({
+      id: "raw-session",
+      userId: "wechat:wx-test:raw-session",
+      tokenHash: "raw-opaque-token",
+      expiresAt: "2026-08-04T00:00:00.000Z",
+    }),
+    /64-character SHA-256 hash/,
+  );
+  assert.equal((await pool.query("SELECT COUNT(*)::int AS count FROM miniapp_sessions")).rows[0].count, 0);
   await pool.end();
 });
 

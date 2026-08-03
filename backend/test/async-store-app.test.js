@@ -31,7 +31,6 @@ function testEnv() {
     NODE_ENV: "test",
     MINIAPP_DEV_LOGIN: "1",
     MINIAPP_PAYMENT_MODE: "mock",
-    MINIAPP_AUTH_TOKEN_SECRET: "async-store-test-secret-that-is-long-enough",
     WECHAT_MINIAPP_APP_ID: "wx-async-store",
     MINIAPP_ADMIN_OPENIDS: "dev_async-user",
   };
