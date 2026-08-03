@@ -21,7 +21,6 @@ import {
   type GenerationTask,
 } from "@/db";
 import { ApiError } from "@/lib/api/error";
-import { generateImageWithCredits } from "@/services/image-provider";
 import { creditService } from "@/services/credit";
 import { getImageGenerationModelMaxOutputCount } from "@/config/image-generation-models";
 
@@ -39,6 +38,7 @@ export interface ImageGenerationCreateInput {
   sourceCaseCategory?: string | null;
   sourceNoteUrl?: string | null;
   sourceAuthorUrl?: string | null;
+  parentTaskId?: string | null;
   prompt?: string;
   referenceImages?: string[];
   model?: string;
@@ -80,21 +80,6 @@ function getAppUrl() {
     process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ||
     "http://localhost:8080"
   );
-}
-
-function userFacingGenerationError(error: unknown) {
-  const message =
-    error instanceof Error ? error.message : "Image generation failed";
-  const normalized = message.toLowerCase();
-
-  if (
-    normalized.includes("safety system") ||
-    normalized.includes("rejected by the safety")
-  ) {
-    return "上游安全系统拒绝了这次请求，积分已释放。可以去掉具体艺术家、影视/IP 名称或敏感描述，改成更通用的画面风格后再试。";
-  }
-
-  return message;
 }
 
 function normalizeReferenceImage(image: string) {
@@ -237,6 +222,7 @@ function normalizeCreateInput(input: ImageGenerationCreateInput) {
     sourceCaseCategory: input.sourceCaseCategory ?? null,
     sourceNoteUrl: input.sourceNoteUrl ?? null,
     sourceAuthorUrl: input.sourceAuthorUrl ?? null,
+    parentTaskId: input.parentTaskId ?? null,
     prompt,
     referenceImages,
     model,
@@ -269,28 +255,6 @@ export function estimateImageGeneration(input: ImageGenerationCreateInput) {
     model: normalized.model,
     capability: normalized.capability,
   };
-}
-
-function getProviderTaskId(raw: unknown) {
-  const body = raw as { id?: string; data?: { id?: string } };
-  return body.id ?? body.data?.id ?? null;
-}
-
-function getProviderResultUrl(result: { resultUrl?: string; raw: unknown }) {
-  if (result.resultUrl) return result.resultUrl;
-  const body = result.raw as {
-    data?: { urls?: { get?: string } | Array<{ get?: string }> };
-  };
-  const urls = body.data?.urls;
-  return (Array.isArray(urls) ? urls[0]?.get : urls?.get) ?? null;
-}
-
-function assetUrlFor(image: { url?: string; b64Json?: string; mimeType?: string }) {
-  if (image.url) return image.url;
-  if (image.b64Json) {
-    return `data:${image.mimeType ?? "image/png"};base64,${image.b64Json}`;
-  }
-  return null;
 }
 
 function publicAsset(asset: GeneratedAsset) {
@@ -345,12 +309,6 @@ function assetsByTaskId(assets: GeneratedAsset[]) {
     groups[asset.taskId] = [...(groups[asset.taskId] ?? []), asset];
     return groups;
   }, {});
-}
-
-function taskReferenceImages(task: GenerationTask) {
-  return Array.isArray(task.referenceImages)
-    ? task.referenceImages.filter((image): image is string => typeof image === "string")
-    : [];
 }
 
 async function findTaskByIdempotencyKey(
@@ -446,6 +404,7 @@ export async function createImageGenerationTask(
           sourceCaseCategory: normalized.sourceCaseCategory,
           sourceNoteUrl: normalized.sourceNoteUrl,
           sourceAuthorUrl: normalized.sourceAuthorUrl,
+          parentTaskId: normalized.parentTaskId,
           prompt: normalized.prompt,
           originalPrompt: normalized.aiEnhance ? normalized.prompt : null,
           referenceImages: normalized.referenceImages,
@@ -489,106 +448,6 @@ export async function createImageGenerationTask(
     const insufficientCredits = asInsufficientCreditApiError(error);
     if (insufficientCredits) throw insufficientCredits;
     throw error;
-  }
-}
-
-export async function runImageGenerationTask(userId: string, taskId: string) {
-  const [task] = await db
-    .update(generationTasks)
-    .set({
-      status: "generating",
-      startedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(generationTasks.id, taskId),
-        eq(generationTasks.userId, userId),
-        eq(generationTasks.status, "queued")
-      )
-    )
-    .returning();
-
-  if (!task) {
-    return getImageGenerationTask(userId, taskId);
-  }
-
-  try {
-    const result = await generateImageWithCredits({
-      userId,
-      holdKey: taskId,
-      model: task.model,
-      prompt: task.prompt,
-      referenceImageUrls: taskReferenceImages(task),
-      aspectRatio: task.aspectRatio,
-      resolution: task.resolution,
-      outputNumber: task.outputCount,
-      capability: task.capability as ImageGenerationCapability,
-      responseFormat: "url",
-    });
-
-    const creditsPerImage = calculateModelCredits(task.model, {
-      resolution: task.resolution,
-      referenceImageCount: taskReferenceImages(task).length,
-    });
-    const assetRows = result.images.flatMap((image, index) => {
-      const storageUrl = assetUrlFor(image);
-      if (!storageUrl) return [];
-      return [{
-        id: `asset_${nanoid(16)}`,
-        taskId,
-        userId,
-        outputIndex: index,
-        storageUrl,
-        providerUrl: image.url,
-        b64Json: image.b64Json,
-        mimeType: image.mimeType ?? "image/png",
-        creditsCharged: creditsPerImage,
-      }];
-    });
-
-    const assets = assetRows.length
-      ? await db.insert(generatedAssets).values(assetRows).returning()
-      : [];
-    const status =
-      assets.length === 0
-        ? "failed"
-        : assets.length < task.outputCount
-        ? "partial_success"
-        : "completed";
-
-    const [completedTask] = await db
-      .update(generationTasks)
-      .set({
-        status,
-        settledCredits: result.usage.settledCredits,
-        providerTaskId: getProviderTaskId(result.raw),
-        providerResultUrl: getProviderResultUrl(result),
-        providerRaw: result.raw,
-        errorCode: assets.length === 0 ? "NO_OUTPUT" : null,
-        errorMessage: assets.length === 0 ? "没有生成可计费图片，积分已释放。" : null,
-        completedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(generationTasks.id, taskId))
-      .returning();
-
-    return publicTask(completedTask!, assets);
-  } catch (error) {
-    const message = userFacingGenerationError(error);
-    const [failedTask] = await db
-      .update(generationTasks)
-      .set({
-        status: "failed",
-        errorCode: "PROVIDER_FAILED",
-        errorMessage: message,
-        completedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(generationTasks.id, taskId))
-      .returning();
-
-    return publicTask(failedTask!);
   }
 }
 
@@ -686,6 +545,7 @@ export async function regenerateImageTask(userId: string, taskId: string) {
   const existing = await getImageGenerationTask(userId, taskId);
   return createImageGenerationTask(userId, {
     source: "regenerate",
+    parentTaskId: taskId,
     sourceCaseId: existing.sourceCaseId,
     sourceCaseCategory: existing.sourceCaseCategory,
     prompt: existing.prompt,

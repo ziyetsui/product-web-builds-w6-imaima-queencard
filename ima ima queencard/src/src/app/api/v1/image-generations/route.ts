@@ -1,9 +1,6 @@
-import { after } from "next/server";
-
 import {
   createImageGenerationTask,
   listImageGenerationTasks,
-  runImageGenerationTask,
 } from "@/services/image-generation";
 
 import { requireAuth } from "@/lib/api/auth";
@@ -35,16 +32,12 @@ export async function POST(request: Request) {
     const user = await requireAuth(request);
     const body = await request.json().catch(() => ({}));
     const task = await createImageGenerationTask(user.id, body);
-    after(() => {
-      void runImageGenerationTask(user.id, task.taskId).catch((error) => {
-        console.error("Image generation task failed:", error);
-      });
-    });
 
     return apiSuccess({
       ...task,
+      statusUrl: `/api/v1/image-generations/${task.taskId}`,
       redirectUrl: `/generated?taskId=${task.taskId}`,
-    });
+    }, 202);
   } catch (error) {
     return handleApiError(error);
   }

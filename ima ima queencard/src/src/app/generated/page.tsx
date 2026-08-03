@@ -362,14 +362,19 @@ function statusLabel(status: string) {
     case "loading":
       return "读取中";
     case "completed":
+    case "succeeded":
       return "已完成";
     case "partial_success":
+    case "partially_succeeded":
       return "部分完成";
     case "failed":
+    case "permanently_failed":
       return "生成失败";
     case "generating":
+    case "running":
       return "生成中";
     case "queued":
+    case "retry_scheduled":
       return "排队中";
     case "blocked":
       return "待处理";
@@ -381,13 +386,18 @@ function statusLabel(status: string) {
 function statusIcon(status: string) {
   switch (status) {
     case "completed":
+    case "succeeded":
     case "partial_success":
+    case "partially_succeeded":
       return CheckCircle2;
     case "failed":
+    case "permanently_failed":
       return AlertCircle;
     case "generating":
+    case "running":
       return Loader2;
     case "queued":
+    case "retry_scheduled":
       return Clock3;
     default:
       return Sparkles;
@@ -397,13 +407,18 @@ function statusIcon(status: string) {
 function statusTone(status: string) {
   switch (status) {
     case "completed":
+    case "succeeded":
       return "bg-seafoam";
     case "partial_success":
+    case "partially_succeeded":
       return "bg-lemon";
     case "failed":
+    case "permanently_failed":
       return "bg-pumpkin";
     case "generating":
+    case "running":
     case "queued":
+    case "retry_scheduled":
       return "bg-surface-white";
     default:
       return "bg-canvas-pink";
@@ -411,7 +426,7 @@ function statusTone(status: string) {
 }
 
 function isTaskWaitingForResult(task: GeneratedTask) {
-  return task.status === "queued" || task.status === "generating";
+  return ["queued", "retry_scheduled", "generating", "running"].includes(task.status);
 }
 
 function aspectClass(aspectRatio: string | undefined) {
@@ -631,7 +646,7 @@ function GeneratedWorkbenchContent() {
 
   useEffect(() => {
     const key = task ? `${task.taskId}:${task.status}` : "";
-    if (task?.status === "completed" || task?.status === "partial_success") {
+    if (["completed", "partial_success", "succeeded", "partially_succeeded"].includes(task?.status ?? "")) {
       if (completedTaskRef.current !== key) {
         setComposerExpanded(false);
         completedTaskRef.current = key;
@@ -1136,7 +1151,7 @@ function WaitingForResult({ task }: { task: GeneratedTask }) {
           <Icon
             className={cn(
               "size-7 text-charcoal",
-              task.status === "generating" ? "animate-spin" : ""
+              ["generating", "running"].includes(task.status) ? "animate-spin" : ""
             )}
             aria-hidden="true"
           />
@@ -1353,7 +1368,7 @@ function GenerationRecord({
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
             <Badge className={cn("h-8 shrink-0 gap-1.5 rounded-full border border-charcoal/18 px-3 font-manrope text-[12px] font-black text-charcoal shadow-none hover:bg-inherit", statusTone(task.status))}>
               <Icon
-                className={cn("size-3.5", task.status === "generating" ? "animate-spin" : "")}
+                className={cn("size-3.5", ["generating", "running"].includes(task.status) ? "animate-spin" : "")}
                 aria-hidden="true"
               />
               {statusLabel(task.status)}
@@ -1424,8 +1439,8 @@ function AssetStage({
   onUseAsset: (task: GeneratedTask, assetUrl: string) => void;
 }) {
   const [previewAsset, setPreviewAsset] = useState<GeneratedAsset | null>(null);
-  const isRunning = task.status === "queued" || task.status === "generating";
-  const isFailed = task.status === "failed";
+  const isRunning = ["queued", "retry_scheduled", "generating", "running"].includes(task.status);
+  const isFailed = ["failed", "permanently_failed"].includes(task.status);
 
   if (isRunning) {
     return (

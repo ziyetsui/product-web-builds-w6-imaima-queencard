@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/error";
@@ -154,8 +155,8 @@ function deferred() {
 }
 
 function overlappingIdempotencyDb(concurrency: number) {
-  let committedTasks: any[] = [];
-  let committedHolds: any[] = [];
+  const committedTasks: any[] = [];
+  const committedHolds: any[] = [];
   let initialLookupCount = 0;
   let transactionId = 0;
   const allInitialLookups = deferred();
