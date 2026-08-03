@@ -12,6 +12,7 @@ import {
 import { nanoid } from "nanoid";
 
 import { calculateModelCredits, getModelConfig } from "@/config/credits";
+import { loadGenerationWorkerConfig } from "@/config/generation-worker";
 import {
   db,
   generatedAssets,
@@ -20,7 +21,6 @@ import {
   type GenerationTask,
 } from "@/db";
 import { ApiError } from "@/lib/api/error";
-import { generateImageWithCredits } from "@/services/image-provider";
 import { creditService } from "@/services/credit";
 import { getImageGenerationModelMaxOutputCount } from "@/config/image-generation-models";
 
@@ -32,11 +32,13 @@ export type ImageGenerationCapability =
 export type ImageGenerationSource = "manual" | "prompt-library" | "regenerate";
 
 export interface ImageGenerationCreateInput {
+  idempotencyKey?: string;
   source?: ImageGenerationSource;
   sourceCaseId?: string | null;
   sourceCaseCategory?: string | null;
   sourceNoteUrl?: string | null;
   sourceAuthorUrl?: string | null;
+  parentTaskId?: string | null;
   prompt?: string;
   patternId?: string;
   patternVersion?: number;
@@ -68,6 +70,10 @@ export interface ImageGenerationListOptions {
 
 const MAX_PROMPT_LENGTH = 2000;
 const MAX_REFERENCE_IMAGES = 3;
+const MIN_IDEMPOTENCY_KEY_LENGTH = 8;
+const MAX_IDEMPOTENCY_KEY_LENGTH = 120;
+const IDEMPOTENCY_UNIQUE_CONSTRAINT =
+  "generation_tasks_user_id_idempotency_key_idx";
 const DEFAULT_REFERENCE_IMAGE_MODEL = "gpt-image-2-edit";
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
@@ -85,21 +91,6 @@ function getAppUrl() {
     process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ||
     "http://localhost:8080"
   );
-}
-
-function userFacingGenerationError(error: unknown) {
-  const message =
-    error instanceof Error ? error.message : "Image generation failed";
-  const normalized = message.toLowerCase();
-
-  if (
-    normalized.includes("safety system") ||
-    normalized.includes("rejected by the safety")
-  ) {
-    return "上游安全系统拒绝了这次请求，积分已释放。可以去掉具体艺术家、影视/IP 名称或敏感描述，改成更通用的画面风格后再试。";
-  }
-
-  return message;
 }
 
 function normalizeReferenceImage(image: string) {
@@ -154,6 +145,26 @@ function normalizeResolution(value: unknown) {
   const resolution = typeof value === "string" ? value.toLowerCase() : "auto";
   if (["auto", "1k", "2k", "4k"].includes(resolution)) return resolution;
   return "auto";
+}
+
+function normalizeIdempotencyKey(value: unknown) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    throw new ApiError("Idempotency key must be a string", 400);
+  }
+
+  const idempotencyKey = value.trim();
+  if (
+    idempotencyKey.length < MIN_IDEMPOTENCY_KEY_LENGTH ||
+    idempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH
+  ) {
+    throw new ApiError("Idempotency key must be 8 to 120 characters", 400, {
+      minLength: MIN_IDEMPOTENCY_KEY_LENGTH,
+      maxLength: MAX_IDEMPOTENCY_KEY_LENGTH,
+    });
+  }
+
+  return idempotencyKey;
 }
 
 function inferCapability(
@@ -239,11 +250,13 @@ function normalizeCreateInput(input: ImageGenerationCreateInput) {
   const capability = inferCapability(input.capability, model);
 
   return {
+    idempotencyKey: normalizeIdempotencyKey(input.idempotencyKey),
     source: input.source ?? "manual",
     sourceCaseId: input.sourceCaseId ?? null,
     sourceCaseCategory: input.sourceCaseCategory ?? null,
     sourceNoteUrl: input.sourceNoteUrl ?? null,
     sourceAuthorUrl: input.sourceAuthorUrl ?? null,
+    parentTaskId: input.parentTaskId ?? null,
     prompt,
     referenceImages,
     model,
@@ -277,28 +290,6 @@ export function estimateImageGeneration(input: ImageGenerationCreateInput) {
     model: normalized.model,
     capability: normalized.capability,
   };
-}
-
-function getProviderTaskId(raw: unknown) {
-  const body = raw as { id?: string; data?: { id?: string } };
-  return body.id ?? body.data?.id ?? null;
-}
-
-function getProviderResultUrl(result: { resultUrl?: string; raw: unknown }) {
-  if (result.resultUrl) return result.resultUrl;
-  const body = result.raw as {
-    data?: { urls?: { get?: string } | Array<{ get?: string }> };
-  };
-  const urls = body.data?.urls;
-  return (Array.isArray(urls) ? urls[0]?.get : urls?.get) ?? null;
-}
-
-function assetUrlFor(image: { url?: string; b64Json?: string; mimeType?: string }) {
-  if (image.url) return image.url;
-  if (image.b64Json) {
-    return `data:${image.mimeType ?? "image/png"};base64,${image.b64Json}`;
-  }
-  return null;
 }
 
 function publicAsset(asset: GeneratedAsset) {
@@ -360,10 +351,61 @@ function assetsByTaskId(assets: GeneratedAsset[]) {
   }, {});
 }
 
-function taskReferenceImages(task: GenerationTask) {
-  return Array.isArray(task.referenceImages)
-    ? task.referenceImages.filter((image): image is string => typeof image === "string")
-    : [];
+async function findTaskByIdempotencyKey(
+  queryDb: Pick<typeof db, "select">,
+  userId: string,
+  idempotencyKey: string
+) {
+  const [task] = await queryDb
+    .select()
+    .from(generationTasks)
+    .where(
+      and(
+        eq(generationTasks.userId, userId),
+        eq(generationTasks.idempotencyKey, idempotencyKey)
+      )
+    )
+    .limit(1);
+
+  return task ?? null;
+}
+
+function isIdempotencyUniqueConflict(error: unknown) {
+  let current: unknown = error;
+
+  for (let depth = 0; current && depth < 4; depth += 1) {
+    if (typeof current !== "object") return false;
+    const databaseError = current as {
+      code?: unknown;
+      constraint?: unknown;
+      constraint_name?: unknown;
+      cause?: unknown;
+    };
+    const constraint =
+      databaseError.constraint ?? databaseError.constraint_name;
+    if (
+      databaseError.code === "23505" &&
+      constraint === IDEMPOTENCY_UNIQUE_CONSTRAINT
+    ) {
+      return true;
+    }
+    current = databaseError.cause;
+  }
+
+  return false;
+}
+
+function asInsufficientCreditApiError(error: unknown) {
+  if (!(error instanceof Error)) return null;
+  const match = error.message.match(
+    /^Insufficient credits\. Required: (\d+), Available: (\d+)$/
+  );
+  if (!match) return null;
+
+  return new ApiError("Insufficient credits", 402, {
+    requiredCredits: Number(match[1]),
+    availableCredits: Number(match[2]),
+  });
 }
 
 export async function createImageGenerationTask(
@@ -376,139 +418,77 @@ export async function createImageGenerationTask(
     resolution: normalized.resolution,
     referenceImageCount: normalized.referenceImages.length,
   });
-  const balance = await creditService.getBalance(userId);
-  if (balance.availableCredits < requestedCredits) {
-    throw new ApiError("Insufficient credits", 402, {
-      requiredCredits: requestedCredits,
-      availableCredits: balance.availableCredits,
-    });
-  }
-
   const taskId = `gen_${nanoid(16)}`;
-  const [task] = await db.insert(generationTasks).values({
-    id: taskId,
-    userId,
-    source: normalized.source,
-    sourceCaseId: normalized.sourceCaseId,
-    sourceCaseCategory: normalized.sourceCaseCategory,
-    sourceNoteUrl: normalized.sourceNoteUrl,
-    sourceAuthorUrl: normalized.sourceAuthorUrl,
-    prompt: normalized.prompt,
-    originalPrompt: normalized.aiEnhance ? normalized.prompt : null,
-    patternContext: normalized.patternContext,
-    referenceImages: normalized.referenceImages,
-    model: normalized.model,
-    providerModel: normalized.providerModel,
-    capability: normalized.capability,
-    aspectRatio: normalized.aspectRatio,
-    resolution: normalized.resolution,
-    outputCount: normalized.outputCount,
-    status: "queued",
-    requestedCredits,
-    creditHoldKey: taskId,
-    updatedAt: new Date(),
-  }).returning();
-
-  return publicTask(task!);
-}
-
-export async function runImageGenerationTask(userId: string, taskId: string) {
-  const [task] = await db
-    .update(generationTasks)
-    .set({
-      status: "generating",
-      startedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(generationTasks.id, taskId),
-        eq(generationTasks.userId, userId),
-        eq(generationTasks.status, "queued")
-      )
-    )
-    .returning();
-
-  if (!task) {
-    return getImageGenerationTask(userId, taskId);
-  }
+  const workerConfig = loadGenerationWorkerConfig(process.env);
 
   try {
-    const result = await generateImageWithCredits({
-      userId,
-      holdKey: taskId,
-      model: task.model,
-      prompt: task.prompt,
-      referenceImageUrls: taskReferenceImages(task),
-      aspectRatio: task.aspectRatio,
-      resolution: task.resolution,
-      outputNumber: task.outputCount,
-      capability: task.capability as ImageGenerationCapability,
-      responseFormat: "url",
-    });
+    return await db.transaction(async (trx) => {
+      if (normalized.idempotencyKey) {
+        const existing = await findTaskByIdempotencyKey(
+          trx,
+          userId,
+          normalized.idempotencyKey
+        );
+        if (existing) return publicTask(existing);
+      }
 
-    const creditsPerImage = calculateModelCredits(task.model, {
-      resolution: task.resolution,
-      referenceImageCount: taskReferenceImages(task).length,
-    });
-    const assetRows = result.images.flatMap((image, index) => {
-      const storageUrl = assetUrlFor(image);
-      if (!storageUrl) return [];
-      return [{
-        id: `asset_${nanoid(16)}`,
-        taskId,
+      const now = new Date();
+      const [task] = await trx
+        .insert(generationTasks)
+        .values({
+          id: taskId,
+          userId,
+          idempotencyKey: normalized.idempotencyKey,
+          source: normalized.source,
+          sourceCaseId: normalized.sourceCaseId,
+          sourceCaseCategory: normalized.sourceCaseCategory,
+          sourceNoteUrl: normalized.sourceNoteUrl,
+          sourceAuthorUrl: normalized.sourceAuthorUrl,
+          parentTaskId: normalized.parentTaskId,
+          prompt: normalized.prompt,
+          originalPrompt: normalized.aiEnhance ? normalized.prompt : null,
+          patternContext: normalized.patternContext,
+          referenceImages: normalized.referenceImages,
+          model: normalized.model,
+          providerModel: normalized.providerModel,
+          capability: normalized.capability,
+          aspectRatio: normalized.aspectRatio,
+          resolution: normalized.resolution,
+          outputCount: normalized.outputCount,
+          status: "queued",
+          requestedCredits,
+          creditHoldKey: taskId,
+          maxAttempts: workerConfig.maxAttempts,
+          nextAttemptAt: now,
+          updatedAt: now,
+        })
+        .returning();
+
+      if (!task) {
+        throw new Error("Failed to create image generation task");
+      }
+
+      await creditService.freezeInTx(trx, {
         userId,
-        outputIndex: index,
-        storageUrl,
-        providerUrl: image.url,
-        b64Json: image.b64Json,
-        mimeType: image.mimeType ?? "image/png",
-        creditsCharged: creditsPerImage,
-      }];
+        credits: requestedCredits,
+        videoUuid: taskId,
+      });
+
+      return publicTask(task);
     });
-
-    const assets = assetRows.length
-      ? await db.insert(generatedAssets).values(assetRows).returning()
-      : [];
-    const status =
-      assets.length === 0
-        ? "failed"
-        : assets.length < task.outputCount
-        ? "partial_success"
-        : "completed";
-
-    const [completedTask] = await db
-      .update(generationTasks)
-      .set({
-        status,
-        settledCredits: result.usage.settledCredits,
-        providerTaskId: getProviderTaskId(result.raw),
-        providerResultUrl: getProviderResultUrl(result),
-        providerRaw: result.raw,
-        errorCode: assets.length === 0 ? "NO_OUTPUT" : null,
-        errorMessage: assets.length === 0 ? "没有生成可计费图片，积分已释放。" : null,
-        completedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(generationTasks.id, taskId))
-      .returning();
-
-    return publicTask(completedTask!, assets);
   } catch (error) {
-    const message = userFacingGenerationError(error);
-    const [failedTask] = await db
-      .update(generationTasks)
-      .set({
-        status: "failed",
-        errorCode: "PROVIDER_FAILED",
-        errorMessage: message,
-        completedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(generationTasks.id, taskId))
-      .returning();
+    if (normalized.idempotencyKey && isIdempotencyUniqueConflict(error)) {
+      const existing = await findTaskByIdempotencyKey(
+        db,
+        userId,
+        normalized.idempotencyKey
+      );
+      if (existing) return publicTask(existing);
+    }
 
-    return publicTask(failedTask!);
+    const insufficientCredits = asInsufficientCreditApiError(error);
+    if (insufficientCredits) throw insufficientCredits;
+    throw error;
   }
 }
 
@@ -607,6 +587,7 @@ export async function regenerateImageTask(userId: string, taskId: string) {
   const existing = await getImageGenerationTask(userId, taskId);
   return createImageGenerationTask(userId, {
     source: "regenerate",
+    parentTaskId: taskId,
     sourceCaseId: existing.sourceCaseId,
     sourceCaseCategory: existing.sourceCaseCategory,
     prompt: existing.prompt,

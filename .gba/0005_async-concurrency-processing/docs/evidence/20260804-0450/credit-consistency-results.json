@@ -1,0 +1,10 @@
+{
+  "taskCount": 1000,
+  "settledHoldCount": 1000,
+  "inconsistentCreditCount": 0,
+  "duplicateSettlementCount": 0,
+  "duplicateAssetCount": 0,
+  "transientRetryReleasesHold": false,
+  "permanentFailureReleasesHold": true,
+  "exhaustedLeaseRecoveryReleasesHoldInTransaction": true
+}

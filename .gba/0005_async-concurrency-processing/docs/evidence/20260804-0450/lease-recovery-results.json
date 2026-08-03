@@ -1,0 +1,13 @@
+{
+  "independentClaimers": 8,
+  "successfulClaimsForOneTask": 1,
+  "permitsPerClaim": 3,
+  "renewedTaskAndPermitCount": 3,
+  "concurrentRecoveryScanners": 2,
+  "successfulRecoveryTransitions": 1,
+  "retryStateAfterRecoverableExpiry": "retry_scheduled",
+  "terminalStateAfterExhaustedExpiry": "permanently_failed",
+  "remainingPermitCount": 0,
+  "leaseRecoveryBudgetMs": 150000,
+  "configuredLeasePlusScanMs": 150000
+}

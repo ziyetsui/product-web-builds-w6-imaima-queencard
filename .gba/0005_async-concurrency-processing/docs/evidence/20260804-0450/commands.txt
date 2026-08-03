@@ -1,0 +1,8 @@
+pnpm vitest run src/config/generation-worker.test.ts src/services/generation-task-policy.test.ts src/db/generation-schema.test.ts src/services/credit.test.ts src/services/generation-queue.test.ts src/services/image-generation.test.ts
+pnpm vitest run src/services/generation-task-executor.test.ts src/services/generation-observability.test.ts src/workers/generation-worker.test.ts
+TEST_DATABASE_URL=<disposable-local-test-db> RUN_GENERATION_QUEUE_POSTGRES_TESTS=1 pnpm vitest run src/services/generation-queue.postgres.test.ts
+pnpm run test
+pnpm run lint
+pnpm exec tsc --noEmit
+pnpm run build:prod
+TEST_DATABASE_URL=<disposable-local-test-db> pnpm run verify:generation-concurrency
