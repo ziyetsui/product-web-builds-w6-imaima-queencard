@@ -2,8 +2,9 @@
 
 ## 1. 当前状态
 
-截至 2026-08-02，本 feature 已完成并批准两份详细设计和一份量化验收规范，尚未修改产品代码、
-数据库或部署配置。
+截至 2026-08-04，本 feature 已完成持久队列、三层并发 permit、租约续期与恢复、幂等执行器、
+独立 worker、API 纯入队切换、可观测性和本地隔离 PostgreSQL 量化验收。生产数据库迁移和
+Zeabur worker 发布仍需由部署流程执行，不在本地验收中操作生产环境。
 
 当前图片生成链路为：
 
@@ -105,3 +106,21 @@
 - 已知缺口与下一位执行者的明确入口。
 
 验证证据统一放在 `evidence/{YYYYMMDD-HHmm}/`，其中时间戳使用实际执行时间；不得提交任何密钥或真实用户隐私。
+
+## 8. 2026-08-04 实施结果
+
+- API 创建与重新生成均返回 HTTP 202、`statusUrl` 和 `redirectUrl`，请求进程不再调用 provider。
+- worker 启动命令：`pnpm worker:generation`；健康检查：`/health/live`、`/health/ready`。
+- 任务执行、资产插入、积分结算/释放和终态更新受有效租约保护；瞬时失败保留 hold。
+- 最后一次尝试租约过期时，恢复扫描在同一事务内释放积分并写入永久失败。
+- 8 worker、1,000 任务验证：global/user/provider-model 峰值分别为 2/1/2，领取 P95 63.12ms。
+- 重复资产、重复结算、积分不一致、永久卡死、残留 permit 均为 0。
+- 完整测试、ESLint、TypeScript 和 Next.js 生产构建通过；详细证据见 `evidence/20260804-0450/`。
+
+### Zeabur 发布合同
+
+- 新建独立 worker service，代码与 Web 使用同一提交，Root Directory 为 `ima ima queencard/src`。
+- Start Command：`pnpm worker:generation`，共享 PostgreSQL，但只注入 server-side provider 密钥。
+- 初始 24 小时设置 `GENERATION_WORKER_ENABLED=true`、worker concurrency 2、rollout 10；验收稳定后再提高到 4/100。
+- Liveness Path：`/health/live`；Readiness Path：`/health/ready`。
+- 回滚时先停止领取并等待 drain；不要删除迁移字段、任务、permit 或积分账本历史。
