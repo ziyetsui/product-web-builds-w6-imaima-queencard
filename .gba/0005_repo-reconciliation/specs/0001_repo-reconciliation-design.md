@@ -257,4 +257,3 @@ After repository reconciliation is accepted, create a separate GBA work unit for
 the shared Core API. That feature will define shared templates, assets, model
 catalog, generation rules, PostgreSQL data ownership, object storage, Web BFF,
 mini-program authentication, and later cross-platform identity mapping.
-
