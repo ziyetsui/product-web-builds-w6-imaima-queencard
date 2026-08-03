@@ -16,5 +16,8 @@
     "@aws-sdk/s3-request-presigner": "^3.879.0",
     "pg": "^8.16.3",
     "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "pg-mem": "^3.0.5"
   }
 }

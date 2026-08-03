@@ -81,6 +81,10 @@ function createMemoryStore(options = {}) {
     return users.get(id) || null;
   }
 
+  function getUserByIdentity(appid, openid) {
+    return Array.from(users.values()).find((user) => user.appid === appid && user.openid === openid) || null;
+  }
+
   function updateUserProfile(userId, updates = {}) {
     const user = users.get(userId);
     if (!user) throw new Error("User not found");
@@ -419,6 +423,7 @@ function createMemoryStore(options = {}) {
   return {
     ensureUser,
     getUser,
+    getUserByIdentity,
     updateUserProfile,
     listUsers,
     addCredits,
@@ -476,6 +481,11 @@ function createSqliteStore(options = {}) {
 
   function getUser(id) {
     const row = db.prepare("SELECT * FROM users WHERE id = ?").get(id);
+    return row ? rowToUser(row) : null;
+  }
+
+  function getUserByIdentity(appid, openid) {
+    const row = db.prepare("SELECT * FROM users WHERE appid = ? AND openid = ?").get(appid, openid);
     return row ? rowToUser(row) : null;
   }
 
@@ -1068,6 +1078,7 @@ function createSqliteStore(options = {}) {
   return {
     ensureUser,
     getUser,
+    getUserByIdentity,
     updateUserProfile,
     listUsers,
     addCredits,

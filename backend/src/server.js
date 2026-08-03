@@ -10,6 +10,8 @@ const {
 const { createImageProvider } = require("./providers");
 const { getListenOptions } = require("./listen-options");
 const { createSqliteStore } = require("./store");
+const { createPostgresPool } = require("./db/pool");
+const { createPostgresStore } = require("./repositories/postgres-store");
 
 function asResourceList(resources) {
   if (!resources) return [];
@@ -189,15 +191,25 @@ async function createDependencies(config, sourceEnv, options, acquiredResources)
   const runtimeEnv = toRuntimeEnv(config, sourceEnv);
   const provided = options.dependencies || {};
   const factories = options.factories || {};
+  const hasInjectedStore = Boolean(provided.store) || typeof factories.createStore === "function";
   let database = provided.database || null;
   if (!database && typeof factories.createDatabase === "function") {
     database = await factories.createDatabase({ config: config.database, env: runtimeEnv });
+  }
+  if (!database && config.database.driver === "postgres" && !hasInjectedStore) {
+    database = createPostgresPool({ config: config.database });
   }
   trackResource(acquiredResources, database);
 
   let store = provided.store || null;
   if (!store && typeof factories.createStore === "function") {
     store = await factories.createStore({ config: config.database, database, env: runtimeEnv });
+  }
+  if (!store && config.database.driver === "postgres") {
+    store = createPostgresStore({
+      pool: database,
+      initialCredits: runtimeEnv.MINIAPP_INITIAL_CREDITS || "10",
+    });
   }
   if (!store && config.database.driver === "sqlite" && !options.app) {
     store = createSqliteStore({
@@ -221,6 +233,9 @@ async function createDependencies(config, sourceEnv, options, acquiredResources)
     const error = new Error(`Production runtime dependencies are not configured: ${[...new Set(missing)].join(", ")}`);
     error.code = "RUNTIME_DEPENDENCY_MISSING";
     throw error;
+  }
+  if (config.database.driver === "postgres" && typeof database?.initialize === "function") {
+    await database.initialize();
   }
   let imageProvider = provided.imageProvider || null;
   if (!imageProvider && typeof factories.createImageProvider === "function") {

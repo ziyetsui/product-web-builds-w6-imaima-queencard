@@ -199,7 +199,7 @@ test("asynchronous store close rejection follows sanitized aggregate shutdown", 
   assert.equal(closeCalls, 1);
 });
 
-test("default production entrypoint fails closed until database and storage adapters land", async () => {
+test("default production entrypoint uses PostgreSQL and fails closed until storage adapter lands", async () => {
   const secrets = [
     "runtime-password",
     "runtime-storage-secret",
@@ -211,7 +211,6 @@ test("default production entrypoint fails closed until database and storage adap
     createServer({ env: productionEnv(), logger: quietLogger() }),
     (error) => {
       assert.equal(error.code, "RUNTIME_DEPENDENCY_MISSING");
-      assert.match(error.message, /database adapter/i);
       assert.match(error.message, /storage adapter/i);
       for (const secret of secrets) assert.doesNotMatch(error.message, new RegExp(secret));
       return true;
