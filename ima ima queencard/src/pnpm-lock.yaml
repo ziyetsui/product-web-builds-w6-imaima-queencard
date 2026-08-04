@@ -113,6 +113,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.86.0
         version: 5.100.10(react@19.2.6)
+      '@waffo/pancake-ts':
+        specifier: 0.17.0
+        version: 0.17.0
       better-auth:
         specifier: ^1.4.17
         version: 1.4.17(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(kysely@0.28.17)(postgres@3.4.9))(next@16.2.7(@babel/core@7.29.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(vitest@4.1.8)
@@ -3040,6 +3043,10 @@ packages:
 
   '@vitest/utils@4.1.8':
     resolution: {integrity: sha512-uOJamYALNhfJ6iolExyQM40yIQwDqYnkKtQ5VCiSe17E33H0aQ/u+1GlRuz4LZBk6Mm3sg90G9hEbmEt37C1Zg==}
+
+  '@waffo/pancake-ts@0.17.0':
+    resolution: {integrity: sha512-p9qESx5ZHhXbxO8lW6YX4chcq7YEyBin5wp0MAQOzsAd63q1wTa2RRTyhykMr/oBpwgYFfUFVWnA+RffX8aSAg==}
+    engines: {node: '>=20.0.0'}
 
   abbrev@2.0.0:
     resolution: {integrity: sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==}
@@ -8260,6 +8267,8 @@ snapshots:
       '@vitest/pretty-format': 4.1.8
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
+
+  '@waffo/pancake-ts@0.17.0': {}
 
   abbrev@2.0.0: {}
 

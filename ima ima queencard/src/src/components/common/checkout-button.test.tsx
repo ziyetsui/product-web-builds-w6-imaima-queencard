@@ -50,6 +50,7 @@ describe("CheckoutButton", () => {
     "https://checkout.stripe.com/c/pay_123",
     "https://billing.stripe.com/p/session_123",
     "https://checkout.creem.io/ch_123",
+    "https://pancake.waffo.ai/store/demo/checkout/CHK_123#token=test",
   ])("allows hosted HTTPS checkout URL %s", (url) => {
     expect(isAllowedCheckoutUrl(url, "production")).toBe(true);
   });
@@ -58,6 +59,7 @@ describe("CheckoutButton", () => {
     ["", "/api/billing/stripe/checkout"],
     ["stripe", "/api/billing/stripe/checkout"],
     ["creem", "/api/billing/creem/checkout"],
+    ["waffo", "/api/billing/waffo/checkout"],
   ])("uses %s billing provider", async (provider, endpoint) => {
     const user = userEvent.setup();
     vi.stubEnv("NEXT_PUBLIC_BILLING_PROVIDER", provider);
@@ -98,6 +100,7 @@ describe("CheckoutButton", () => {
   it.each([
     ["stripe", "Stripe"],
     ["creem", "Creem"],
+    ["waffo", "Waffo"],
   ])("names %s in checkout configuration errors", async (provider, providerName) => {
     const user = userEvent.setup();
     vi.stubEnv("NEXT_PUBLIC_BILLING_PROVIDER", provider);
@@ -181,5 +184,26 @@ describe("CheckoutButton", () => {
         "development"
       )
     ).toBe(true);
+  });
+
+  it("opens Waffo checkout in a new tab with opener isolation", async () => {
+    const user = userEvent.setup();
+    vi.stubEnv("NEXT_PUBLIC_BILLING_PROVIDER", "waffo");
+    const open = vi.spyOn(window, "open").mockReturnValue(window);
+    const url =
+      "https://pancake.waffo.ai/store/demo/checkout/CHK_123#token=test";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({ data: { success: true, url } }, { status: 200 })
+      )
+    );
+
+    render(<CheckoutButton productKey="creator_monthly" label="月付订阅" />);
+    await user.click(screen.getByRole("button", { name: "月付订阅" }));
+
+    await waitFor(() => {
+      expect(open).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
+    });
   });
 });

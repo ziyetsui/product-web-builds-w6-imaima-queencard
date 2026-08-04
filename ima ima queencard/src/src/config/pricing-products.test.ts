@@ -7,19 +7,25 @@ import {
   getPricingProduct,
   getProductByCreemProductId,
   getProductByStripePriceId,
+  getProductByWaffoProductId,
   getSubscriptionPricingProducts,
   resolveCreemProductId,
   resolveStripePriceId,
+  resolveWaffoProductId,
 } from "./pricing-products";
 
 const stripeEnvNames = PRICING_PRODUCTS.map((product) => product.stripePriceEnv);
 const creemEnvNames = PRICING_PRODUCTS.map((product) => product.creemProductEnv);
+const waffoEnvNames = PRICING_PRODUCTS.map((product) => product.waffoProductEnv);
 
 afterEach(() => {
   for (const envName of stripeEnvNames) {
     delete process.env[envName];
   }
   for (const envName of creemEnvNames) {
+    delete process.env[envName];
+  }
+  for (const envName of waffoEnvNames) {
     delete process.env[envName];
   }
 });
@@ -48,6 +54,7 @@ describe("pricing products", () => {
   it("keeps every enabled product billable with credits and RMB pricing", () => {
     const envNames = new Set<string>();
     const creemEnvNameSet = new Set<string>();
+    const waffoEnvNameSet = new Set<string>();
 
     for (const product of getEnabledPricingProducts()) {
       expect(product.credits).toBeGreaterThan(0);
@@ -56,10 +63,13 @@ describe("pricing products", () => {
       expect(product.validityDays).toBeGreaterThan(0);
       expect(product.stripePriceEnv).toMatch(/^STRIPE_PRICE_/);
       expect(product.creemProductEnv).toMatch(/^CREEM_PRODUCT_/);
+      expect(product.waffoProductEnv).toMatch(/^WAFFO_PRODUCT_/);
       expect(envNames.has(product.stripePriceEnv)).toBe(false);
       expect(creemEnvNameSet.has(product.creemProductEnv)).toBe(false);
       envNames.add(product.stripePriceEnv);
       creemEnvNameSet.add(product.creemProductEnv);
+      expect(waffoEnvNameSet.has(product.waffoProductEnv)).toBe(false);
+      waffoEnvNameSet.add(product.waffoProductEnv);
       expect(product.creemBillingType).toBe(
         product.mode === "subscription" ? "recurring" : "onetime"
       );
@@ -124,5 +134,16 @@ describe("pricing products", () => {
       "credit_studio"
     );
     expect(getProductByCreemProductId("price_unknown")).toBeNull();
+  });
+
+  it("resolves and finds Waffo PROD_ IDs from server-only env vars", () => {
+    process.env.WAFFO_PRODUCT_CREATOR_MONTHLY = " PROD_creatorMonthly ";
+
+    expect(resolveWaffoProductId("creator_monthly")).toBe("PROD_creatorMonthly");
+    expect(getProductByWaffoProductId(" PROD_creatorMonthly ")?.key).toBe(
+      "creator_monthly"
+    );
+    expect(resolveWaffoProductId("missing")).toBeNull();
+    expect(getProductByWaffoProductId("prod_wrong_case")).toBeNull();
   });
 });

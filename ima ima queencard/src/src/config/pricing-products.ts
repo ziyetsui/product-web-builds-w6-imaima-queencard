@@ -21,6 +21,7 @@ export interface PricingProduct {
   billingPeriod: PricingProductBillingPeriod;
   stripePriceEnv: string;
   creemProductEnv: string;
+  waffoProductEnv: string;
   creemBillingType: "recurring" | "onetime";
   creemBillingPeriod: "every-month" | "every-year" | null;
   priceUsd: number;
@@ -42,6 +43,7 @@ export const PRICING_PRODUCTS = [
     billingPeriod: "month",
     stripePriceEnv: "STRIPE_PRICE_CREATOR_MONTHLY",
     creemProductEnv: "CREEM_PRODUCT_CREATOR_MONTHLY",
+    waffoProductEnv: "WAFFO_PRODUCT_CREATOR_MONTHLY",
     creemBillingType: "recurring",
     creemBillingPeriod: "every-month",
     priceUsd: 14.9,
@@ -61,6 +63,7 @@ export const PRICING_PRODUCTS = [
     billingPeriod: "year",
     stripePriceEnv: "STRIPE_PRICE_CREATOR_ANNUAL",
     creemProductEnv: "CREEM_PRODUCT_CREATOR_ANNUAL",
+    waffoProductEnv: "WAFFO_PRODUCT_CREATOR_ANNUAL",
     creemBillingType: "recurring",
     creemBillingPeriod: "every-year",
     priceUsd: 149,
@@ -80,6 +83,7 @@ export const PRICING_PRODUCTS = [
     billingPeriod: "month",
     stripePriceEnv: "STRIPE_PRICE_STUDIO_MONTHLY",
     creemProductEnv: "CREEM_PRODUCT_STUDIO_MONTHLY",
+    waffoProductEnv: "WAFFO_PRODUCT_STUDIO_MONTHLY",
     creemBillingType: "recurring",
     creemBillingPeriod: "every-month",
     priceUsd: 39.9,
@@ -98,6 +102,7 @@ export const PRICING_PRODUCTS = [
     billingPeriod: "year",
     stripePriceEnv: "STRIPE_PRICE_STUDIO_ANNUAL",
     creemProductEnv: "CREEM_PRODUCT_STUDIO_ANNUAL",
+    waffoProductEnv: "WAFFO_PRODUCT_STUDIO_ANNUAL",
     creemBillingType: "recurring",
     creemBillingPeriod: "every-year",
     priceUsd: 399,
@@ -116,6 +121,7 @@ export const PRICING_PRODUCTS = [
     billingPeriod: null,
     stripePriceEnv: "STRIPE_PRICE_CREDIT_CREATOR",
     creemProductEnv: "CREEM_PRODUCT_CREDIT_CREATOR",
+    waffoProductEnv: "WAFFO_PRODUCT_CREDIT_CREATOR",
     creemBillingType: "onetime",
     creemBillingPeriod: null,
     priceUsd: 14.9,
@@ -135,6 +141,7 @@ export const PRICING_PRODUCTS = [
     billingPeriod: null,
     stripePriceEnv: "STRIPE_PRICE_CREDIT_STUDIO",
     creemProductEnv: "CREEM_PRODUCT_CREDIT_STUDIO",
+    waffoProductEnv: "WAFFO_PRODUCT_CREDIT_STUDIO",
     creemBillingType: "onetime",
     creemBillingPeriod: null,
     priceUsd: 39.9,
@@ -192,6 +199,21 @@ export function resolveCreemProductId(
   return normalizeCreemProductId(process.env[product.creemProductEnv]);
 }
 
+export function normalizeWaffoProductId(
+  waffoProductId: string | null | undefined
+): string | null {
+  const normalized = waffoProductId?.trim();
+  return normalized && normalized.startsWith("PROD_") ? normalized : null;
+}
+
+export function resolveWaffoProductId(
+  productKey: string | null | undefined
+): string | null {
+  const product = getPricingProduct(productKey);
+  if (!product) return null;
+  return normalizeWaffoProductId(process.env[product.waffoProductEnv]);
+}
+
 export function getProductByStripePriceId(
   stripePriceId: string | null | undefined
 ): PricingProduct | null {
@@ -217,6 +239,21 @@ export function getProductByCreemProductId(
     PRICING_PRODUCTS.find(
       (product) =>
         normalizeCreemProductId(process.env[product.creemProductEnv]) ===
+        normalizedProductId
+    ) ?? null
+  );
+}
+
+export function getProductByWaffoProductId(
+  waffoProductId: string | null | undefined
+): PricingProduct | null {
+  const normalizedProductId = normalizeWaffoProductId(waffoProductId);
+  if (!normalizedProductId) return null;
+
+  return (
+    PRICING_PRODUCTS.find(
+      (product) =>
+        normalizeWaffoProductId(process.env[product.waffoProductEnv]) ===
         normalizedProductId
     ) ?? null
   );

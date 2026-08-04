@@ -20,9 +20,17 @@ export const env = createEnv({
     CREEM_PRODUCT_STUDIO_ANNUAL: z.string().optional(),
     CREEM_PRODUCT_CREDIT_CREATOR: z.string().optional(),
     CREEM_PRODUCT_CREDIT_STUDIO: z.string().optional(),
+    WAFFO_MERCHANT_ID: z.string().optional(),
+    WAFFO_PRIVATE_KEY: z.string().optional(),
+    WAFFO_PRODUCT_CREATOR_MONTHLY: z.string().optional(),
+    WAFFO_PRODUCT_CREATOR_ANNUAL: z.string().optional(),
+    WAFFO_PRODUCT_STUDIO_MONTHLY: z.string().optional(),
+    WAFFO_PRODUCT_STUDIO_ANNUAL: z.string().optional(),
+    WAFFO_PRODUCT_CREDIT_CREATOR: z.string().optional(),
+    WAFFO_PRODUCT_CREDIT_STUDIO: z.string().optional(),
   },
   client: {
-    NEXT_PUBLIC_BILLING_PROVIDER: z.enum(["creem", "stripe"]).optional(),
+    NEXT_PUBLIC_BILLING_PROVIDER: z.enum(["creem", "stripe", "waffo"]).optional(),
   },
   runtimeEnv: {
     STRIPE_API_KEY: process.env.STRIPE_API_KEY?.trim(),
@@ -53,6 +61,20 @@ export const env = createEnv({
       process.env.CREEM_PRODUCT_CREDIT_CREATOR?.trim(),
     CREEM_PRODUCT_CREDIT_STUDIO:
       process.env.CREEM_PRODUCT_CREDIT_STUDIO?.trim(),
+    WAFFO_MERCHANT_ID: process.env.WAFFO_MERCHANT_ID?.trim(),
+    WAFFO_PRIVATE_KEY: process.env.WAFFO_PRIVATE_KEY?.trim(),
+    WAFFO_PRODUCT_CREATOR_MONTHLY:
+      process.env.WAFFO_PRODUCT_CREATOR_MONTHLY?.trim(),
+    WAFFO_PRODUCT_CREATOR_ANNUAL:
+      process.env.WAFFO_PRODUCT_CREATOR_ANNUAL?.trim(),
+    WAFFO_PRODUCT_STUDIO_MONTHLY:
+      process.env.WAFFO_PRODUCT_STUDIO_MONTHLY?.trim(),
+    WAFFO_PRODUCT_STUDIO_ANNUAL:
+      process.env.WAFFO_PRODUCT_STUDIO_ANNUAL?.trim(),
+    WAFFO_PRODUCT_CREDIT_CREATOR:
+      process.env.WAFFO_PRODUCT_CREDIT_CREATOR?.trim(),
+    WAFFO_PRODUCT_CREDIT_STUDIO:
+      process.env.WAFFO_PRODUCT_CREDIT_STUDIO?.trim(),
     NEXT_PUBLIC_BILLING_PROVIDER:
       process.env.NEXT_PUBLIC_BILLING_PROVIDER?.trim(),
   },
