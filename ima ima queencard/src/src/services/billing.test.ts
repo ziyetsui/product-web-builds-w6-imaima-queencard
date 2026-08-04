@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   ensureCustomer: vi.fn(),
   getCurrentUser: vi.fn(),
   createPendingFulfillment: vi.fn(),
+  waffoCheckoutCreate: vi.fn(),
   stripe: {
     billingPortal: {
       sessions: {
@@ -71,12 +72,88 @@ vi.mock("@/payment", () => ({
   stripe: mocks.stripe,
 }));
 
+vi.mock("@/payment/waffo", () => ({
+  getWaffoClient: () => ({
+    checkout: { authenticated: { create: mocks.waffoCheckoutCreate } },
+  }),
+}));
+
 import {
   createCreemCheckout,
   createStripeSession,
+  createWaffoCheckout,
   getMySubscription,
   getStripeReturnUrls,
 } from "./billing";
+
+describe("createWaffoCheckout", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.NEXT_PUBLIC_APP_URL = "https://example.com";
+    process.env.WAFFO_PRODUCT_CREATOR_MONTHLY = "PROD_creatorMonthly";
+    mocks.ensureCustomer.mockResolvedValue({ id: 1, authUserId: "user_123" });
+    mocks.getCurrentUser.mockResolvedValue({
+      id: "user_123",
+      email: "user@example.com",
+    });
+    mocks.waffoCheckoutCreate.mockResolvedValue({
+      sessionId: "CHK_123",
+      checkoutUrl:
+        "https://pancake.waffo.ai/store/demo/checkout/CHK_123#token=test",
+      expiresAt: "2026-08-04T12:00:00.000Z",
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.WAFFO_PRODUCT_CREATOR_MONTHLY;
+  });
+
+  it("creates an authenticated Waffo checkout with server-owned metadata", async () => {
+    const result = await createWaffoCheckout("user_123", "creator_monthly");
+
+    expect(result).toEqual({
+      success: true,
+      url: "https://pancake.waffo.ai/store/demo/checkout/CHK_123#token=test",
+    });
+    expect(mocks.waffoCheckoutCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        productId: "PROD_creatorMonthly",
+        currency: "USD",
+        buyerIdentity: "user_123",
+        buyerEmail: "user@example.com",
+        successUrl: "https://example.com/pricing?checkout=success&provider=waffo",
+        metadata: expect.objectContaining({
+          userId: "user_123",
+          productKey: "creator_monthly",
+          credits: "600",
+        }),
+      })
+    );
+    expect(mocks.createPendingFulfillment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "waffo",
+        fulfillmentKey: "waffo:checkout:CHK_123:creator_monthly",
+        providerCheckoutId: "CHK_123",
+        providerProductId: "PROD_creatorMonthly",
+        userId: "user_123",
+        credits: 600,
+      })
+    );
+  });
+
+  it("rejects a missing Waffo product mapping before calling the SDK", async () => {
+    delete process.env.WAFFO_PRODUCT_CREATOR_MONTHLY;
+
+    await expect(
+      createWaffoCheckout("user_123", "creator_monthly")
+    ).resolves.toEqual({
+      success: false,
+      url: null,
+      error: "Missing or invalid Waffo product ID",
+    });
+    expect(mocks.waffoCheckoutCreate).not.toHaveBeenCalled();
+  });
+});
 
 function configureCustomerQuery() {
   mocks.db.select.mockReturnValue({

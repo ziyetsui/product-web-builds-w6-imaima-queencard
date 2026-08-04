@@ -17,6 +17,7 @@ const CHECKOUT_HOSTS = new Set([
   "checkout.stripe.com",
   "billing.stripe.com",
   "checkout.creem.io",
+  "pancake.waffo.ai",
 ]);
 
 class UnsafeCheckoutUrlError extends Error {}
@@ -48,9 +49,9 @@ export function isAllowedCheckoutUrl(
 export function getCheckoutEndpoint(
   provider = process.env.NEXT_PUBLIC_BILLING_PROVIDER
 ) {
-  return provider === "creem"
-    ? "/api/billing/creem/checkout"
-    : "/api/billing/stripe/checkout";
+  if (provider === "creem") return "/api/billing/creem/checkout";
+  if (provider === "waffo") return "/api/billing/waffo/checkout";
+  return "/api/billing/stripe/checkout";
 }
 
 export function CheckoutButton({
@@ -70,9 +71,13 @@ export function CheckoutButton({
     }
 
     setLoading(true);
+    const configuredProvider = process.env.NEXT_PUBLIC_BILLING_PROVIDER;
     const provider =
-      process.env.NEXT_PUBLIC_BILLING_PROVIDER === "creem" ? "creem" : "stripe";
-    const providerName = provider === "creem" ? "Creem" : "Stripe";
+      configuredProvider === "creem" || configuredProvider === "waffo"
+        ? configuredProvider
+        : "stripe";
+    const providerName =
+      provider === "creem" ? "Creem" : provider === "waffo" ? "Waffo" : "Stripe";
     try {
       const response = await fetch(getCheckoutEndpoint(provider), {
         method: "POST",
@@ -96,7 +101,14 @@ export function CheckoutButton({
         throw new UnsafeCheckoutUrlError("Unsafe checkout URL");
       }
 
-      window.location.href = url;
+      if (provider === "waffo") {
+        const checkoutWindow = window.open(url, "_blank", "noopener,noreferrer");
+        if (!checkoutWindow) {
+          throw new Error("Checkout popup was blocked");
+        }
+      } else {
+        window.location.href = url;
+      }
     } catch (error) {
       console.warn("Checkout session error:", error);
       toast.error("无法创建支付链接", {

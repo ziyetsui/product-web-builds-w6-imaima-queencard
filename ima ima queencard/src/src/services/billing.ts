@@ -6,14 +6,17 @@ import { stripe } from "@/payment";
 import { pricingData } from "@/payment/subscriptions";
 import {
   getProductByCreemProductId,
+  getProductByWaffoProductId,
   getPricingProduct,
   resolveCreemProductId,
   resolveStripePriceId,
+  resolveWaffoProductId,
 } from "@/config/pricing-products";
 import { ensureCustomer } from "@/services/customer";
 import { createPendingFulfillment } from "@/services/payment-fulfillment";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { getWaffoClient } from "@/payment/waffo";
 
 export type UserSubscriptionPlan = {
   title: string;
@@ -73,6 +76,86 @@ export function getCreemReturnUrls() {
   return {
     checkoutSuccessUrl: `${appUrl}/pricing?checkout=success&provider=creem`,
   };
+}
+
+export function getWaffoReturnUrls() {
+  const appUrl = getAppUrl();
+  return {
+    checkoutSuccessUrl: `${appUrl}/pricing?checkout=success&provider=waffo`,
+  };
+}
+
+export async function createWaffoCheckout(
+  userId: string,
+  productKey: string
+): Promise<CheckoutSessionResult> {
+  const product = getPricingProduct(productKey);
+  if (!product) {
+    return {
+      success: false,
+      url: null,
+      error: "Missing or invalid product key",
+    };
+  }
+
+  const waffoProductId = resolveWaffoProductId(product.key);
+  if (!waffoProductId) {
+    return {
+      success: false,
+      url: null,
+      error: "Missing or invalid Waffo product ID",
+    };
+  }
+
+  await ensureCustomer(userId);
+  const user = await getCurrentUser();
+  if (!user?.email) {
+    return { success: false, url: null, error: "Missing user email" };
+  }
+
+  const requestId = `imaima:${userId}:${product.key}:${nanoid(12)}`;
+  const { checkoutSuccessUrl } = getWaffoReturnUrls();
+
+  try {
+    const session = await getWaffoClient().checkout.authenticated.create({
+      productId: waffoProductId,
+      currency: "USD",
+      buyerIdentity: userId,
+      buyerEmail: user.email,
+      successUrl: checkoutSuccessUrl,
+      orderMerchantExternalId: requestId,
+      metadata: {
+        userId,
+        productKey: product.key,
+        mode: product.mode,
+        credits: String(product.credits),
+        requestId,
+      },
+    });
+
+    await createPendingFulfillment({
+      provider: "waffo",
+      fulfillmentKey: `waffo:checkout:${session.sessionId}:${product.key}`,
+      providerCheckoutId: session.sessionId,
+      providerProductId: waffoProductId,
+      productKey: product.key,
+      userId,
+      credits: product.credits,
+      metadata: {
+        requestId,
+        expiresAt: session.expiresAt,
+      },
+    });
+
+    return { success: true, url: session.checkoutUrl };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      success: false,
+      url: null,
+      error: `Waffo checkout failed: ${message}`,
+    };
+  }
 }
 
 function getCreemApiBaseUrl() {
@@ -311,7 +394,10 @@ export async function getUserPlans(userId: string): Promise<UserSubscriptionPlan
     return undefined;
   }
 
-  const billingProduct = getProductByCreemProductId(custom.billingProductId);
+  const billingProduct =
+    custom.billingProvider === "waffo"
+      ? getProductByWaffoProductId(custom.billingProductId)
+      : getProductByCreemProductId(custom.billingProductId);
   const activeProductId = billingProduct?.key ?? custom.stripePriceId;
   const activePeriodEnd =
     custom.billingCurrentPeriodEnd ?? custom.stripeCurrentPeriodEnd;
