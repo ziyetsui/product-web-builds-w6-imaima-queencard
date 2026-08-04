@@ -19,12 +19,25 @@ const ENDPOINTS = [
 const { REQUIRED_FIELDS: TEMPLATE_REQUIRED_FIELDS } = require("./catalog-service");
 
 const TEMPLATE_STRING_FIELDS = ["id", "title", "author", "category", "prompt", "source", "createdAt", "updatedAt"];
+const OPTIONAL_TEMPLATE_STRING_FIELDS = ["subtitle", "scenarioCategory", "sourceId", "sourceUrl", "thumbnailUrl", "previewUrl", "useCase"];
 const TEMPLATE_ARRAY_FIELDS = ["tags", "referenceImages", "previewImages"];
 const METRIC_NUMBER_FIELDS = ["likes", "saves", "shares"];
 const METRIC_STRING_FIELDS = ["likesText", "savesText", "sharesText"];
 const OPTIONAL_METRIC_NUMBER_FIELDS = ["followers", "potentialRatio", "likeFollowerRatio", "potentialScore", "potentialRank"];
 const OPTIONAL_METRIC_STRING_FIELDS = ["followersText"];
 const NONNEGATIVE_METRIC_FIELDS = ["likes", "saves", "shares", "followers"];
+const METRIC_BOOLEAN_FIELDS = ["isPotentialHit"];
+const METRIC_FIELDS = [
+  ...METRIC_NUMBER_FIELDS,
+  ...METRIC_STRING_FIELDS,
+  ...OPTIONAL_METRIC_NUMBER_FIELDS,
+  ...OPTIONAL_METRIC_STRING_FIELDS,
+  ...METRIC_BOOLEAN_FIELDS,
+];
+const METADATA_STRING_FIELDS = ["sourceTitle", "authorUrl", "patternId", "likesText", "savesText", "sharesText"];
+const METADATA_FIELDS = [...METADATA_STRING_FIELDS, "suggestedPatternValues"];
+const SEED_STRING_FIELDS = ["templateId", "prompt", "sourceCaseId", "sourceCaseCategory", "sourceTitle"];
+const SEED_FIELDS = [...SEED_STRING_FIELDS, "referenceImages"];
 const PRICING_PRODUCT_STRING_FIELDS = ["id", "type", "title", "currency"];
 const DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -67,21 +80,42 @@ function isStringArray(value) {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function hasOnlyKnownFields(value, fields) {
+  return Object.keys(value).every((field) => fields.includes(field));
+}
+
+function isMetadata(value) {
+  if (!isObject(value) || !hasOnlyKnownFields(value, METADATA_FIELDS)) return false;
+  if (METADATA_STRING_FIELDS.some((field) => typeof value[field] !== "string")) return false;
+  return value.suggestedPatternValues === null || isObject(value.suggestedPatternValues);
+}
+
+function isSeed(value) {
+  if (!isObject(value) || !hasOnlyKnownFields(value, SEED_FIELDS)) return false;
+  if (SEED_STRING_FIELDS.some((field) => typeof value[field] !== "string")) return false;
+  return isStringArray(value.referenceImages);
+}
+
 function isTemplateRecord(record) {
   if (!isObject(record) || TEMPLATE_REQUIRED_FIELDS.some((field) => !(field in record))) return false;
   if (TEMPLATE_STRING_FIELDS.some((field) => !hasNonEmptyString(record[field]))) return false;
+  if (OPTIONAL_TEMPLATE_STRING_FIELDS.some((field) => field in record && typeof record[field] !== "string")) return false;
   if (!isValidDate(record.createdAt) || !isValidDate(record.updatedAt)) return false;
   if (TEMPLATE_ARRAY_FIELDS.some((field) => !isStringArray(record[field]))) return false;
 
   const metrics = record.metrics;
   if (!isObject(metrics)) return false;
+  if (!hasOnlyKnownFields(metrics, METRIC_FIELDS)) return false;
   if (METRIC_NUMBER_FIELDS.some((field) => typeof metrics[field] !== "number" || !Number.isFinite(metrics[field]))) return false;
   if (METRIC_STRING_FIELDS.some((field) => typeof metrics[field] !== "string")) return false;
   if (OPTIONAL_METRIC_NUMBER_FIELDS.some((field) => field in metrics
     && (typeof metrics[field] !== "number" || !Number.isFinite(metrics[field])))) return false;
   if (OPTIONAL_METRIC_STRING_FIELDS.some((field) => field in metrics && typeof metrics[field] !== "string")) return false;
+  if (METRIC_BOOLEAN_FIELDS.some((field) => field in metrics && typeof metrics[field] !== "boolean")) return false;
   if (NONNEGATIVE_METRIC_FIELDS.some((field) => field in metrics && metrics[field] < 0)) return false;
-  return !("potentialRank" in metrics) || metrics.potentialRank >= 1;
+  if ("potentialRank" in metrics && metrics.potentialRank < 1) return false;
+  if ("metadata" in record && !isMetadata(record.metadata)) return false;
+  return !("seed" in record) || isSeed(record.seed);
 }
 
 function isPricingProduct(product) {

@@ -30,6 +30,31 @@ function templateRecord(overrides = {}) {
   };
 }
 
+function metadataRecord(overrides = {}) {
+  return {
+    sourceTitle: "A valid template",
+    authorUrl: "https://example.test/author",
+    patternId: "pattern-1",
+    suggestedPatternValues: null,
+    likesText: "1",
+    savesText: "2",
+    sharesText: "3",
+    ...overrides,
+  };
+}
+
+function seedRecord(overrides = {}) {
+  return {
+    templateId: "template-1",
+    prompt: "Create a test template",
+    referenceImages: ["/reference.jpg"],
+    sourceCaseId: "case-1",
+    sourceCaseCategory: "memes",
+    sourceTitle: "A valid template",
+    ...overrides,
+  };
+}
+
 function pricingBody(overrides = {}) {
   return {
     success: true,
@@ -255,6 +280,52 @@ test("fails when the template catalog contains malformed records", async () => {
     const check = checkFor(result, "/api/miniapp/templates");
     assert.equal(check.ok, false);
     assert.match(check.detail, /template|record|field/i);
+  }
+});
+
+test("accepts documented optional template DTO fields", async () => {
+  const record = templateRecord({
+    subtitle: "Optional subtitle",
+    scenarioCategory: "memes",
+    sourceId: "source-1",
+    sourceUrl: "https://example.test/source",
+    thumbnailUrl: "https://example.test/thumbnail.jpg",
+    previewUrl: "https://example.test/preview.jpg",
+    useCase: "social post",
+    metrics: { ...templateRecord().metrics, isPotentialHit: false },
+    metadata: metadataRecord({ suggestedPatternValues: { tone: "bright" } }),
+    seed: seedRecord(),
+  });
+  const result = await withServer({
+    "/api/miniapp/templates": { status: 200, body: { success: true, data: { records: [record] } } },
+  }, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({ baseUrl, fetchImpl }));
+
+  assert.equal(result.ok, true);
+  assert.equal(checkFor(result, "/api/miniapp/templates").ok, true);
+});
+
+test("rejects malformed optional template DTO fields", async () => {
+  const valid = templateRecord();
+  const malformedRecords = [
+    templateRecord({ metrics: { ...valid.metrics, isPotentialHit: "yes" } }),
+    templateRecord({ metadata: [] }),
+    templateRecord({ metadata: metadataRecord({ likesText: 7 }) }),
+    templateRecord({ metadata: metadataRecord({ suggestedPatternValues: [] }) }),
+    templateRecord({ metadata: metadataRecord({ unexpected: true }) }),
+    templateRecord({ seed: [] }),
+    templateRecord({ seed: seedRecord({ referenceImages: [null] }) }),
+    templateRecord({ seed: seedRecord({ sourceTitle: 7 }) }),
+    templateRecord({ subtitle: 42 }),
+    templateRecord({ thumbnailUrl: {} }),
+  ];
+
+  for (const record of malformedRecords) {
+    const result = await withServer({
+      "/api/miniapp/templates": { status: 200, body: { success: true, data: { records: [record] } } },
+    }, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({ baseUrl, fetchImpl }));
+
+    assert.equal(result.ok, false);
+    assert.equal(checkFor(result, "/api/miniapp/templates").ok, false);
   }
 });
 
