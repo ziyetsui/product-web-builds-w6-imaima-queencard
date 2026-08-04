@@ -5,7 +5,7 @@ const {
 
 const PRODUCTION_ENVIRONMENTS = new Set(["production", "prod"]);
 const PLACEHOLDER_BUILD_SHAS = new Set(["unknown", "replace-with-source-commit-sha"]);
-const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 
 function valueFor(env, keys, fallback = "") {
   for (const key of keys) {
@@ -45,7 +45,9 @@ function sanitizeUrlCredentials(value) {
   if (typeof value !== "string") return value;
   try {
     const url = new URL(value);
-    return url.username || url.password ? "[REDACTED_SECRET]" : value;
+    return url.username || url.password || url.search || url.hash
+      ? "[REDACTED_SECRET]"
+      : value;
   } catch {
     return value;
   }
@@ -100,9 +102,12 @@ function validateProductionEnvironment(env = process.env) {
   if (!configuredHost) addIssue(missing, "MINIAPP_BACKEND_HOST");
   else if ((config?.server.host || configuredHost) !== "0.0.0.0") addIssue(invalid, "MINIAPP_BACKEND_HOST");
 
-  const devLoginValue = valueFor(env, ["MINIAPP_DEV_LOGIN"], "0").toLowerCase();
-  const devLogin = config?.wechat.devLogin ?? TRUE_VALUES.has(devLoginValue);
-  if (devLogin) addIssue(invalid, "MINIAPP_DEV_LOGIN");
+  const rawDevLogin = env.MINIAPP_DEV_LOGIN;
+  if (rawDevLogin === undefined || rawDevLogin === null) {
+    if (config?.wechat.devLogin) addIssue(invalid, "MINIAPP_DEV_LOGIN");
+  } else if (!FALSE_VALUES.has(String(rawDevLogin).trim().toLowerCase())) {
+    addIssue(invalid, "MINIAPP_DEV_LOGIN");
+  }
 
   const provider = (config?.generation.provider
     || valueFor(env, ["MINIAPP_IMAGE_PROVIDER", "GENERATION_PROVIDER", "MINIAPP_GENERATION_MODE"], "gptproto"))
@@ -115,7 +120,7 @@ function validateProductionEnvironment(env = process.env) {
   if (workerMode !== "durable") addIssue(invalid, "GENERATION_WORKER_MODE");
 
   const publicAssetBaseUrl = config?.storage.publicBaseUrl
-    || valueFor(env, ["MINIAPP_PUBLIC_ASSET_BASE_URL", "STORAGE_PUBLIC_BASE_URL"], "");
+    || valueFor(env, ["STORAGE_PUBLIC_BASE_URL", "MINIAPP_PUBLIC_ASSET_BASE_URL"], "");
   if (!publicAssetBaseUrl) addIssue(missing, "MINIAPP_PUBLIC_ASSET_BASE_URL");
   else if (!isHttpsUrl(publicAssetBaseUrl)) addIssue(invalid, "MINIAPP_PUBLIC_ASSET_BASE_URL");
 

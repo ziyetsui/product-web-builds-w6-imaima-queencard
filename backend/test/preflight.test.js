@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
 const test = require("node:test");
 
 const { validateProductionEnvironment } = require("../src/services/production-preflight");
@@ -28,6 +30,18 @@ function productionEnvironment(overrides = {}) {
   };
 }
 
+function runPreflight(env) {
+  return spawnSync(
+    process.platform === "win32" ? "npm.cmd" : "npm",
+    ["run", "preflight"],
+    {
+      cwd: path.resolve(__dirname, ".."),
+      env: { ...process.env, ...env },
+      encoding: "utf8",
+    },
+  );
+}
+
 test("accepts a payment-disabled GPTProto internal-test environment", () => {
   const result = validateProductionEnvironment(productionEnvironment());
 
@@ -53,4 +67,77 @@ test("rejects development login, mock payment, preview generation, and placehold
     "PAYMENT_PROVIDER",
   ]);
   assert.doesNotMatch(JSON.stringify(result), /secret|password|api-key/i);
+});
+
+test("accepts an OpenAI production provider when its matching key is configured", () => {
+  const result = validateProductionEnvironment(productionEnvironment({
+    MINIAPP_IMAGE_PROVIDER: "openai",
+    GPTPROTO_API_KEY: "",
+    OPENAI_IMAGE_API_KEY: "openai-secret",
+  }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.config.generation.provider, "openai");
+  assert.deepEqual(result.missing, []);
+});
+
+test("rejects a non-HTTPS public asset base URL", () => {
+  const result = validateProductionEnvironment(productionEnvironment({
+    MINIAPP_PUBLIC_ASSET_BASE_URL: "http://miniapp.example",
+  }));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.invalid, ["MINIAPP_PUBLIC_ASSET_BASE_URL"]);
+});
+
+test("rejects unrecognized development-login values", () => {
+  for (const value of ["garbage", "2"]) {
+    const result = validateProductionEnvironment(productionEnvironment({
+      MINIAPP_DEV_LOGIN: value,
+    }));
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.invalid, ["MINIAPP_DEV_LOGIN"]);
+  }
+});
+
+test("keeps loadConfig public asset alias precedence after an unrelated config error", () => {
+  const result = validateProductionEnvironment(productionEnvironment({
+    DATABASE_URL: "",
+    STORAGE_PUBLIC_BASE_URL: "https://storage.example/assets",
+    MINIAPP_PUBLIC_ASSET_BASE_URL: "http://invalid.example/assets",
+  }));
+
+  assert.equal(result.ok, false);
+  assert.ok(result.missing.includes("DATABASE_URL"));
+  assert.equal(result.invalid.includes("MINIAPP_PUBLIC_ASSET_BASE_URL"), false);
+});
+
+test("redacts credential-bearing query and fragment URL data", () => {
+  const result = validateProductionEnvironment(productionEnvironment({
+    STORAGE_ENDPOINT: "https://s3.example/?token=super-secret#fragment-secret",
+  }));
+
+  assert.equal(result.ok, true);
+  assert.equal(result.config.storage.endpoint, "[REDACTED_SECRET]");
+  assert.doesNotMatch(JSON.stringify(result), /super-secret|fragment-secret/);
+});
+
+test("CLI accepts a complete environment and prints its exact success line", () => {
+  const result = runPreflight(productionEnvironment());
+  const output = `${result.stdout}${result.stderr}`;
+
+  assert.equal(result.status, 0);
+  assert.match(output, /(^|\n)PREFLIGHT_OK environment=production payment=disabled(\n|$)/);
+});
+
+test("CLI rejects invalid values and prints its exact failure line", () => {
+  const result = runPreflight(productionEnvironment({
+    MINIAPP_DEV_LOGIN: "garbage",
+    PAYMENT_PROVIDER: "mock",
+  }));
+  const output = `${result.stdout}${result.stderr}`;
+
+  assert.equal(result.status, 1);
+  assert.match(output, /(^|\n)PREFLIGHT_FAILED missing=- invalid=MINIAPP_DEV_LOGIN,PAYMENT_PROVIDER(\n|$)/);
 });
