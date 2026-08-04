@@ -39,7 +39,7 @@ function deferred() {
 }
 
 function createTestLimiter(overrides = {}) {
-  let currentTime = 0;
+  let currentTime = 1000;
   const limiter = createRateLimiter({ now: () => currentTime });
   return {
     consume(input) {
@@ -47,6 +47,9 @@ function createTestLimiter(overrides = {}) {
         ...input,
         limit: overrides[input.scope] || input.limit,
       });
+    },
+    now() {
+      return currentTime;
     },
     advance(ms) {
       currentTime += ms;
@@ -106,7 +109,7 @@ test("rate limits WeChat login and returns the specified 429 response", async ()
     assert.equal(body.success, false);
     assert.equal(body.error.code, "RATE_LIMITED");
     assert.equal(body.error.message, "请求过于频繁，请稍后重试。");
-    assert.match(response.headers.get("retry-after"), /^\d+$/);
+    assert.equal(response.headers.get("retry-after"), "60");
   } finally {
     app.close();
   }
@@ -149,6 +152,213 @@ test("keys generation rate limits by authenticated user", async () => {
     assert.equal(blocked.response.status, 429);
     assert.equal(blocked.body.error.code, "RATE_LIMITED");
     assert.equal(second.response.status, 202);
+  } finally {
+    app.close();
+  }
+});
+
+test("keys uploads by user and falls back to IP before authentication", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-rate-limit-upload",
+      MINIAPP_DB_PATH: tempDbPath(),
+      MINIAPP_UPLOAD_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), "ima-rate-limit-uploads-")),
+      MINIAPP_PUBLIC_ASSET_BASE_URL: "http://local",
+    },
+    rateLimiter: createTestLimiter({ upload: 1 }),
+  });
+
+  try {
+    const firstUser = await loginWithCode(app, "upload-one");
+    const secondUser = await loginWithCode(app, "upload-two");
+    const imageBytes = await validPngBytes();
+
+    async function upload(authorization, forwardedFor) {
+      const form = new FormData();
+      form.set("file", new Blob([imageBytes], { type: "image/png" }), "reference.png");
+      const headers = { "x-forwarded-for": forwardedFor };
+      if (authorization) headers.Authorization = authorization;
+      const response = await app.fetch(new Request("http://local/api/miniapp/uploads/reference-image", {
+        method: "POST",
+        headers,
+        body: form,
+      }));
+      return { response, body: await readJson(response) };
+    }
+
+    const first = await upload(firstUser, "198.51.100.20");
+    const blocked = await upload(firstUser, "198.51.100.20");
+    const second = await upload(secondUser, "198.51.100.20");
+    assert.equal(first.response.status, 200);
+    assert.equal(blocked.response.status, 429);
+    assert.equal(blocked.body.error.code, "RATE_LIMITED");
+    assert.equal(second.response.status, 200);
+
+    const unauthenticated = await upload("", "198.51.100.21");
+    const blockedByIp = await upload("", "198.51.100.21");
+    assert.equal(unauthenticated.response.status, 401);
+    assert.equal(blockedByIp.response.status, 429);
+    assert.equal(blockedByIp.body.error.code, "RATE_LIMITED");
+  } finally {
+    app.close();
+  }
+});
+
+test("keys order creation by authenticated user", async () => {
+  const app = createApp({
+    env: {
+      NODE_ENV: "test",
+      MINIAPP_DEV_LOGIN: "1",
+      MINIAPP_PAYMENT_MODE: "mock",
+      WECHAT_MINIAPP_APP_ID: "wx-rate-limit-order",
+    },
+    store: createMemoryStore({ environment: "test", initialCredits: 10 }),
+    rateLimiter: createTestLimiter({ order: 1 }),
+  });
+
+  try {
+    const firstUser = await loginWithCode(app, "order-one");
+    const secondUser = await loginWithCode(app, "order-two");
+
+    async function createOrder(authorization) {
+      const response = await app.fetch(new Request("http://local/api/miniapp/orders", {
+        method: "POST",
+        headers: { Authorization: authorization, "content-type": "application/json" },
+        body: JSON.stringify({ productId: "credits_20" }),
+      }));
+      return { response, body: await readJson(response) };
+    }
+
+    const first = await createOrder(firstUser);
+    const blocked = await createOrder(firstUser);
+    const second = await createOrder(secondUser);
+    assert.equal(first.response.status, 201);
+    assert.equal(blocked.response.status, 429);
+    assert.equal(blocked.body.error.code, "RATE_LIMITED");
+    assert.equal(second.response.status, 201);
+  } finally {
+    app.close();
+  }
+});
+
+test("limits admin mutations after requireAdmin", async () => {
+  const store = createMemoryStore({ environment: "test", initialCredits: 10 });
+  const app = createApp({
+    env: {
+      NODE_ENV: "test",
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-rate-limit-admin",
+      MINIAPP_ADMIN_OPENIDS: "dev_admin",
+    },
+    store,
+    rateLimiter: createTestLimiter({ admin: 1 }),
+  });
+
+  try {
+    const admin = await loginWithCode(app, "admin");
+    await loginWithCode(app, "target");
+    const targetUserId = "wechat:wx-rate-limit-admin:dev_target";
+
+    async function addCredits() {
+      const response = await app.fetch(new Request("http://local/api/miniapp/admin/credits/add", {
+        method: "POST",
+        headers: { Authorization: admin, "content-type": "application/json" },
+        body: JSON.stringify({ userId: targetUserId, amount: 1 }),
+      }));
+      return { response, body: await readJson(response) };
+    }
+
+    const first = await addCredits();
+    const blocked = await addCredits();
+    assert.equal(first.response.status, 200);
+    assert.equal(first.body.success, true);
+    assert.equal(blocked.response.status, 429);
+    assert.equal(blocked.body.error.code, "RATE_LIMITED");
+    assert.equal((await store.getUser(targetUserId)).balance, 11);
+  } finally {
+    app.close();
+  }
+});
+
+test("limits template generation submissions by authenticated user", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-rate-limit-template",
+      MINIAPP_INITIAL_CREDITS: "10",
+      MINIAPP_GENERATION_MODE: "preview",
+      MINIAPP_TEMPLATE_API_BASE_URL: "https://templates.example",
+    },
+    store: createMemoryStore({ initialCredits: 10 }),
+    fetch: async () => Response.json({
+      success: true,
+      data: [{
+        id: "tpl-rate-limit",
+        category: "image",
+        name: "Rate limited template",
+        condition_prompt: "Create a rate limited card",
+        work_url: "https://cdn.example.com/rate-limited.png",
+      }],
+      pagination: { page: 1, limit: 1, total: 1, totalPages: 1 },
+    }),
+    rateLimiter: createTestLimiter({ generation: 1 }),
+  });
+
+  try {
+    const authorization = await loginWithCode(app, "template-one");
+    async function generate() {
+      const response = await app.fetch(new Request("http://local/api/miniapp/templates/tpl-rate-limit/generate", {
+        method: "POST",
+        headers: { Authorization: authorization, "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }));
+      return { response, body: await readJson(response) };
+    }
+
+    const first = await generate();
+    const blocked = await generate();
+    assert.equal(first.response.status, 202);
+    assert.equal(blocked.response.status, 429);
+    assert.equal(blocked.body.error.code, "RATE_LIMITED");
+  } finally {
+    app.close();
+  }
+});
+
+test("limits regenerate requests by authenticated user", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-rate-limit-regenerate",
+      MINIAPP_INITIAL_CREDITS: "10",
+    },
+    store: createMemoryStore({ initialCredits: 10 }),
+    imageProvider: {
+      name: "test-provider",
+      generate: async () => ({ provider: "test-provider", status: "completed", images: [] }),
+    },
+    worker: { schedule() {}, stop() {} },
+    rateLimiter: createTestLimiter({ generation: 1 }),
+  });
+
+  try {
+    const authorization = await loginWithCode(app, "regenerate-one");
+    const created = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+      method: "POST",
+      headers: { Authorization: authorization, "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "Initial generation" }),
+    })));
+    const response = await app.fetch(new Request(`http://local/api/miniapp/image-generations/${created.data.taskId}/regenerate`, {
+      method: "POST",
+      headers: { Authorization: authorization, "content-type": "application/json" },
+      body: "{}",
+    }));
+    const body = await readJson(response);
+
+    assert.equal(created.success, true);
+    assert.equal(response.status, 429);
+    assert.equal(body.error.code, "RATE_LIMITED");
   } finally {
     app.close();
   }

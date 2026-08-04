@@ -73,8 +73,13 @@ function createRateLimiter(options = {}) {
     };
   }
 
+  function currentTime() {
+    return resolveTime(undefined, now);
+  }
+
   return {
     consume,
+    now: currentTime,
     get size() {
       return entries.size;
     },
