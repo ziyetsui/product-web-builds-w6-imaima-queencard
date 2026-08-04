@@ -38,8 +38,11 @@ function clientIp(request) {
   return forwarded || request.headers.get("host") || "unknown";
 }
 
-function rateLimitResponse(result, currentTime = Date.now()) {
-  const retryAfter = Math.max(1, Math.ceil((Number(result.resetAt) - Number(currentTime)) / 1000));
+function rateLimitResponse(result) {
+  const retryAfter = Number(result.retryAfter);
+  if (!Number.isFinite(retryAfter) || retryAfter < 0) {
+    throw new TypeError("rate limiter result must include retryAfter seconds");
+  }
   return json({
     success: false,
     error: {
@@ -378,9 +381,7 @@ function createApp(options = {}) {
 
   function checkRateLimit(scope, key) {
     const result = rateLimiter.consume({ scope, key, ...rateLimits[scope] });
-    if (result.allowed) return null;
-    const currentTime = typeof rateLimiter.now === "function" ? rateLimiter.now() : Date.now();
-    return rateLimitResponse(result, currentTime);
+    return result.allowed ? null : rateLimitResponse(result);
   }
 
   const paymentProvider = options.paymentProvider || createPaymentProvider({

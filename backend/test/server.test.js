@@ -48,9 +48,6 @@ function createTestLimiter(overrides = {}) {
         limit: overrides[input.scope] || input.limit,
       });
     },
-    now() {
-      return currentTime;
-    },
     advance(ms) {
       currentTime += ms;
     },

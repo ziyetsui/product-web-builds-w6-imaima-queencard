@@ -12,6 +12,7 @@ test("allows a bounded number of calls and resets after the window", () => {
     limit: 2,
     remaining: 1,
     resetAt: 60000,
+    retryAfter: 60,
   });
   assert.equal(limiter.consume({ scope: "login", key: "ip:one", limit: 2, windowMs: 60000 }).allowed, true);
   assert.equal(limiter.consume({ scope: "login", key: "ip:one", limit: 2, windowMs: 60000 }).allowed, false);

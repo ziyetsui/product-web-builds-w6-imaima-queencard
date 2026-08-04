@@ -65,21 +65,18 @@ function createRateLimiter(options = {}) {
 
     const allowed = entry.count < input.limit;
     if (allowed) entry.count += 1;
+    const retryAfter = Math.max(1, Math.ceil((entry.resetAt - currentTime) / 1000));
     return {
       allowed,
       limit: input.limit,
       remaining: Math.max(0, input.limit - entry.count),
       resetAt: entry.resetAt,
+      retryAfter,
     };
-  }
-
-  function currentTime() {
-    return resolveTime(undefined, now);
   }
 
   return {
     consume,
-    now: currentTime,
     get size() {
       return entries.size;
     },
