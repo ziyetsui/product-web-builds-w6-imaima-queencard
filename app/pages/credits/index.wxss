@@ -103,6 +103,15 @@
   font-weight: 800;
 }
 
+.balance-meta {
+  display: flex;
+  gap: 24rpx;
+  margin-top: 18rpx;
+  color: rgba(13, 13, 13, 0.62);
+  font-size: 23rpx;
+  font-weight: 800;
+}
+
 .account-row {
   display: flex;
   align-items: center;

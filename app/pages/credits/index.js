@@ -22,25 +22,6 @@ function formatTime(value) {
   return (date.getMonth() + 1) + "/" + date.getDate() + " " + (date.getHours() < 10 ? "0" + date.getHours() : date.getHours()) + ":" + (date.getMinutes() < 10 ? "0" + date.getMinutes() : date.getMinutes());
 }
 
-function normalizeBalance(payload) {
-  var source = payload || {};
-  if (source.balance !== undefined) return Number(source.balance || 0);
-  if (source.credits !== undefined) return Number(source.credits || 0);
-  if (source.availableCredits !== undefined) return Number(source.availableCredits || 0);
-  if (source.data && source.data.balance !== undefined) return Number(source.data.balance || 0);
-  return 0;
-}
-
-function pickRecords(payload) {
-  if (!payload) return [];
-  if (payload.records) return payload.records;
-  if (payload.items) return payload.items;
-  if (payload.transactions) return payload.transactions;
-  if (payload.data && payload.data.records) return payload.data.records;
-  if (Array.isArray(payload)) return payload;
-  return [];
-}
-
 function normalizeTransaction(raw) {
   var item = raw || {};
   var amount = item.amount !== undefined ? item.amount : item.delta;
@@ -68,6 +49,8 @@ Page({
     user: null,
     userLabel: "未登录",
     balance: 0,
+    heldCredits: 0,
+    expiringCredits: 0,
     records: [],
     page: 1,
     hasMore: true,
@@ -129,9 +112,12 @@ Page({
       .then(function (results) {
         var balancePayload = results[0];
         var historyPayload = results[1];
-        var records = pickRecords(historyPayload).map(normalizeTransaction);
+        var records = (historyPayload.records || []).map(normalizeTransaction);
+        var normalizedBalance = reset ? credits.normalizeBalance(balancePayload) : balancePayload;
         page.setData({
-          balance: reset ? normalizeBalance(balancePayload) : page.data.balance,
+          balance: reset ? normalizedBalance.balance : page.data.balance,
+          heldCredits: reset ? normalizedBalance.heldCredits : page.data.heldCredits,
+          expiringCredits: reset ? normalizedBalance.expiringCredits : page.data.expiringCredits,
           records: reset ? records : page.data.records.concat(records),
           page: nextPage,
           hasMore: hasMore(historyPayload, nextPage, records),

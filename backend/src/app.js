@@ -13,6 +13,7 @@ const { createCreditService } = require("./services/credit-service");
 const { createGenerationService } = require("./services/generation-service");
 const { createGenerationWorker } = require("./worker/generation-worker");
 const { createModelRegistry } = require("./services/model-registry");
+const orderService = require("./services/order-service");
 const { fetchTemplateById, fetchTemplateList } = require("./templates");
 const { importCatalog, validateCatalog } = require("./services/catalog-service");
 
@@ -51,6 +52,21 @@ async function getAuthPayload(request, authService) {
 
 async function getCurrentUser(request, authService) {
   return authService.authenticate(bearerToken(request));
+}
+
+function publicAccountUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    provider: user.provider || "wechat",
+    name: user.name || "",
+    avatarUrl: user.avatarUrl || "",
+    balance: Number(user.balance || 0),
+    status: user.status || "active",
+    role: user.role || "user",
+    createdAt: user.createdAt || "",
+    updatedAt: user.updatedAt || "",
+  };
 }
 
 function envList(value) {
@@ -616,7 +632,17 @@ function createApp(options = {}) {
       }
 
       if (path === "/api/miniapp/pricing" && request.method === "GET") {
-        return json({ success: true, data: pricingProducts(env) });
+        const mode = paymentMode(env);
+        return json({
+          success: true,
+          data: {
+            ...pricingProducts(env),
+            payment: {
+              mode,
+              available: ["mock", "wechat"].includes(mode),
+            },
+          },
+        });
       }
 
       if (path === "/api/miniapp/models" && request.method === "GET") {
@@ -631,20 +657,29 @@ function createApp(options = {}) {
 
       if (path === "/api/miniapp/account/me" && request.method === "GET") {
         const { user } = await getCurrentUser(request, authService);
-        return json({ success: true, data: { user } });
+        return json({ success: true, data: { user: publicAccountUser(user) } });
       }
 
       if (path === "/api/miniapp/account/me" && request.method === "PATCH") {
         const { user } = await getCurrentUser(request, authService);
         const body = await readJson(request);
-        const name = String(body.name || "").trim();
+        const name = String(body.name || body.nickname || "").trim();
         if (!name || name.length > 40) return json({ success: false, error: "Name must be 1 to 40 characters" }, 400);
-        return json({ success: true, data: { user: await store.updateUserProfile(user.id, { name }) } });
+        return json({ success: true, data: { user: publicAccountUser(await store.updateUserProfile(user.id, { name })) } });
       }
 
       if (path === "/api/miniapp/credit/balance" && request.method === "GET") {
         const { user } = await getCurrentUser(request, authService);
-        return json({ success: true, data: { balance: user.balance, currency: "credits" } });
+        return json({
+          success: true,
+          data: {
+            balance: user.balance,
+            availableCredits: user.balance,
+            heldCredits: 0,
+            expiringCredits: 0,
+            currency: "credits",
+          },
+        });
       }
 
       if (path === "/api/miniapp/billing" && request.method === "GET") {
@@ -661,12 +696,12 @@ function createApp(options = {}) {
         return json({
           success: true,
           data: {
-            user,
+            user: publicAccountUser(user),
             balance: user.balance,
             currency: "credits",
-            orders,
-            creditTransactions,
-            paymentEvents,
+            orders: orderService.serializeOrderPage(orders),
+            creditTransactions: orderService.serializeCreditPage(creditTransactions),
+            paymentEvents: orderService.serializePaymentPage(paymentEvents),
           },
         });
       }
@@ -691,7 +726,7 @@ function createApp(options = {}) {
           amountCents: product.amountCents,
           currency: product.currency || "CNY",
           credits: product.credits,
-          productSnapshot: product,
+          productSnapshot: orderService.cloneProduct(product),
         };
         const payment = paymentCreatePayload(env, draft, product);
         const order = await store.createOrder({
@@ -713,7 +748,7 @@ function createApp(options = {}) {
         return json({
           success: true,
           data: {
-            order,
+            order: orderService.serializeOrder(order),
             paymentParams: order.paymentParams || null,
             payment: order.paymentParams ? { mode: order.paymentMode, status: order.paymentStatus } : paymentInstructions(order),
           },
@@ -723,7 +758,7 @@ function createApp(options = {}) {
       if (path === "/api/miniapp/orders" && request.method === "GET") {
         const { user } = await getCurrentUser(request, authService);
         const data = await store.listOrders(user.id, url.searchParams);
-        return json({ success: true, data });
+        return json({ success: true, data: orderService.serializeOrderPage(data) });
       }
 
       const mockPayMatch = path.match(/^\/api\/miniapp\/orders\/([^/]+)\/mock-pay$/);
@@ -765,7 +800,7 @@ function createApp(options = {}) {
             metadata: { credits: result.order.creditsGranted },
           });
         }
-        return json({ success: true, data: { order: result ? result.order : await store.getOrder(order.id), idempotent: !(result && result.fulfilled) } });
+        return json({ success: true, data: { order: orderService.serializeOrder(result ? result.order : await store.getOrder(order.id)), idempotent: !(result && result.fulfilled) } });
       }
 
       const orderMatch = path.match(/^\/api\/miniapp\/orders\/([^/]+)$/);
@@ -773,7 +808,7 @@ function createApp(options = {}) {
         const { user } = await getCurrentUser(request, authService);
         const order = await store.getOrder(decodeURIComponent(orderMatch[1]));
         if (!order || order.userId !== user.id) return json({ success: false, error: "Order not found" }, 404);
-        return json({ success: true, data: { order } });
+        return json({ success: true, data: { order: orderService.serializeOrder(order) } });
       }
 
       if (path === "/api/miniapp/admin/payment-audit" && request.method === "GET") {

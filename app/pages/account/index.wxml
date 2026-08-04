@@ -43,7 +43,7 @@
     <button class="nav-button white" bindtap="goHistory">历史</button>
     <button class="nav-button lemon" bindtap="goBilling">订单账单</button>
     <button class="nav-button pumpkin" bindtap="goPricing">购买</button>
-    <button class="nav-button lavender" bindtap="goAdmin">管理入口</button>
+    <button wx:if="{{user && user.isAdmin}}" class="nav-button lavender" bindtap="goAdmin">管理入口</button>
   </view>
 
   <view wx:if="{{loading}}" class="load-row">正在读取账号...</view>

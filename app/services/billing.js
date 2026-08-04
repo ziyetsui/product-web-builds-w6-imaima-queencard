@@ -7,6 +7,13 @@ function recordsFrom(payload, keys) {
   for (i = 0; i < keys.length; i += 1) {
     if (Array.isArray(source[keys[i]])) return source[keys[i]];
   }
+  for (i = 0; i < keys.length; i += 1) {
+    if (source[keys[i]] && typeof source[keys[i]] === "object") {
+      var nested = recordsFrom(source[keys[i]], keys);
+      if (nested.length) return nested;
+    }
+  }
+  if (source.records && typeof source.records === "object") return recordsFrom(source.records, keys);
   if (source.data) return recordsFrom(source.data, keys);
   return [];
 }
@@ -27,9 +34,15 @@ function normalizeProduct(raw, index) {
   return {
     id: item.id || item.productId || item.key || "product-" + index,
     name: item.name || item.title || "积分套餐",
+    type: item.type || "pack",
     credits: Number(credits || 0),
+    amountCents: Number(cents || 0),
+    currency: item.currency || "CNY",
     price: typeof amount === "string" ? amount : formatMoney(amount, item.currency),
     desc: item.desc || item.description || item.subtitle || "用于生成、编辑和保存高质量图文结果。",
+    interval: item.interval || "",
+    badge: item.badge || "",
+    paymentAvailable: item.paymentAvailable !== false,
     accent: item.accent || ["lemon", "seafoam", "pumpkin"][index % 3],
     raw: item,
   };
@@ -38,10 +51,19 @@ function normalizeProduct(raw, index) {
 function normalizeProducts(payload) {
   var source = payload || {};
   var products = recordsFrom(source, ["products", "records", "items"]);
+  var paymentAvailable = source.payment && source.payment.available !== undefined
+    ? Boolean(source.payment.available)
+    : undefined;
   if (products.length === 0 && (Array.isArray(source.packs) || Array.isArray(source.subscriptions))) {
     products = (source.packs || []).concat(source.subscriptions || []);
   }
-  return products.map(normalizeProduct);
+  return products.map(function (product, index) {
+    var normalized = normalizeProduct(product, index);
+    if (paymentAvailable !== undefined && product.paymentAvailable === undefined) {
+      normalized.paymentAvailable = paymentAvailable;
+    }
+    return normalized;
+  });
 }
 
 function normalizeOrder(raw) {
@@ -55,10 +77,17 @@ function normalizeOrder(raw) {
     productId: item.productId || item.product_id || product.id || "",
     productName: item.productName || item.product_name || product.name || "积分订单",
     amountLabel: item.amountLabel || item.priceLabel || formatMoney(amount, item.currency),
+    amountCents: Number(cents || 0),
+    currency: item.currency || "CNY",
     credits: Number(item.credits || item.creditAmount || product.credits || 0),
+    creditsGranted: Number(item.creditsGranted || item.credits_granted || 0),
     status: item.status || item.state || "pending",
+    paymentStatus: item.paymentStatus || item.payment_status || "",
+    paymentMode: item.paymentMode || item.payment_mode || "",
     channel: item.channel || item.paymentChannel || "wechat",
     createdAt: item.createdAt || item.created_at || "",
+    paidAt: item.paidAt || item.paid_at || "",
+    productSnapshot: item.productSnapshot || item.product_snapshot || null,
     raw: item,
   };
 }
@@ -87,13 +116,21 @@ function normalizeBillingRow(raw) {
     title: item.title || item.description || item.productName || item.reason || item.type || "账单记录",
     amountLabel: item.amountLabel || item.priceLabel || formatMoney(amount, item.currency),
     status: item.status || item.state || "recorded",
+    type: item.type || "",
+    orderId: item.orderId || item.order_id || "",
     createdAt: item.createdAt || item.created_at || item.paidAt || item.paid_at || "",
     raw: item,
   };
 }
 
 function normalizeBillingList(payload) {
-  return recordsFrom(payload, ["billing", "rows", "records", "items", "invoices", "creditTransactions", "paymentEvents"]).map(normalizeBillingRow);
+  var source = payload || {};
+  var rows = [];
+  var creditRows = recordsFrom(source.creditTransactions || {}, ["records", "items", "transactions"]);
+  var paymentRows = recordsFrom(source.paymentEvents || {}, ["records", "items", "events"]);
+  if (creditRows.length || paymentRows.length) rows = creditRows.concat(paymentRows);
+  else rows = recordsFrom(source, ["billing", "rows", "records", "items", "invoices"]);
+  return rows.map(normalizeBillingRow);
 }
 
 function listPricingProducts() {
@@ -124,4 +161,6 @@ module.exports = {
   getBilling: getBilling,
   normalizeProducts: normalizeProducts,
   normalizeOrderResult: normalizeOrderResult,
+  normalizeBillingList: normalizeBillingList,
+  normalizeBillingRow: normalizeBillingRow,
 };

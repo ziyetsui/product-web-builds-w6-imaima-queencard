@@ -148,6 +148,13 @@ Page({
       });
       return;
     }
+    if (nickname.length > 40) {
+      wx.showToast({
+        title: "昵称最多40个字",
+        icon: "none",
+      });
+      return;
+    }
     if (!api.isConfigured()) return;
 
     this.setData({

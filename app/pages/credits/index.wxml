@@ -12,6 +12,10 @@
     <text class="kicker">CREDIT BALANCE</text>
     <text class="balance-number">{{balance}}</text>
     <text class="balance-label">可用积分</text>
+    <view class="balance-meta">
+      <text>冻结 {{heldCredits}}</text>
+      <text>即将过期 {{expiringCredits}}</text>
+    </view>
     <view class="account-row">
       <text>{{userLabel}}</text>
       <view class="account-actions">

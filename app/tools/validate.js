@@ -305,6 +305,48 @@ function runTask8Fixtures() {
   assert.match(historySource, /statusFilter/);
 }
 
+function runTask9Fixtures() {
+  const assert = require("assert");
+  const credits = require(path.join(root, "services/credits.js"));
+  const billing = require(path.join(root, "services/billing.js"));
+
+  const balance = credits.normalizeBalance({
+    balance: 42,
+    availableCredits: 42,
+    heldCredits: 3,
+    expiringCredits: 5,
+    currency: "credits",
+  });
+  assert.equal(balance.balance, 42);
+  assert.equal(balance.availableCredits, 42);
+  assert.equal(balance.heldCredits, 3);
+  assert.equal(balance.expiringCredits, 5);
+
+  const history = credits.normalizeHistory({
+    creditTransactions: {
+      records: [{ id: "credit-1", amount: -2, reason: "generation", balanceAfter: 40 }],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    },
+  });
+  assert.equal(history.records.length, 1);
+  assert.equal(history.records[0].id, "credit-1");
+
+  const billingRows = billing.normalizeBillingList({
+    orders: { records: [{ id: "order-1", productName: "20 次创作包", amountCents: 1900 }] },
+    creditTransactions: { records: [{ id: "credit-1", reason: "generation", amount: -1 }] },
+    paymentEvents: { records: [{ id: "payment-1", type: "pay", message: "Paid", createdAt: "2026-08-04T00:00:00Z" }] },
+  });
+  assert.equal(billingRows.length, 2);
+  assert.equal(billingRows[0].id, "credit-1");
+  assert.equal(billingRows[1].id, "payment-1");
+}
+
+try {
+  runTask9Fixtures();
+} catch (error) {
+  fail(`Task 9 behavior fixture failed: ${error.message}`);
+}
+
 try {
   runTask8Fixtures();
 } catch (error) {

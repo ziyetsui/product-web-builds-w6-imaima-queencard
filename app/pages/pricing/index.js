@@ -4,28 +4,28 @@ var credits = require("../../services/credits.js");
 
 var FALLBACK_PACKS = [
   {
-    id: "starter",
-    name: "灵感包",
-    credits: 30,
+    id: "credits_20",
+    name: "20 次创作包",
+    credits: 20,
     price: "¥19",
     accent: "lemon",
-    desc: "适合试做爆款封面、单图改写和少量组图探索。",
+    desc: "适合轻量体验。",
   },
   {
-    id: "creator",
-    name: "创作者包",
-    credits: 120,
-    price: "¥59",
+    id: "credits_60",
+    name: "60 次创作包",
+    credits: 60,
+    price: "¥49",
     accent: "seafoam",
-    desc: "适合持续产出小红书图文，覆盖多轮生成和筛选。",
+    desc: "热门选择。",
   },
   {
-    id: "team",
-    name: "团队包",
-    credits: 360,
-    price: "¥159",
+    id: "credits_160",
+    name: "160 次创作包",
+    credits: 160,
+    price: "¥99",
     accent: "pumpkin",
-    desc: "适合矩阵账号、门店活动和批量素材测试。",
+    desc: "适合高频创作者。",
   },
 ];
 

@@ -89,7 +89,7 @@ test("all API routes await a genuinely asynchronous store and return concrete DT
   const me = await body(await app.fetch(new Request("http://local/api/miniapp/account/me", {
     headers: { authorization },
   })));
-  assert.equal(me.data.user.openid, "dev_async-user");
+  assert.equal(me.data.user.openid, undefined);
 
   const templates = await body(await app.fetch(new Request("http://local/api/miniapp/templates?page=1&limit=2")));
   assert.equal(Array.isArray(templates.data.records), true);
@@ -212,15 +212,16 @@ test("development mock-pay completes a PostgreSQL mock order and rejects non-moc
   assert.equal(first.data.idempotent, false);
   assert.equal(replay.data.order.id, first.data.order.id);
   assert.equal(replay.data.idempotent, true);
-  assert.equal((await store.getUser(created.data.order.userId)).balance, 30);
+  const ownerId = "wechat:wx-async-store:dev_async-user";
+  assert.equal((await store.getUser(ownerId)).balance, 30);
 
-  const manual = await store.createOrder({ id: "http-manual-order", userId: created.data.order.userId, productId: "credits_20", paymentMode: "manual", amountCents: 1200, credits: 20 });
+  const manual = await store.createOrder({ id: "http-manual-order", userId: ownerId, productId: "credits_20", paymentMode: "manual", amountCents: 1200, credits: 20 });
   const manualResponse = await app.fetch(new Request(`http://local/api/miniapp/orders/${manual.id}/mock-pay`, {
     method: "POST",
     headers: { authorization },
   }));
   assert.equal(manualResponse.status, 403);
-  assert.equal((await store.getUser(created.data.order.userId)).balance, 30);
+  assert.equal((await store.getUser(ownerId)).balance, 30);
   await app.close();
   await pool.end();
 });
@@ -250,9 +251,9 @@ test("HTTP order retries are owner scoped, immutable, and audited only on creati
 
   assert.equal(first.response.status, 201);
   assert.notEqual(first.payload.data.order.id, request.orderId);
-  assert.equal(first.payload.data.order.userId, "wechat:wx-async-store:dev_order-owner-a");
+  assert.equal(first.payload.data.order.userId, undefined);
   assert.equal(otherOwner.response.status, 201);
-  assert.equal(otherOwner.payload.data.order.userId, "wechat:wx-async-store:dev_order-owner-b");
+  assert.equal(otherOwner.payload.data.order.userId, undefined);
   assert.notEqual(otherOwner.payload.data.order.id, first.payload.data.order.id);
   assert.equal(replay.response.status, 200);
   assert.equal(replay.payload.data.order.id, first.payload.data.order.id);
@@ -262,9 +263,9 @@ test("HTTP order retries are owner scoped, immutable, and audited only on creati
   const firstAudits = await store.listPaymentAudit(new URLSearchParams({ orderId: first.payload.data.order.id }));
   const secondAudits = await store.listPaymentAudit(new URLSearchParams({ orderId: otherOwner.payload.data.order.id }));
   assert.equal(firstAudits.records.filter((event) => event.type === "create").length, 1);
-  assert.equal(firstAudits.records[0].userId, first.payload.data.order.userId);
+  assert.equal(firstAudits.records[0].userId, "wechat:wx-async-store:dev_order-owner-a");
   assert.equal(secondAudits.records.filter((event) => event.type === "create").length, 1);
-  assert.equal(secondAudits.records[0].userId, otherOwner.payload.data.order.userId);
+  assert.equal(secondAudits.records[0].userId, "wechat:wx-async-store:dev_order-owner-b");
 
   await app.close();
   await pool.end();
