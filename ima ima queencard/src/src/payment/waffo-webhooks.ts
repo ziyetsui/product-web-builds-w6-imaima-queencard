@@ -109,6 +109,27 @@ async function syncSubscription(
   );
 }
 
+async function syncFixedTermMembership(event: WaffoWebhookEvent) {
+  const context = await resolveUserId(event);
+  if (!context.userId || !context.product?.plan) return null;
+
+  const purchasedAt = validDate(event.timestamp) ?? new Date();
+  const membershipEndsAt = new Date(
+    purchasedAt.getTime() + context.product.validityDays * 86_400_000
+  );
+
+  return upsertCustomerByAuthUserId(context.userId, {
+    billingProvider: "waffo",
+    billingSubscriptionId: null,
+    billingProductId: resolveWaffoProductId(context.product.key),
+    billingCurrentPeriodEnd: membershipEndsAt,
+    plan:
+      context.product.plan === "BUSINESS"
+        ? SubscriptionPlan.BUSINESS
+        : SubscriptionPlan.PRO,
+  });
+}
+
 async function fulfillPayment(
   event: WaffoWebhookEvent,
   transType: CreditTransType
@@ -122,7 +143,11 @@ async function fulfillPayment(
   };
 
   if (transType === CreditTransType.SUBSCRIPTION) {
-    await syncSubscription(event);
+    if (event.data.billingPeriod) {
+      await syncSubscription(event);
+    } else {
+      await syncFixedTermMembership(event);
+    }
   }
 
   if (!context.userId) {
@@ -148,7 +173,7 @@ async function fulfillPayment(
     expiryDays: context.product.validityDays,
     remark:
       transType === CreditTransType.SUBSCRIPTION
-        ? `Waffo subscription credits: ${context.product.title}`
+        ? `Waffo membership credits: ${context.product.title}`
         : `Waffo credit pack: ${context.product.title}`,
   });
 }
@@ -165,7 +190,12 @@ async function recordRefund(event: WaffoWebhookEvent, succeeded: boolean) {
 export async function handleWaffoEvent(event: WaffoWebhookEvent) {
   switch (event.eventType) {
     case "order.completed":
-      return fulfillPayment(event, CreditTransType.ORDER_PAY);
+      return fulfillPayment(
+        event,
+        eventContext(event).product?.plan
+          ? CreditTransType.SUBSCRIPTION
+          : CreditTransType.ORDER_PAY
+      );
     case "subscription.activated":
     case "subscription.payment_succeeded":
       return fulfillPayment(event, CreditTransType.SUBSCRIPTION);

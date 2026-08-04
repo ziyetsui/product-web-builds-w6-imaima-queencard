@@ -33,3 +33,19 @@
 | `credit_studio` | `PROD_2Fg2b6EE1rvtCe1kpabtdV` |
 
 上述资源均为测试环境资源，未调用 `.publish()`。
+
+## CNY 固定期限会员（2026-08-04）
+
+Waffo 返回 `Currency CNY is not supported for subscription payments`，因此
+人民币月付、年付改为一次性购买固定期限会员，不自动续费。原订阅商品保留，
+以下四个测试商品用于 CNY checkout：
+
+| productKey | 有效期 | Waffo 一次性 Product ID |
+| --- | ---: | --- |
+| `creator_monthly` | 30 天 | `PROD_4QhrKp2eXclqdm4UUZQEQm` |
+| `creator_annual` | 365 天 | `PROD_3pbe7YcY1cOYk5GZMyH4bP` |
+| `studio_monthly` | 30 天 | `PROD_1FwRJKSoDnWF402udL9ADi` |
+| `studio_annual` | 365 天 | `PROD_1uq1zYqgSLiQYWkyg5AV76` |
+
+`order.completed` 对会员商品同时写入会员等级、固定到期时间和积分包；重复
+webhook 使用同一事件时间计算到期日，并继续由 delivery ID 幂等保护。

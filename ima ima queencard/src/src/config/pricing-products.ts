@@ -22,6 +22,7 @@ export interface PricingProduct {
   stripePriceEnv: string;
   creemProductEnv: string;
   waffoProductEnv: string;
+  waffoMode: PricingProductMode;
   creemBillingType: "recurring" | "onetime";
   creemBillingPeriod: "every-month" | "every-year" | null;
   priceUsd: number;
@@ -44,6 +45,7 @@ export const PRICING_PRODUCTS = [
     stripePriceEnv: "STRIPE_PRICE_CREATOR_MONTHLY",
     creemProductEnv: "CREEM_PRODUCT_CREATOR_MONTHLY",
     waffoProductEnv: "WAFFO_PRODUCT_CREATOR_MONTHLY",
+    waffoMode: "payment",
     creemBillingType: "recurring",
     creemBillingPeriod: "every-month",
     priceUsd: 14.9,
@@ -64,6 +66,7 @@ export const PRICING_PRODUCTS = [
     stripePriceEnv: "STRIPE_PRICE_CREATOR_ANNUAL",
     creemProductEnv: "CREEM_PRODUCT_CREATOR_ANNUAL",
     waffoProductEnv: "WAFFO_PRODUCT_CREATOR_ANNUAL",
+    waffoMode: "payment",
     creemBillingType: "recurring",
     creemBillingPeriod: "every-year",
     priceUsd: 149,
@@ -84,6 +87,7 @@ export const PRICING_PRODUCTS = [
     stripePriceEnv: "STRIPE_PRICE_STUDIO_MONTHLY",
     creemProductEnv: "CREEM_PRODUCT_STUDIO_MONTHLY",
     waffoProductEnv: "WAFFO_PRODUCT_STUDIO_MONTHLY",
+    waffoMode: "payment",
     creemBillingType: "recurring",
     creemBillingPeriod: "every-month",
     priceUsd: 39.9,
@@ -103,6 +107,7 @@ export const PRICING_PRODUCTS = [
     stripePriceEnv: "STRIPE_PRICE_STUDIO_ANNUAL",
     creemProductEnv: "CREEM_PRODUCT_STUDIO_ANNUAL",
     waffoProductEnv: "WAFFO_PRODUCT_STUDIO_ANNUAL",
+    waffoMode: "payment",
     creemBillingType: "recurring",
     creemBillingPeriod: "every-year",
     priceUsd: 399,
@@ -122,6 +127,7 @@ export const PRICING_PRODUCTS = [
     stripePriceEnv: "STRIPE_PRICE_CREDIT_CREATOR",
     creemProductEnv: "CREEM_PRODUCT_CREDIT_CREATOR",
     waffoProductEnv: "WAFFO_PRODUCT_CREDIT_CREATOR",
+    waffoMode: "payment",
     creemBillingType: "onetime",
     creemBillingPeriod: null,
     priceUsd: 14.9,
@@ -142,6 +148,7 @@ export const PRICING_PRODUCTS = [
     stripePriceEnv: "STRIPE_PRICE_CREDIT_STUDIO",
     creemProductEnv: "CREEM_PRODUCT_CREDIT_STUDIO",
     waffoProductEnv: "WAFFO_PRODUCT_CREDIT_STUDIO",
+    waffoMode: "payment",
     creemBillingType: "onetime",
     creemBillingPeriod: null,
     priceUsd: 39.9,
