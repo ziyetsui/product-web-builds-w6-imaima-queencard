@@ -1,9 +1,26 @@
 export interface GptProtoConfig {
+  route: "primary" | "fallback";
   apiKey: string;
   baseUrl: string;
   timeoutMs: number;
   pollIntervalMs: number;
   maxPollAttempts: number;
+}
+
+export class GptProtoRequestError extends Error {
+  readonly code: string;
+
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly responseBody: unknown
+  ) {
+    super(message);
+    this.name = "GptProtoRequestError";
+    this.code = isInsufficientBalanceResponse(status, responseBody)
+      ? "GPTPROTO_INSUFFICIENT_BALANCE"
+      : "GPTPROTO_REQUEST_FAILED";
+  }
 }
 
 export interface GptProtoImageResult {
@@ -65,6 +82,7 @@ export function getGptProtoConfig(): GptProtoConfig {
   }
 
   return {
+    route: "primary",
     apiKey,
     baseUrl: (process.env.GPTPROTO_BASE_URL || DEFAULT_BASE_URL).replace(
       /\/$/,
@@ -74,6 +92,70 @@ export function getGptProtoConfig(): GptProtoConfig {
     pollIntervalMs: Number(process.env.GPTPROTO_POLL_INTERVAL_MS || 2_000),
     maxPollAttempts: Number(process.env.GPTPROTO_MAX_POLL_ATTEMPTS || 120),
   };
+}
+
+export function getGptProtoConfigs(): GptProtoConfig[] {
+  const primary = getGptProtoConfig();
+  const fallbackApiKey = process.env.GPTPROTO_FALLBACK_API_KEY?.trim();
+  if (!fallbackApiKey) return [primary];
+
+  return [
+    primary,
+    {
+      ...primary,
+      route: "fallback",
+      apiKey: fallbackApiKey,
+      baseUrl: (
+        process.env.GPTPROTO_FALLBACK_BASE_URL || primary.baseUrl
+      ).replace(/\/$/, ""),
+    },
+  ];
+}
+
+function responseMessage(body: unknown) {
+  if (typeof body === "string") return body;
+  if (!body || typeof body !== "object") return "";
+  const value = body as {
+    message?: unknown;
+    error?: unknown;
+    data?: { message?: unknown; error?: unknown };
+  };
+  const nested =
+    value.message ??
+    (typeof value.error === "object" && value.error
+      ? (value.error as { message?: unknown }).message
+      : value.error) ??
+    value.data?.message ??
+    value.data?.error;
+  return typeof nested === "string" ? nested : JSON.stringify(nested ?? body);
+}
+
+function isInsufficientBalanceResponse(status: number, body: unknown) {
+  return (
+    status === 402 ||
+    (status === 403 &&
+      /insufficient\s+(balance|credit)|balance\s+is\s+not\s+enough|余额不足|餘額不足/i.test(
+        responseMessage(body)
+      ))
+  );
+}
+
+export function isGptProtoInsufficientBalanceError(error: unknown) {
+  return (
+    error instanceof GptProtoRequestError &&
+    error.code === "GPTPROTO_INSUFFICIENT_BALANCE"
+  );
+}
+
+export function shouldFailOverGptProto(error: unknown) {
+  if (isGptProtoInsufficientBalanceError(error)) return true;
+  if (error instanceof GptProtoRequestError) {
+    return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+  }
+  return error instanceof Error &&
+    (/timeout|timed out|fetch failed|connection|ECONN|ENOTFOUND|EAI_AGAIN/i.test(error.message) ||
+      error.name === "AbortError" ||
+      error.name === "TimeoutError");
 }
 
 function withTimeout(timeoutMs: number) {
@@ -100,7 +182,15 @@ async function requestJson<T>(
         },
       });
       const text = await response.text();
-      const body = text ? JSON.parse(text) : null;
+      const body = text
+        ? (() => {
+            try {
+              return JSON.parse(text);
+            } catch {
+              return text;
+            }
+          })()
+        : null;
       return { response, text, body };
     };
 
@@ -109,16 +199,23 @@ async function requestJson<T>(
 
     // GPTProto docs show both "Bearer sk-..." and raw "Authorization: sk-..."
     // examples across endpoints. Retry once with the raw key for v3 model pages.
-    if (first.response.status === 401 || first.response.status === 403) {
+    if (
+      (first.response.status === 401 || first.response.status === 403) &&
+      !isInsufficientBalanceResponse(first.response.status, first.body)
+    ) {
       const second = await requestWithAuth(config.apiKey);
       if (second.response.ok) return second.body as T;
-      throw new Error(
-        `GPTProto request failed: ${second.response.status} ${second.response.statusText} ${second.text}`
+      throw new GptProtoRequestError(
+        `GPTProto request failed: ${second.response.status} ${second.response.statusText}`,
+        second.response.status,
+        second.body
       );
     }
 
-    throw new Error(
-      `GPTProto request failed: ${first.response.status} ${first.response.statusText} ${first.text}`
+    throw new GptProtoRequestError(
+      `GPTProto request failed: ${first.response.status} ${first.response.statusText}`,
+      first.response.status,
+      first.body
     );
   } finally {
     clearTimeout(timeout);
@@ -297,9 +394,9 @@ function toBlob(file: GptProtoImageFile) {
 }
 
 export async function createOpenAIImageEdit(
-  params: OpenAIImageEditParams
+  params: OpenAIImageEditParams,
+  config = getGptProtoConfig()
 ): Promise<GptProtoImageResult> {
-  const config = getGptProtoConfig();
   const form = new FormData();
   form.set("model", params.model);
   form.set("prompt", params.prompt);
@@ -374,9 +471,9 @@ function sleep(ms: number) {
 
 export async function pollGptProtoV3Task(
   task: { id?: string; taskId?: string; data?: { id?: string } },
-  params: GptProtoPollParams = {}
+  params: GptProtoPollParams = {},
+  config = getGptProtoConfig()
 ) {
-  const config = getGptProtoConfig();
   const taskId = getTaskId(task);
   if (!taskId) {
     throw new Error("GPTProto task id is missing");
@@ -458,7 +555,7 @@ export async function createGptProtoV3ImagePrediction(params: {
   endpoint: string;
   body: Record<string, unknown>;
   resultEndpoint?: string;
-}): Promise<GptProtoImageResult> {
+}, config = getGptProtoConfig()): Promise<GptProtoImageResult> {
   const task = await requestJson<{
     id?: string;
     taskId?: string;
@@ -474,7 +571,7 @@ export async function createGptProtoV3ImagePrediction(params: {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params.body),
-  });
+  }, config);
 
   const endpoint = getPredictionResultEndpoint(task, params.resultEndpoint);
   const resultUrl = getPredictionResultUrl(task);
@@ -495,7 +592,8 @@ export async function createGptProtoV3ImagePrediction(params: {
       taskId: task.taskId,
       data: { id: task.data?.id },
     },
-    { endpoint }
+    { endpoint },
+    config
   );
 
   return {
