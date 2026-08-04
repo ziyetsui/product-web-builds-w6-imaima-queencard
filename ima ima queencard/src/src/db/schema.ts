@@ -526,6 +526,19 @@ export const generationTasks = pgTable(
   })
 );
 
+export const generationProviderHealth = pgTable("generation_provider_health", {
+  provider: text("provider").primaryKey(),
+  status: text("status").default("available").notNull(),
+  reason: text("reason"),
+  errorCode: text("error_code"),
+  balanceCny: integer("balance_cny"),
+  unavailableUntil: timestamp("unavailable_until"),
+  lastErrorAt: timestamp("last_error_at"),
+  lastSuccessAt: timestamp("last_success_at"),
+  lastAlertAt: timestamp("last_alert_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const generationConcurrencyLeases = pgTable(
   "generation_concurrency_leases",
   {

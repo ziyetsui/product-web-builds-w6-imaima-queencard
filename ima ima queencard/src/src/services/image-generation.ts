@@ -22,6 +22,7 @@ import {
 } from "@/db";
 import { ApiError } from "@/lib/api/error";
 import { creditService } from "@/services/credit";
+import { assertGenerationProviderAvailable } from "@/services/generation-provider-health";
 import { getImageGenerationModelMaxOutputCount } from "@/config/image-generation-models";
 
 export type ImageGenerationCapability =
@@ -413,6 +414,7 @@ export async function createImageGenerationTask(
   input: ImageGenerationCreateInput
 ) {
   const normalized = normalizeCreateInput(input);
+  await assertGenerationProviderAvailable();
   const requestedCredits = calculateModelCredits(normalized.model, {
     outputNumber: normalized.outputCount,
     resolution: normalized.resolution,
