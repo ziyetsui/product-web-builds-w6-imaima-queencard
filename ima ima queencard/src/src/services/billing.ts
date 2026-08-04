@@ -119,9 +119,13 @@ export async function createWaffoCheckout(
   try {
     const session = await getWaffoClient().checkout.authenticated.create({
       productId: waffoProductId,
-      currency: "USD",
+      currency: "CNY",
       buyerIdentity: userId,
       buyerEmail: user.email,
+      billingDetail: {
+        country: "CN",
+        isBusiness: false,
+      },
       successUrl: checkoutSuccessUrl,
       orderMerchantExternalId: requestId,
       metadata: {
