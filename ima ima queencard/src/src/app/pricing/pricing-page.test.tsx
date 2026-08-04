@@ -48,16 +48,19 @@ describe("PricingPage", () => {
     expect(screen.getByText("¥269")).toBeInTheDocument();
   });
 
-  it("links the free plan to registration", async () => {
+  it("hides the free plan from monthly and yearly pricing", async () => {
     const user = userEvent.setup();
     render(await PricingPage({}));
 
     await user.click(screen.getByRole("button", { name: "月付" }));
 
-    expect(screen.getByRole("link", { name: "免费开始" })).toHaveAttribute(
-      "href",
-      "/register"
-    );
+    expect(screen.queryByRole("heading", { name: "免费版" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "免费开始" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /年付/ }));
+
+    expect(screen.queryByRole("heading", { name: "免费版" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "免费开始" })).not.toBeInTheDocument();
   });
 
   it("renders checkout buttons for each selected pricing mode", async () => {
