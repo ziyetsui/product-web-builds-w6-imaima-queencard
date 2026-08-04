@@ -211,6 +211,80 @@ if (!/getImageAssetDownloadUrl/.test(resultPageSource) || !/assetId/.test(result
   fail("result page must prefer safe asset download endpoint before direct image URL fallback");
 }
 
+function runTask8Fixtures() {
+  const assert = require("assert");
+  const generation = require(path.join(root, "services/generation.js"));
+  const generateSource = fs.readFileSync(path.join(root, "pages/generate/index.js"), "utf8");
+  const resultSource = fs.readFileSync(path.join(root, "pages/result/index.js"), "utf8");
+  const historySource = fs.readFileSync(path.join(root, "pages/history/index.js"), "utf8");
+
+  const restored = generation.restoreReferenceState({
+    referenceImagePaths: encodeURIComponent(JSON.stringify(["/tmp/one.jpg", "/tmp/two.jpg", "/tmp/three.jpg", "/tmp/four.jpg"])),
+    referenceAssetIds: encodeURIComponent(JSON.stringify(["asset-one", "asset-two", "asset-three", "asset-four"])),
+  }, 3);
+  assert.deepEqual(restored.referenceImagePaths, ["/tmp/one.jpg", "/tmp/two.jpg", "/tmp/three.jpg"]);
+  assert.deepEqual(restored.referenceAssetIds, ["asset-one", "asset-two", "asset-three"]);
+
+  const request = generation.buildGenerationRequest({
+    capability: "image-edit",
+    model: "gpt-image-2-edit",
+    prompt: "make a card",
+    topic: "launch",
+    templateId: "template-1",
+    sourceTaskId: "source-1",
+    outputCount: 2,
+    aspectRatio: "3:4",
+    resolution: "1k",
+  }, [
+    { url: "https://cdn.example.com/one.jpg", assetId: "asset-one" },
+    { url: "https://cdn.example.com/two.jpg", assetId: "asset-two" },
+  ]);
+  assert.deepEqual(request.referenceImagePaths, undefined);
+  assert.deepEqual(request.referenceImages, ["https://cdn.example.com/one.jpg", "https://cdn.example.com/two.jpg"]);
+  assert.deepEqual(request.referenceAssetIds, ["asset-one", "asset-two"]);
+  assert.equal(request.templateId, "template-1");
+  assert.equal(request.sourceTaskId, "source-1");
+
+  assert.equal(generation.isCurrentPollRequest("poll-1", "poll-2"), false);
+  assert.equal(generation.isCurrentPollRequest("poll-2", "poll-2"), true);
+  assert.equal(generation.pollDecision(8, 8, false).shouldPoll, false);
+  assert.equal(generation.pollDecision(0, 8, true).shouldPoll, true);
+
+  const task = generation.normalizeTask({
+    id: "task-1",
+    status: "completed",
+    images: ["https://cdn.example.com/output.jpg"],
+    imageAssets: [{ assetId: "generated-1", url: "https://cdn.example.com/output.jpg" }],
+    referenceImages: ["https://cdn.example.com/input.jpg"],
+    prompt: "make a card",
+  });
+  assert.deepEqual(task.images, ["https://cdn.example.com/output.jpg"]);
+  assert.equal(generation.normalizeHistoryRecord({
+    status: "completed",
+    images: [],
+    referenceImages: ["https://cdn.example.com/input.jpg"],
+  }).firstImage, "");
+  assert.match(generation.taskFailureMessage({ status: "failed", errorCode: "PROVIDER_TIMEOUT" }), /生成|稍后/);
+  assert.equal(generation.canSaveOutput(task, task.imageItems[0]), true);
+  assert.equal(generation.canSaveOutput(generation.normalizeTask({
+    status: "completed",
+    images: ["https://cdn.example.com/input.jpg"],
+    referenceImages: ["https://cdn.example.com/input.jpg"],
+  }), { url: "https://cdn.example.com/input.jpg" }), false);
+
+  const continuationUrl = generation.buildGenerateUrlFromTask(task, { referenceImage: task.images[0] });
+  assert.match(continuationUrl, /referenceImagePaths=/);
+  assert.match(continuationUrl, /output.jpg/);
+  assert.match(resultSource, /backToGenerate/);
+  assert.match(historySource, /statusFilter/);
+}
+
+try {
+  runTask8Fixtures();
+} catch (error) {
+  fail(`Task 8 behavior fixture failed: ${error.message}`);
+}
+
 const generatePageSource = fs.readFileSync(path.join(root, "pages/generate/index.js"), "utf8");
 if (!/DEFAULT_MODEL_LABEL\s*=\s*"GPT Image 2"/.test(generatePageSource)) {
   fail("generate page default model label constant must be GPT Image 2");

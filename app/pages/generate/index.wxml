@@ -52,7 +52,7 @@
 
     <view class="section-head compact-head">
       <text class="section-title">参考图</text>
-      <text class="section-hint">{{capability == 'text-to-image' ? '纯文生图不使用参考图' : '最多 3 张'}}</text>
+      <text class="section-hint">{{capability == 'text-to-image' ? '纯文生图不使用参考图' : '最多 ' + maxReferenceImages + ' 张'}}</text>
     </view>
 
     <view wx:if="{{capability == 'text-to-image'}}" class="text-mode-card">

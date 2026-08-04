@@ -1,11 +1,11 @@
 <view class="page">
   <view class="topbar">
-    <button class="icon-button" bindtap="createAnother">‹</button>
+    <button class="icon-button" bindtap="backToGenerate">‹</button>
     <view class="brand">
       <text class="brand-main">ima ima</text>
       <text class="brand-accent">queencard</text>
     </view>
-    <button class="refresh-button" loading="{{loading}}" bindtap="manualRefresh">刷新</button>
+      <button class="refresh-button" loading="{{loading}}" bindtap="manualRefresh">刷新</button>
   </view>
 
   <view wx:if="{{!apiReady}}" class="status-card">
@@ -30,6 +30,7 @@
         <text wx:if="{{task.outputCount}}" class="meta-chip">{{task.outputCount}} 张</text>
       </view>
       <text wx:if="{{error}}" class="error">{{error}}</text>
+      <text wx:if="{{pollExhausted}}" class="poll-note">自动刷新已暂停，点击右上角刷新继续。</text>
     </view>
 
     <view class="action-row">
@@ -41,8 +42,8 @@
       <view wx:for="{{imageItems}}" wx:key="url" class="image-card">
         <image class="result-image" mode="aspectFill" src="{{item.url}}" data-current="{{item.url}}" bindtap="previewImage" />
         <view class="image-actions">
-          <button class="save-button" data-url="{{item.url}}" data-index="{{index}}" bindtap="saveImage">保存</button>
-          <button class="reuse-button" data-url="{{item.url}}" bindtap="reuseImage">用这张继续生成</button>
+          <button class="save-button" data-index="{{index}}" loading="{{savingIndex == index}}" bindtap="saveImage">保存</button>
+          <button class="reuse-button" data-index="{{index}}" bindtap="continueEditing">用这张继续编辑</button>
         </view>
       </view>
     </view>
@@ -50,7 +51,7 @@
     <view wx:else class="empty-card">
       <view class="spinner"></view>
       <text class="empty-title">{{loading ? '正在同步结果' : '还没有图片结果'}}</text>
-      <text class="empty-desc">任务完成后，后端返回的 images/resultImages/outputImages 会显示在这里。</text>
+      <text class="empty-desc">{{task.status == 'failed' || task.status == 'error' ? '本次没有生成输出，可以点击重新生成。' : '任务完成后，后端返回的生成输出会显示在这里。'}}</text>
     </view>
 
     <button class="primary-button" bindtap="createAnother">再生成一组</button>

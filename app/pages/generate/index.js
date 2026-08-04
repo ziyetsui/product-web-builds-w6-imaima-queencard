@@ -36,7 +36,7 @@ function firstReferenceImage(template) {
   return "";
 }
 
-function uniqueImages(images) {
+function uniqueImages(images, limit) {
   var seen = {};
   var result = [];
   var i = 0;
@@ -47,7 +47,7 @@ function uniqueImages(images) {
     seen[image] = true;
     result.push(image);
   }
-  return result.slice(0, MAX_REFERENCE_IMAGES);
+  return result.slice(0, limit || MAX_REFERENCE_IMAGES);
 }
 
 function chooseImages(count) {
@@ -141,6 +141,8 @@ function publicModel(record) {
     value: record.key || record.value,
     capability: record.capability || "",
     capabilities: record.capabilities || [],
+    referenceLimits: record.referenceLimits || { min: 0, max: MAX_REFERENCE_IMAGES },
+    outputLimit: record.outputLimit || 4,
   };
 }
 
@@ -165,6 +167,7 @@ Page({
     referenceImagePath: "",
     referenceImagePaths: [],
     referenceAssetIds: [],
+    maxReferenceImages: MAX_REFERENCE_IMAGES,
     templateId: "",
     templateTitle: "",
     topic: "",
@@ -254,7 +257,8 @@ Page({
 
   prefillFromOptions: function (options) {
     var updates = {};
-    var referenceImage = decodeOption(options.referenceImage);
+    var restoredReferences = generation.restoreReferenceState(options, MAX_REFERENCE_IMAGES);
+    var referenceImage = restoredReferences.referenceImagePath;
     var prompt = decodeOption(options.prompt);
     var topic = decodeOption(options.topic);
     var sourceTaskId = decodeOption(options.sourceTaskId);
@@ -283,17 +287,18 @@ Page({
       updates.modeIndex = modeIndexFor(this.data.modes, capability);
       updates.modeLabel = this.data.modes[updates.modeIndex].label;
       updates.availableModels = modeModels;
-      updates.modelIndex = modelIndex;
-      updates.modelLabel = modeModels[modelIndex].label;
+      updates.modelIndex = modelIndex >= 0 ? modelIndex : 0;
+      updates.modelLabel = modeModels[updates.modelIndex] ? modeModels[updates.modelIndex].label : DEFAULT_MODEL_LABEL;
     } else if (model) {
       modelIndex = modelIndexFor(modeModels, model);
       updates.modelIndex = modelIndex;
       updates.modelLabel = modeModels[modelIndex].label;
     }
 
-    if (referenceImage) {
-      updates.referenceImagePath = referenceImage;
-      updates.referenceImagePaths = [referenceImage];
+    if (restoredReferences.referenceImagePaths.length) {
+      updates.referenceImagePath = restoredReferences.referenceImagePath;
+      updates.referenceImagePaths = restoredReferences.referenceImagePaths;
+      updates.referenceAssetIds = restoredReferences.referenceAssetIds;
     }
     if (prompt) updates.prompt = prompt;
     if (topic) updates.topic = topic;
@@ -325,11 +330,14 @@ Page({
         var capability = MODE_IMAGE_EDIT;
         var modeModels = modelsForCapability(page.data.models, capability);
         var modelIndex = modelIndexFor(modeModels, DEFAULT_MODEL_VALUE);
+        var referenceImages = template.referenceImages || [];
         var referenceImage = firstReferenceImage(template);
+        var referenceImagePaths = uniqueImages(referenceImages.length ? referenceImages : [referenceImage], MAX_REFERENCE_IMAGES);
         page.setData({
           templateTitle: template.title || "",
-          referenceImagePath: referenceImage,
-          referenceImagePaths: referenceImage ? [referenceImage] : [],
+          referenceImagePath: referenceImagePaths[0] || "",
+          referenceImagePaths: referenceImagePaths,
+          referenceAssetIds: [],
           prompt: template.prompt || seed.prompt || page.data.prompt,
           capability: capability,
           modeIndex: modeIndexFor(page.data.modes, capability),
@@ -413,10 +421,29 @@ Page({
     });
   },
 
+  getReferenceLimit: function () {
+    var model = this.data.availableModels[this.data.modelIndex] || {};
+    var limit = model.referenceLimits && Number(model.referenceLimits.max);
+    return Math.max(1, Math.min(MAX_REFERENCE_IMAGES, limit || MAX_REFERENCE_IMAGES));
+  },
+
+  clampReferencesForModel: function () {
+    var limit = this.getReferenceLimit();
+    var paths = (this.data.referenceImagePaths || []).slice(0, limit);
+    var assetIds = (this.data.referenceAssetIds || []).slice(0, paths.length);
+    this.setData({
+      maxReferenceImages: limit,
+      referenceImagePath: paths[0] || "",
+      referenceImagePaths: paths,
+      referenceAssetIds: assetIds,
+    });
+  },
+
   chooseReference: function () {
     var page = this;
     var current = this.data.referenceImagePaths || [];
-    var remaining = MAX_REFERENCE_IMAGES - current.length;
+    var limit = this.getReferenceLimit();
+    var remaining = limit - current.length;
 
     if (this.data.capability === MODE_TEXT_TO_IMAGE) {
       this.switchModeTo(MODE_IMAGE_EDIT);
@@ -429,7 +456,7 @@ Page({
 
     chooseImages(remaining)
       .then(function (paths) {
-        var next = uniqueImages(current.concat(paths));
+        var next = uniqueImages(current.concat(paths), limit);
         page.setData({
           referenceImagePath: next[0] || "",
           referenceImagePaths: next,
@@ -458,12 +485,14 @@ Page({
         var targetIndex = res.tapIndex;
         chooseImages(1).then(function (paths) {
           var next = page.data.referenceImagePaths.slice();
+          var assetIds = (page.data.referenceAssetIds || []).slice();
           next[targetIndex] = paths[0];
-          next = uniqueImages(next);
+          next = uniqueImages(next, page.getReferenceLimit());
+          assetIds[targetIndex] = "";
           page.setData({
             referenceImagePath: next[0] || "",
             referenceImagePaths: next,
-            referenceAssetIds: [],
+            referenceAssetIds: assetIds.slice(0, next.length),
           }, function () {
             page.scheduleEstimate();
           });
@@ -481,15 +510,18 @@ Page({
   removeReference: function (event) {
     var index = event && event.currentTarget ? Number(event.currentTarget.dataset.index) : -1;
     var next = this.data.referenceImagePaths.slice();
+    var assetIds = (this.data.referenceAssetIds || []).slice();
     if (index >= 0) {
       next.splice(index, 1);
+      assetIds.splice(index, 1);
     } else {
       next = [];
+      assetIds = [];
     }
     this.setData({
       referenceImagePath: next[0] || "",
       referenceImagePaths: next,
-      referenceAssetIds: [],
+      referenceAssetIds: assetIds,
       estimateText: "上传参考图后显示预计消耗",
       estimateLoading: false,
       estimateError: "",
@@ -520,22 +552,7 @@ Page({
   },
 
   estimatePayload: function () {
-    var model = this.data.availableModels[this.data.modelIndex];
-    var referenceImages = this.data.capability === MODE_TEXT_TO_IMAGE ? [] : this.data.referenceImagePaths;
-    return {
-      source: "wechat-miniapp",
-      model: model.value,
-      capability: this.data.capability,
-      prompt: trim(this.data.prompt),
-      topic: trim(this.data.topic),
-      templateId: this.data.templateId,
-      sourceTaskId: this.data.sourceTaskId,
-      referenceImages: referenceImages,
-      referenceAssetIds: this.data.capability === MODE_TEXT_TO_IMAGE ? [] : (this.data.referenceAssetIds || []),
-      outputCount: this.data.outputCounts[this.data.countIndex],
-      aspectRatio: this.data.capability === MODE_TEXT_TO_IMAGE ? "1:1" : "3:4",
-      resolution: "1k",
-    };
+    return generation.buildGenerationRequest(this.data);
   },
 
   scheduleEstimate: function () {
@@ -617,13 +634,16 @@ Page({
     this.setData({
       modelIndex: index,
       modelLabel: this.data.availableModels[index].label,
+    }, function () {
+      this.clampReferencesForModel();
+      this.scheduleEstimate();
     });
-    this.scheduleEstimate();
   },
 
   switchModeTo: function (capability) {
     var modeModels = modelsForCapability(this.data.models, capability);
     var modelIndex = modelIndexFor(modeModels, defaultModelForCapability(capability));
+    if (!modeModels.length) return;
     this.setData({
       capability: capability,
       modeIndex: modeIndexFor(this.data.modes, capability),
@@ -631,6 +651,8 @@ Page({
       availableModels: modeModels,
       modelIndex: modelIndex,
       modelLabel: modeModels[modelIndex].label,
+    }, function () {
+      this.clampReferencesForModel();
     });
   },
 
@@ -682,8 +704,6 @@ Page({
     var page = this;
     var prompt = trim(this.data.prompt);
     var topic = trim(this.data.topic);
-    var model = this.data.availableModels[this.data.modelIndex];
-    var outputCount = this.data.outputCounts[this.data.countIndex];
     var capability = this.data.capability;
     var referenceImagePaths = capability === MODE_TEXT_TO_IMAGE ? [] : this.data.referenceImagePaths;
 
@@ -723,34 +743,16 @@ Page({
           if (isRemoteUrl(referenceImagePath)) {
             return Promise.resolve({ url: referenceImagePath });
           }
-          return api.uploadReferenceImage(referenceImagePath);
+          return generation.uploadReferenceImage(referenceImagePath);
         }));
       })
       .then(function (uploads) {
-        var referenceUrls = uploads.map(function (upload) {
-          return upload.url || upload.fileUrl || upload.assetUrl || upload.key || upload.path;
-        }).filter(Boolean);
-        var referenceAssetIds = uploads.map(function (upload) {
-          return upload.assetId || upload.asset_id || "";
-        }).filter(Boolean);
-        if (capability !== MODE_TEXT_TO_IMAGE && referenceUrls.length === 0 && referenceAssetIds.length === 0) {
-          throw new Error("上传成功但没有返回图片 assetId");
+        var request = generation.buildGenerationRequest(page.data, uploads);
+        if (capability !== MODE_TEXT_TO_IMAGE && !request.referenceImages.length && !request.referenceAssetIds.length) {
+          throw new Error("上传成功但没有返回可用的参考图");
         }
-        page.setData({ referenceAssetIds: referenceAssetIds });
-        return api.createGenerationTask({
-          source: "wechat-miniapp",
-          model: model.value,
-          capability: capability,
-          prompt: topic ? prompt + "\n\n我的主题：" + topic : prompt,
-          topic: topic,
-          templateId: page.data.templateId,
-          sourceTaskId: page.data.sourceTaskId,
-          referenceImages: capability === MODE_TEXT_TO_IMAGE ? [] : referenceUrls,
-          referenceAssetIds: capability === MODE_TEXT_TO_IMAGE ? [] : referenceAssetIds,
-          outputCount: outputCount,
-          aspectRatio: capability === MODE_TEXT_TO_IMAGE ? "1:1" : "3:4",
-          resolution: "1k",
-        });
+        page.setData({ referenceAssetIds: request.referenceAssetIds });
+        return generation.createTask(request);
       })
       .then(function (result) {
         var taskId = taskIdFrom(result);

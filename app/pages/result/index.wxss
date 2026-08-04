@@ -143,6 +143,15 @@
   line-height: 1.4;
 }
 
+.poll-note {
+  display: block;
+  margin-top: 14rpx;
+  color: rgba(13, 13, 13, 0.62);
+  font-size: 23rpx;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
 .action-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

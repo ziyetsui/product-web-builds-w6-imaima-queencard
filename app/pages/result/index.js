@@ -2,8 +2,19 @@ var env = require("../../config/env.js");
 var api = require("../../services/api.js");
 var generation = require("../../services/generation.js");
 
+var MAX_POLL_ATTEMPTS = 12;
+
+function decodeOption(value) {
+  if (!value) return "";
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    return String(value || "");
+  }
+}
+
 function isDone(status) {
-  return ["completed", "succeeded", "success", "failed", "error", "canceled", "cancelled"].indexOf(status) >= 0;
+  return generation.terminalStatuses.indexOf(generation.statusValue(status)) >= 0;
 }
 
 function previousGeneratePage() {
@@ -15,26 +26,10 @@ function previousGeneratePage() {
 
 function safeAssetFromImage(image) {
   var item = image || {};
-  var url = typeof item === "string" ? item : item.url;
-  var assetId = typeof item === "string" ? "" : item.assetId;
-  if (assetId) {
-    return {
-      assetId: assetId,
-      encoded: false,
-      url: url || "",
-    };
-  }
-  if (!url || url.indexOf("http") !== 0) {
-    return {
-      assetId: "",
-      encoded: false,
-      url: url || "",
-    };
-  }
   return {
-    assetId: encodeURIComponent(url),
-    encoded: true,
-    url: url,
+    assetId: typeof item === "string" ? "" : (item.assetId || ""),
+    downloadUrl: typeof item === "string" ? "" : (item.downloadUrl || item.signedUrl || ""),
+    url: typeof item === "string" ? item : (item.url || ""),
   };
 }
 
@@ -42,22 +37,18 @@ function saveDownloadedFile(filePath) {
   wx.saveImageToPhotosAlbum({
     filePath: filePath,
     success: function () {
-      wx.showToast({
-        title: "已保存",
-        icon: "success",
-      });
+      wx.showToast({ title: "已保存", icon: "success" });
     },
     fail: function () {
-      wx.showToast({
-        title: "保存失败",
-        icon: "none",
-      });
+      wx.showToast({ title: "保存失败，请检查相册权限", icon: "none" });
     },
   });
 }
 
 Page({
   pollTimer: null,
+  pollRequestVersion: 0,
+  pollAttempts: 0,
 
   data: {
     apiReady: api.isConfigured(),
@@ -70,10 +61,13 @@ Page({
     imageItems: [],
     error: "",
     regenerating: false,
+    savingIndex: -1,
+    pollExhausted: false,
+    maxPollAttempts: MAX_POLL_ATTEMPTS,
   },
 
   onLoad: function (options) {
-    var taskId = options && options.taskId ? decodeURIComponent(options.taskId) : "";
+    var taskId = options && options.taskId ? decodeOption(options.taskId) : "";
     this.setData({
       apiReady: api.isConfigured(),
       taskId: taskId,
@@ -81,9 +75,8 @@ Page({
   },
 
   onShow: function () {
-    if (!this.data.apiReady) return;
-    if (!this.data.taskId) return;
-    this.fetchTask();
+    if (!this.data.apiReady || !this.data.taskId) return;
+    this.fetchTask({ manual: true });
   },
 
   onUnload: function () {
@@ -95,26 +88,44 @@ Page({
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
+    this.pollRequestVersion += 1;
   },
 
   schedulePolling: function () {
     var page = this;
-    this.stopPolling();
+    var decision = generation.pollDecision(this.pollAttempts, MAX_POLL_ATTEMPTS, false);
+    if (!decision.shouldPoll) {
+      this.setData({
+        pollExhausted: true,
+        statusDesc: "自动刷新已暂停，请点击刷新继续。",
+      });
+      return;
+    }
+    if (this.pollTimer) clearTimeout(this.pollTimer);
     this.pollTimer = setTimeout(function () {
-      page.fetchTask();
+      page.pollTimer = null;
+      page.fetchTask({ manual: false });
     }, env.POLL_INTERVAL_MS);
   },
 
-  fetchTask: function () {
+  fetchTask: function (options) {
     var page = this;
-    if (!this.data.taskId || this.data.loading) return;
+    var manual = Boolean(options && options.manual);
+    var requestId = "poll-" + (this.pollRequestVersion + 1);
+    if (!this.data.taskId || (this.data.loading && !manual)) return;
+    this.stopPolling();
+    if (manual) this.pollAttempts = 0;
+    this.pollAttempts += 1;
+    requestId = "poll-" + this.pollRequestVersion;
     this.setData({
       loading: true,
       error: "",
+      pollExhausted: false,
     });
 
     generation.getTask(this.data.taskId)
       .then(function (result) {
+        if (!generation.isCurrentPollRequest(requestId, "poll-" + page.pollRequestVersion)) return;
         var task = generation.normalizeTask(result);
         page.setData({
           loading: false,
@@ -124,137 +135,95 @@ Page({
           images: task.images,
           imageItems: task.imageItems,
           error: "",
+          pollExhausted: false,
         });
-        if (!isDone(task.status)) {
-          page.schedulePolling();
-        }
+        if (!isDone(task.status)) page.schedulePolling();
       })
       .catch(function (error) {
+        if (!generation.isCurrentPollRequest(requestId, "poll-" + page.pollRequestVersion)) return;
         page.setData({
           loading: false,
-          error: error.message || "拉取任务失败",
+          error: error.message || "拉取任务失败，请点击刷新重试。",
         });
         page.schedulePolling();
       });
   },
 
   openHistory: function () {
-    wx.navigateTo({
-      url: "/pages/history/index",
-      fail: function () {
-        wx.showModal({
-          title: "我的作品未注册",
-          content: "历史页会在 Task 3 加入 app.json 后打开。本次只接入结果页入口和服务调用。",
-          showCancel: false,
-        });
-      },
-    });
+    wx.navigateTo({ url: "/pages/history/index" });
+  },
+
+  backToGenerate: function () {
+    this.stopPolling();
+    if (previousGeneratePage()) {
+      wx.navigateBack({ delta: 1 });
+      return;
+    }
+    wx.reLaunch({ url: "/pages/generate/index" });
+  },
+
+  continueEditing: function (event) {
+    var index = Number(event && event.currentTarget ? event.currentTarget.dataset.index : 0);
+    var selected = this.data.imageItems[index] || this.data.imageItems[0] || null;
+    var task = this.data.task || {};
+    var references = generation.continuationReferenceState(task, selected && selected.url, 3);
+    var previous = previousGeneratePage();
+    var updates = {
+      referenceImagePath: references.referenceImagePath,
+      referenceImagePaths: references.referenceImagePaths,
+      referenceAssetIds: [],
+      capability: "image-edit",
+      sourceTaskId: task.id || this.data.taskId,
+      prompt: task.prompt || "",
+      topic: task.topic || "",
+      templateId: task.templateId || "",
+    };
+
+    this.stopPolling();
+    if (previous && typeof previous.setData === "function") {
+      previous.setData(updates);
+      wx.navigateBack({ delta: 1 });
+      return;
+    }
+    wx.navigateTo({ url: generation.buildGenerateUrlFromTask(task, { referenceImage: selected && selected.url }) });
   },
 
   reuseImage: function (event) {
-    var imageUrl = event.currentTarget.dataset.url || this.data.images[0] || "";
-    var task = this.data.task || {};
-    var url = "";
-    var previous = null;
-
-    if (!imageUrl) {
-      wx.showToast({
-        title: "还没有可复用图片",
-        icon: "none",
-      });
-      return;
-    }
-
-    this.stopPolling();
-    url = generation.buildGenerateUrlFromTask(task, {
-      referenceImage: imageUrl,
-    });
-    previous = previousGeneratePage();
-
-    if (previous && typeof previous.setData === "function") {
-      previous.setData({
-        referenceImagePath: imageUrl,
-        prompt: task.prompt || "",
-        topic: task.topic || "",
-        templateId: task.templateId || "",
-        sourceTaskId: task.id || this.data.taskId,
-      });
-      wx.navigateBack({
-        delta: 1,
-      });
-      return;
-    }
-
-    wx.navigateTo({
-      url: url,
-    });
+    this.continueEditing(event);
   },
 
   regenerateTask: function () {
     var page = this;
     if (!this.data.apiReady || !this.data.taskId || this.data.regenerating) return;
-
     this.stopPolling();
-    this.setData({
-      regenerating: true,
-      error: "",
-    });
-
+    this.setData({ regenerating: true, error: "" });
     generation.regenerateTask(this.data.taskId)
       .then(function (result) {
         var nextTaskId = result.taskId || (result.task && result.task.id) || "";
-        page.setData({
-          regenerating: false,
-        });
-        if (!nextTaskId) {
-          wx.showModal({
-            title: "同款任务已提交",
-            content: "后端没有返回新的 taskId，请检查 /api/miniapp/image-generations/:taskId/regenerate 响应格式。",
-            showCancel: false,
-          });
-          return;
-        }
-        wx.redirectTo({
-          url: "/pages/result/index?taskId=" + encodeURIComponent(nextTaskId),
-          fail: function () {
-            page.setData({
-              taskId: nextTaskId,
-              task: null,
-              images: [],
-              statusTitle: "正在读取任务",
-              statusDesc: "页面会自动刷新任务状态。",
-            });
-            page.fetchTask();
-          },
-        });
+        if (!nextTaskId) throw new Error("后端没有返回新的任务 ID");
+        page.setData({ regenerating: false, taskId: nextTaskId, task: null, images: [], imageItems: [], statusTitle: "正在读取任务", statusDesc: "页面会自动刷新任务状态。" });
+        page.fetchTask({ manual: true });
       })
       .catch(function (error) {
-        page.setData({
-          regenerating: false,
-          error: error.message || "重新生成失败",
-        });
-        wx.showModal({
-          title: "重新生成失败",
-          content: error.message || "请稍后再试",
-          showCancel: false,
-        });
+        page.setData({ regenerating: false, error: error.message || "重新生成失败，请稍后重试。" });
       });
   },
 
+  retryTask: function () {
+    this.regenerateTask();
+  },
+
   manualRefresh: function () {
-    this.fetchTask();
+    this.fetchTask({ manual: true });
   },
 
   previewImage: function (event) {
     var current = event.currentTarget.dataset.current;
     if (!current || this.data.images.length === 0) return;
-    wx.previewImage({
-      current: current,
-      urls: this.data.images,
-    });
+    wx.previewImage({ current: current, urls: this.data.images });
   },
 
-  downloadAndSave: function (url, useAuth, fallbackUrl) {
+  downloadAndSave: function (url, useAuth) {
     var page = this;
     if (!url) return;
     wx.downloadFile({
@@ -262,68 +231,47 @@ Page({
       header: useAuth ? api.authHeader() : {},
       success: function (res) {
         if (res.statusCode !== 200) {
-          if (fallbackUrl && fallbackUrl !== url) {
-            page.downloadAndSave(fallbackUrl, false, "");
-            return;
-          }
-          wx.showToast({
-            title: "下载失败",
-            icon: "none",
-          });
+          wx.showToast({ title: "下载失败，请稍后重试", icon: "none" });
+          page.setData({ savingIndex: -1 });
           return;
         }
         saveDownloadedFile(res.tempFilePath);
+        page.setData({ savingIndex: -1 });
       },
       fail: function () {
-        if (fallbackUrl && fallbackUrl !== url) {
-          page.downloadAndSave(fallbackUrl, false, "");
-          return;
-        }
-        wx.showToast({
-          title: "下载失败",
-          icon: "none",
-        });
+        wx.showToast({ title: "下载失败，请稍后重试", icon: "none" });
+        page.setData({ savingIndex: -1 });
       },
     });
   },
 
   saveImage: function (event) {
+    var page = this;
     var index = Number(event.currentTarget.dataset.index || 0);
-    var url = event.currentTarget.dataset.url || "";
-    var item = this.data.imageItems[index] || { url: url };
+    var item = this.data.imageItems[index];
     var safeAsset = safeAssetFromImage(item);
     var safeEndpoint = "";
-    var page = this;
 
-    if (!url && safeAsset.url) url = safeAsset.url;
-    if (!safeAsset.assetId) {
-      this.downloadAndSave(url, false, "");
+    if (!generation.canSaveOutput(this.data.task, item)) {
+      wx.showToast({ title: "结果尚未准备好，暂不能保存", icon: "none" });
       return;
     }
-
-    safeEndpoint = api.buildImageAssetDownloadEndpoint(safeAsset.assetId, {
-      encoded: safeAsset.encoded,
-    });
-
-    api.getImageAssetDownloadUrl(safeAsset.assetId, { encoded: safeAsset.encoded })
+    this.setData({ savingIndex: index });
+    if (safeAsset.downloadUrl) {
+      this.downloadAndSave(safeAsset.downloadUrl, false);
+      return;
+    }
+    safeEndpoint = api.buildImageAssetDownloadEndpoint(safeAsset.assetId);
+    api.getImageAssetDownloadUrl(safeAsset.assetId)
       .then(function (downloadUrl) {
-        page.downloadAndSave(downloadUrl || safeEndpoint, !downloadUrl, url);
+        page.downloadAndSave(downloadUrl || safeEndpoint, !downloadUrl);
       })
       .catch(function () {
-        page.downloadAndSave(safeEndpoint, true, url);
+        page.downloadAndSave(safeEndpoint, true);
       });
   },
 
   createAnother: function () {
-    this.stopPolling();
-    if (typeof getCurrentPages === "function" && getCurrentPages().length > 1) {
-      wx.navigateBack({
-        delta: 1,
-      });
-      return;
-    }
-    wx.reLaunch({
-      url: "/pages/generate/index",
-    });
+    this.backToGenerate();
   },
 });

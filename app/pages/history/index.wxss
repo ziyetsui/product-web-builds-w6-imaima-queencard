@@ -113,6 +113,34 @@
   background: #fff;
 }
 
+.filter-panel {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin-bottom: 24rpx;
+  padding: 16rpx 18rpx;
+  border: 4rpx solid #0d0d0d;
+  border-radius: 8px;
+  background: #ace2df;
+}
+
+.filter-label {
+  color: #0d0d0d;
+  font-size: 24rpx;
+  font-weight: 900;
+}
+
+.filter-picker {
+  min-width: 180rpx;
+  padding: 10rpx 16rpx;
+  border: 3rpx solid #0d0d0d;
+  border-radius: 8px;
+  background: #fff;
+  color: #0d0d0d;
+  font-size: 23rpx;
+  font-weight: 900;
+}
+
 .search-input {
   flex: 1;
   min-width: 0;
@@ -144,9 +172,14 @@
 }
 
 .notice-card,
-.empty-card {
+.empty-card,
+.login-card {
   padding: 30rpx;
   background: #e7db4c;
+}
+
+.login-card {
+  background: #ace2df;
 }
 
 .notice-title,
@@ -177,6 +210,19 @@
   display: flex;
   gap: 18rpx;
   padding: 20rpx;
+}
+
+.thumb-strip {
+  display: flex;
+  flex: 0 0 164rpx;
+  width: 164rpx;
+  height: 220rpx;
+  gap: 6rpx;
+  overflow: hidden;
+}
+
+.thumb-strip .record-image {
+  flex: 0 0 164rpx;
 }
 
 .record-image,

@@ -19,13 +19,26 @@
     <button wx:if="{{q}}" class="clear-button" bindtap="clearSearch">清除</button>
   </view>
 
+  <view class="filter-panel">
+    <text class="filter-label">状态</text>
+    <picker range="{{statusFilters}}" range-key="label" value="{{statusIndex}}" bindchange="onStatusChange">
+      <view class="filter-picker">{{statusFilters[statusIndex].label}}</view>
+    </picker>
+  </view>
+
+  <view wx:if="{{loginRequired}}" class="login-card">
+    <text class="empty-title">登录后查看作品</text>
+    <text class="empty-desc">生成记录只属于当前微信小程序账号。</text>
+    <button class="small-button lemon" loading="{{loading}}" bindtap="handleLogin">微信登录</button>
+  </view>
+
   <view wx:if="{{error}}" class="notice-card">
     <text class="notice-title">加载失败</text>
     <text class="notice-copy">{{error}}</text>
     <button class="small-button lemon" bindtap="refreshRecords">重试</button>
   </view>
 
-  <view wx:elif="{{records.length === 0 && !loading}}" class="empty-card">
+  <view wx:elif="{{!loginRequired && records.length === 0 && !loading}}" class="empty-card">
     <text class="empty-title">{{searched ? '没有匹配的作品' : '还没有生成记录'}}</text>
     <text class="empty-desc">{{searched ? '换个关键词试试，或清除搜索查看全部记录。' : '提交生成后，作品会按时间出现在这里。'}}</text>
     <button wx:if="{{searched}}" class="small-button white" bindtap="clearSearch">清除搜索</button>
@@ -34,7 +47,9 @@
   <view wx:else class="record-list">
     <view wx:for="{{records}}" wx:key="id" class="record-card">
       <view class="record-main" data-id="{{item.id}}" bindtap="openRecord">
-        <image wx:if="{{item.firstImage}}" class="record-image" mode="aspectFill" src="{{item.firstImage}}" />
+        <view wx:if="{{item.thumbnails.length}}" class="thumb-strip">
+          <image wx:for="{{item.thumbnails}}" wx:key="url" class="record-image" mode="aspectFill" src="{{item.url}}" />
+        </view>
         <view wx:else class="record-placeholder">
           <text>生成中</text>
         </view>
@@ -53,7 +68,8 @@
       </view>
       <view class="record-actions">
         <button class="small-button white" data-id="{{item.id}}" bindtap="openRecord">查看结果</button>
-        <button class="small-button pumpkin" data-id="{{item.id}}" data-image="{{item.firstImage}}" data-prompt="{{item.prompt}}" bindtap="reuseRecord">用这张继续生成</button>
+        <button wx:if="{{item.status == 'failed' || item.status == 'error' || item.status == 'canceled' || item.status == 'cancelled'}}" class="small-button lemon" loading="{{retryingId == item.id}}" data-id="{{item.id}}" catchtap="retryRecord">重试</button>
+        <button wx:else class="small-button pumpkin" data-id="{{item.id}}" data-image="{{item.firstImage}}" catchtap="reuseRecord">继续编辑</button>
       </view>
     </view>
   </view>
