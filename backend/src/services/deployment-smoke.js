@@ -1,4 +1,5 @@
 const DEFAULT_TIMEOUT_MS = 10_000;
+const MAX_ABORT_TIMEOUT_MS = 2_147_483_647;
 const PLACEHOLDER_BUILD_SHAS = new Set([
   "unknown",
   "replace-with-source-commit-sha",
@@ -14,6 +15,14 @@ const ENDPOINTS = [
   "/api/miniapp/auth/me",
   "/api/miniapp/pricing",
 ];
+
+const { REQUIRED_FIELDS: TEMPLATE_REQUIRED_FIELDS } = require("./catalog-service");
+
+const TEMPLATE_STRING_FIELDS = ["id", "title", "author", "category", "prompt", "source", "createdAt", "updatedAt"];
+const TEMPLATE_ARRAY_FIELDS = ["tags", "referenceImages", "previewImages"];
+const METRIC_NUMBER_FIELDS = ["likes", "saves", "shares"];
+const METRIC_STRING_FIELDS = ["likesText", "savesText", "sharesText"];
+const PRICING_PRODUCT_STRING_FIELDS = ["id", "title", "subtitle", "currency"];
 
 function makeCheck(name, ok, status, detail) {
   return { name, ok, status, detail };
@@ -34,7 +43,36 @@ function normalizeBaseUrl(value) {
 }
 
 function timeoutFor(value) {
-  return Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : DEFAULT_TIMEOUT_MS;
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_TIMEOUT_MS;
+  return Math.min(Math.max(1, Math.floor(value)), MAX_ABORT_TIMEOUT_MS);
+}
+
+function isObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isTemplateRecord(record) {
+  if (!isObject(record) || TEMPLATE_REQUIRED_FIELDS.some((field) => !(field in record))) return false;
+  if (TEMPLATE_STRING_FIELDS.some((field) => !hasNonEmptyString(record[field]))) return false;
+  if (TEMPLATE_ARRAY_FIELDS.some((field) => !Array.isArray(record[field]))) return false;
+
+  const metrics = record.metrics;
+  if (!isObject(metrics)) return false;
+  if (METRIC_NUMBER_FIELDS.some((field) => typeof metrics[field] !== "number" || !Number.isFinite(metrics[field]))) return false;
+  return METRIC_STRING_FIELDS.every((field) => typeof metrics[field] === "string");
+}
+
+function isPricingProduct(product, type) {
+  if (!isObject(product) || product.type !== type) return false;
+  if (PRICING_PRODUCT_STRING_FIELDS.some((field) => !hasNonEmptyString(product[field]))) return false;
+  if (typeof product.badge !== "string") return false;
+  if (!Number.isSafeInteger(product.credits) || product.credits <= 0) return false;
+  if (!Number.isSafeInteger(product.amountCents) || product.amountCents <= 0) return false;
+  return type !== "subscription" || hasNonEmptyString(product.interval);
 }
 
 function isTimeoutError(error, signal) {
@@ -115,8 +153,12 @@ function checkHealth(name, result) {
 
 function checkTemplates(name, result) {
   if (!result.body || result.body.success !== true) return makeCheck(name, false, result.status, "template response was not successful");
-  if (!Array.isArray(result.body.data?.records) || result.body.data.records.length === 0) {
+  const records = result.body.data?.records;
+  if (!Array.isArray(records) || records.length === 0) {
     return makeCheck(name, false, result.status, "template catalog is empty");
+  }
+  if (records.some((record) => !isTemplateRecord(record))) {
+    return makeCheck(name, false, result.status, "template catalog contains malformed records");
   }
   return makeCheck(name, true, result.status, "template catalog is non-empty");
 }
@@ -137,9 +179,23 @@ function checkAuth(name, result) {
 }
 
 function checkPricing(name, result) {
-  const payment = result.body?.data?.payment;
   if (result.body?.success !== true) return makeCheck(name, false, result.status, "pricing response was not successful");
-  if (payment?.available !== false) return makeCheck(name, false, result.status, "payment must be disabled for this smoke run");
+  const data = result.body.data;
+  const payment = data?.payment;
+  if (!isObject(data) || !hasNonEmptyString(data.currency)) {
+    return makeCheck(name, false, result.status, "pricing currency is missing");
+  }
+  if (!Array.isArray(data.packs) || data.packs.length === 0 || !data.packs.every((product) => isPricingProduct(product, "pack"))) {
+    return makeCheck(name, false, result.status, "pricing packs are missing required fields");
+  }
+  if (!Array.isArray(data.subscriptions) || data.subscriptions.length === 0
+    || !data.subscriptions.every((product) => isPricingProduct(product, "subscription"))) {
+    return makeCheck(name, false, result.status, "pricing subscriptions are missing required fields");
+  }
+  if (!isObject(payment) || !hasNonEmptyString(payment.mode)) {
+    return makeCheck(name, false, result.status, "pricing payment contract is incomplete");
+  }
+  if (payment.available !== false) return makeCheck(name, false, result.status, "payment must be disabled for this smoke run");
   return makeCheck(name, true, result.status, "payment is disabled");
 }
 

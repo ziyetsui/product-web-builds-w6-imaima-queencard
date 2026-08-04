@@ -2,28 +2,36 @@
 
 const { runDeploymentSmoke } = require("../src/services/deployment-smoke");
 
-async function main() {
-  const args = process.argv.slice(2);
+async function main({
+  argv = process.argv.slice(2),
+  runSmoke = runDeploymentSmoke,
+  stdout = console.log,
+  stderr = console.error,
+} = {}) {
+  const args = argv;
   if (args.length !== 1) {
-    console.error("Usage: npm run smoke -- https://your-miniapp-domain.example");
-    process.exitCode = 1;
-    return;
+    stderr("Usage: npm run smoke -- https://your-miniapp-domain.example");
+    return 1;
   }
 
   try {
-    const result = await runDeploymentSmoke({ baseUrl: args[0] });
+    const result = await runSmoke({ baseUrl: args[0] });
     for (const check of result.checks) {
-      console.log(`${check.ok ? "PASS" : "FAIL"} ${check.name}: ${check.detail}`);
+      stdout(`${check.ok ? "PASS" : "FAIL"} ${check.name}: ${check.detail}`);
     }
-    process.exitCode = result.ok ? 0 : 1;
+    return result.ok ? 0 : 1;
   } catch {
-    console.error("Deployment smoke could not run.");
-    process.exitCode = 1;
+    stderr("Deployment smoke could not run.");
+    return 1;
   }
 }
 
 if (require.main === module) {
-  main();
+  main().then((exitCode) => {
+    process.exitCode = exitCode;
+  }).catch(() => {
+    process.exitCode = 1;
+  });
 }
 
 module.exports = { main };

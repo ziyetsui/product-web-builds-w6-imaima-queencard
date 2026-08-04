@@ -2,7 +2,68 @@ const assert = require("node:assert/strict");
 const http = require("node:http");
 const test = require("node:test");
 
+const { main } = require("../scripts/smoke-deployment");
 const { runDeploymentSmoke } = require("../src/services/deployment-smoke");
+
+function templateRecord(overrides = {}) {
+  return {
+    id: "template-1",
+    title: "A valid template",
+    author: "Test author",
+    category: "memes",
+    tags: ["test"],
+    prompt: "Create a test template",
+    referenceImages: ["/reference.jpg"],
+    previewImages: ["/preview.jpg"],
+    source: "bo",
+    metrics: {
+      likes: 1,
+      saves: 2,
+      shares: 3,
+      likesText: "1",
+      savesText: "2",
+      sharesText: "3",
+    },
+    createdAt: "2026-08-04T00:00:00.000Z",
+    updatedAt: "2026-08-04T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function pricingBody(overrides = {}) {
+  return {
+    success: true,
+    data: {
+      currency: "CNY",
+      packs: [{
+        id: "credits_20",
+        type: "pack",
+        title: "20 credit pack",
+        subtitle: "For light use",
+        credits: 20,
+        amountCents: 1900,
+        currency: "CNY",
+        badge: "",
+      }],
+      subscriptions: [{
+        id: "sub_monthly_200",
+        type: "subscription",
+        title: "Monthly Pro",
+        subtitle: "200 monthly credits",
+        credits: 200,
+        amountCents: 12900,
+        currency: "CNY",
+        interval: "month",
+        badge: "pro",
+      }],
+      payment: {
+        mode: "manual",
+        available: false,
+      },
+      ...overrides,
+    },
+  };
+}
 
 function healthyHealth(overrides = {}) {
   return {
@@ -26,7 +87,7 @@ function defaultRoutes() {
     "/health": { status: 200, body: healthyHealth() },
     "/api/miniapp/templates": {
       status: 200,
-      body: { success: true, data: { records: [{ id: "template-1" }] } },
+      body: { success: true, data: { records: [templateRecord()] } },
     },
     "/api/miniapp/models": {
       status: 200,
@@ -44,7 +105,7 @@ function defaultRoutes() {
     },
     "/api/miniapp/pricing": {
       status: 200,
-      body: { success: true, data: { payment: { available: false, mode: "manual" } } },
+      body: pricingBody(),
     },
   };
 }
@@ -184,6 +245,19 @@ test("fails when the template catalog is empty", async () => {
   assert.match(checkFor(result, "/api/miniapp/templates").detail, /template/i);
 });
 
+test("fails when the template catalog contains malformed records", async () => {
+  for (const records of [[null], ["not-a-template"], [templateRecord({ title: "" })]]) {
+    const result = await withServer({
+      "/api/miniapp/templates": { status: 200, body: { success: true, data: { records } } },
+    }, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({ baseUrl, fetchImpl }));
+
+    assert.equal(result.ok, false);
+    const check = checkFor(result, "/api/miniapp/templates");
+    assert.equal(check.ok, false);
+    assert.match(check.detail, /template|record|field/i);
+  }
+});
+
 test("fails when GPT Image 2 is not the enabled default model", async () => {
   const result = await withServer({
     "/api/miniapp/models": {
@@ -216,12 +290,31 @@ test("fails when pricing reports payment availability in the disabled smoke prof
   const result = await withServer({
     "/api/miniapp/pricing": {
       status: 200,
-      body: { success: true, data: { payment: { available: true, mode: "mock" } } },
+      body: pricingBody({ payment: { available: true, mode: "mock" } }),
     },
   }, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({ baseUrl, fetchImpl }));
 
   assert.equal(result.ok, false);
   assert.match(checkFor(result, "/api/miniapp/pricing").detail, /disabled|available/i);
+});
+
+test("fails when pricing omits required products or product fields", async () => {
+  const malformedBodies = [
+    pricingBody({ packs: [], subscriptions: [] }),
+    pricingBody({ packs: [{ id: "credits_20", type: "pack" }] }),
+    pricingBody({ payment: { available: false } }),
+  ];
+
+  for (const body of malformedBodies) {
+    const result = await withServer({
+      "/api/miniapp/pricing": { status: 200, body },
+    }, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({ baseUrl, fetchImpl }));
+
+    assert.equal(result.ok, false);
+    const check = checkFor(result, "/api/miniapp/pricing");
+    assert.equal(check.ok, false);
+    assert.match(check.detail, /pricing|product|payment/i);
+  }
 });
 
 test("fails a timed-out endpoint with its name and no response-body dump", async () => {
@@ -255,6 +348,16 @@ test("normalizes a fractional timeout into a bounded request instead of throwing
   assert.match(checkFor(result, "/api/miniapp/templates").detail, /timed out|timeout/i);
 });
 
+test("normalizes a finite timeout above the AbortSignal platform limit", async () => {
+  const result = await withServer({}, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({
+    baseUrl,
+    fetchImpl,
+    timeoutMs: Number.MAX_SAFE_INTEGER,
+  }));
+
+  assert.equal(result.ok, true);
+});
+
 test("rejects malformed JSON after checking the successful response content type", async () => {
   const result = await withServer({
     "/api/miniapp/templates": { status: 200, raw: "not-json secret-response-body" },
@@ -263,4 +366,40 @@ test("rejects malformed JSON after checking the successful response content type
   assert.equal(result.ok, false);
   assert.match(checkFor(result, "/api/miniapp/templates").detail, /json/i);
   assert.doesNotMatch(JSON.stringify(result), /secret-response-body/);
+});
+
+test("CLI returns success and prints passing check output", async () => {
+  const output = [];
+  const errors = [];
+  const exitCode = await main({
+    argv: ["https://smoke.test"],
+    runSmoke: async ({ baseUrl }) => {
+      assert.equal(baseUrl, "https://smoke.test");
+      return { ok: true, checks: [{ name: "/health", ok: true, detail: "ready", status: 200 }] };
+    },
+    stdout: (line) => output.push(line),
+    stderr: (line) => errors.push(line),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(output, ["PASS /health: ready"]);
+  assert.deepEqual(errors, []);
+});
+
+test("CLI returns failure and prints only safe failed check output", async () => {
+  const output = [];
+  const errors = [];
+  const exitCode = await main({
+    argv: ["https://smoke.test"],
+    runSmoke: async () => ({
+      ok: false,
+      checks: [{ name: "/api/miniapp/templates", ok: false, detail: "template record is malformed", status: 200 }],
+    }),
+    stdout: (line) => output.push(line),
+    stderr: (line) => errors.push(line),
+  });
+
+  assert.equal(exitCode, 1);
+  assert.deepEqual(output, ["FAIL /api/miniapp/templates: template record is malformed"]);
+  assert.deepEqual(errors, []);
 });
