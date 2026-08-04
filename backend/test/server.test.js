@@ -7,6 +7,7 @@ const sharp = require("sharp");
 
 const { createApp } = require("../src/app");
 const { createMemoryStore, createSqliteStore } = require("../src/store");
+const { createRateLimiter } = require("../src/services/rate-limiter");
 
 async function readJson(response) {
   return response.json();
@@ -37,6 +38,22 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function createTestLimiter(overrides = {}) {
+  let currentTime = 0;
+  const limiter = createRateLimiter({ now: () => currentTime });
+  return {
+    consume(input) {
+      return limiter.consume({
+        ...input,
+        limit: overrides[input.scope] || input.limit,
+      });
+    },
+    advance(ms) {
+      currentTime += ms;
+    },
+  };
+}
+
 async function waitForTask(app, taskId, auth, status = "completed") {
   let last = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -53,6 +70,94 @@ async function login(app) {
   const response = await readJson(await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
     method: "POST",
     body: JSON.stringify({ code: "dev-code" }),
+  })));
+  assert.equal(response.success, true);
+  return `Bearer ${response.data.token}`;
+}
+
+test("rate limits WeChat login and returns the specified 429 response", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-rate-limit-login",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+    rateLimiter: createTestLimiter({ login: 2 }),
+  });
+
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const allowed = await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
+        method: "POST",
+        headers: { "x-forwarded-for": "198.51.100.10" },
+        body: JSON.stringify({ code: `login-code-${attempt}` }),
+      }));
+      assert.equal(allowed.status, 200);
+    }
+
+    const response = await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
+      method: "POST",
+      headers: { "x-forwarded-for": "198.51.100.10" },
+      body: JSON.stringify({ code: "login-code-blocked" }),
+    }));
+    const body = await readJson(response);
+
+    assert.equal(response.status, 429);
+    assert.equal(body.success, false);
+    assert.equal(body.error.code, "RATE_LIMITED");
+    assert.equal(body.error.message, "请求过于频繁，请稍后重试。");
+    assert.match(response.headers.get("retry-after"), /^\d+$/);
+  } finally {
+    app.close();
+  }
+});
+
+test("keys generation rate limits by authenticated user", async () => {
+  const app = createApp({
+    env: {
+      MINIAPP_DEV_LOGIN: "1",
+      WECHAT_MINIAPP_APP_ID: "wx-rate-limit-generation",
+      MINIAPP_INITIAL_CREDITS: "10",
+      MINIAPP_DB_PATH: tempDbPath(),
+    },
+    imageProvider: {
+      name: "test-provider",
+      generate: async () => ({ provider: "test-provider", status: "completed", images: [] }),
+    },
+    rateLimiter: createTestLimiter({ generation: 1 }),
+    worker: { schedule() {}, stop() {} },
+  });
+
+  try {
+    const firstUser = await loginWithCode(app, "user-one");
+    const secondUser = await loginWithCode(app, "user-two");
+
+    async function submit(authorization) {
+      const response = await app.fetch(new Request("http://local/api/miniapp/image-generations", {
+        method: "POST",
+        headers: { Authorization: authorization, "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "Rate limited generation" }),
+      }));
+      return { response, body: await readJson(response) };
+    }
+
+    const first = await submit(firstUser);
+    const blocked = await submit(firstUser);
+    const second = await submit(secondUser);
+
+    assert.equal(first.response.status, 202);
+    assert.equal(blocked.response.status, 429);
+    assert.equal(blocked.body.error.code, "RATE_LIMITED");
+    assert.equal(second.response.status, 202);
+  } finally {
+    app.close();
+  }
+});
+
+async function loginWithCode(app, code) {
+  const response = await readJson(await app.fetch(new Request("http://local/api/miniapp/auth/wechat-login", {
+    method: "POST",
+    body: JSON.stringify({ code }),
   })));
   assert.equal(response.success, true);
   return `Bearer ${response.data.token}`;

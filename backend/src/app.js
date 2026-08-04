@@ -14,19 +14,39 @@ const { createGenerationService } = require("./services/generation-service");
 const { createGenerationWorker } = require("./worker/generation-worker");
 const { createModelRegistry } = require("./services/model-registry");
 const { createPaymentProvider } = require("./payments");
+const { createRateLimiter } = require("./services/rate-limiter");
 const orderService = require("./services/order-service");
 const { fetchTemplateById, fetchTemplateList } = require("./templates");
 const { importCatalog, validateCatalog } = require("./services/catalog-service");
 
-function json(data, status = 200) {
+function json(data, status = 200, headers = {}) {
   return Response.json(data, {
     status,
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "content-type, authorization, idempotency-key",
       "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
+      ...headers,
     },
   });
+}
+
+function clientIp(request) {
+  const forwarded = (request.headers.get("x-forwarded-for") || "")
+    .split(",")[0]
+    .trim();
+  return forwarded || request.headers.get("host") || "unknown";
+}
+
+function rateLimitResponse(result) {
+  const retryAfter = Math.max(1, Math.ceil((Number(result.resetAt) - Date.now()) / 1000));
+  return json({
+    success: false,
+    error: {
+      code: "RATE_LIMITED",
+      message: "请求过于频繁，请稍后重试。",
+    },
+  }, 429, { "Retry-After": String(retryAfter) });
 }
 
 async function readJson(request) {
@@ -347,6 +367,20 @@ function createApp(options = {}) {
     fetchImpl,
     clock: options.clock,
   });
+  const rateLimiter = options.rateLimiter || createRateLimiter();
+  const rateLimits = {
+    login: { limit: 10, windowMs: 60_000 },
+    upload: { limit: 20, windowMs: 10 * 60_000 },
+    generation: { limit: 10, windowMs: 10 * 60_000 },
+    order: { limit: 10, windowMs: 60_000 },
+    admin: { limit: 60, windowMs: 60_000 },
+  };
+
+  function checkRateLimit(scope, key) {
+    const result = rateLimiter.consume({ scope, key, ...rateLimits[scope] });
+    return result.allowed ? null : rateLimitResponse(result);
+  }
+
   const paymentProvider = options.paymentProvider || createPaymentProvider({
     env,
     fetch: fetchImpl,
@@ -593,6 +627,8 @@ function createApp(options = {}) {
       if (assetResponse) return assetResponse;
 
       if (path === "/api/miniapp/auth/wechat-login" && request.method === "POST") {
+        const limited = checkRateLimit("login", `ip:${clientIp(request)}`);
+        if (limited) return limited;
         const body = await readJson(request);
         const code = String(body.code || "").trim();
         if (!code) return json({ success: false, error: "Missing wx.login code" }, 400);
@@ -777,6 +813,8 @@ function createApp(options = {}) {
 
       if (path === "/api/miniapp/orders" && request.method === "POST") {
         const { payload, user } = await getCurrentUser(request, authService);
+        const limited = checkRateLimit("order", `user:${user.id}`);
+        if (limited) return limited;
         const body = await readJson(request);
         const productId = String(body.productId || "").trim();
         const product = findProduct(env, productId);
@@ -917,6 +955,8 @@ function createApp(options = {}) {
 
       if (path === "/api/miniapp/admin/credits/add" && request.method === "POST") {
         const admin = await requireAdmin(request, authService, env);
+        const limited = checkRateLimit("admin", `admin:${admin.user.id}`);
+        if (limited) return limited;
         const body = await readJson(request);
         const userId = String(body.userId || body.targetUserId || "").trim();
         const amount = Number.parseInt(body.amount, 10);
@@ -929,6 +969,8 @@ function createApp(options = {}) {
       const adminUserCreditsMatch = path.match(/^\/api\/miniapp\/admin\/users\/([^/]+)\/credits$/);
       if (adminUserCreditsMatch && request.method === "POST") {
         const admin = await requireAdmin(request, authService, env);
+        const limited = checkRateLimit("admin", `admin:${admin.user.id}`);
+        if (limited) return limited;
         const userId = decodeURIComponent(adminUserCreditsMatch[1]);
         const body = await readJson(request);
         const amount = Number.parseInt(body.amount, 10);
@@ -965,6 +1007,8 @@ function createApp(options = {}) {
       const adminOrderActionMatch = path.match(/^\/api\/miniapp\/admin\/orders\/([^/]+)\/(refund|cancel)$/);
       if (adminOrderActionMatch && request.method === "POST") {
         const admin = await requireAdmin(request, authService, env);
+        const limited = checkRateLimit("admin", `admin:${admin.user.id}`);
+        if (limited) return limited;
         const orderId = decodeURIComponent(adminOrderActionMatch[1]);
         const action = adminOrderActionMatch[2];
         const body = await readJson(request);
@@ -1002,8 +1046,18 @@ function createApp(options = {}) {
       }
 
       if (path === "/api/miniapp/uploads/reference-image" && request.method === "POST") {
-        const payload = await getAuthPayload(request, authService);
-        const user = await store.ensureUser(payload);
+        let payload;
+        let user;
+        try {
+          payload = await getAuthPayload(request, authService);
+          user = await store.ensureUser(payload);
+        } catch (error) {
+          const limited = checkRateLimit("upload", `ip:${clientIp(request)}`);
+          if (limited) return limited;
+          throw error;
+        }
+        const limited = checkRateLimit("upload", `user:${user.id}`);
+        if (limited) return limited;
         const form = await request.formData();
         const file = form.get("file");
         if (!file || typeof file.arrayBuffer !== "function") {
@@ -1070,6 +1124,8 @@ function createApp(options = {}) {
       if (generateMatch && request.method === "POST") {
         const payload = await getAuthPayload(request, authService);
         const user = await store.ensureUser(payload);
+        const limited = checkRateLimit("generation", `user:${user.id}`);
+        if (limited) return limited;
         if (user.balance < 1) return json({ success: false, error: "Insufficient credits" }, 402);
         const body = await readJson(request);
         const templateId = decodeURIComponent(generateMatch[1]);
@@ -1159,6 +1215,8 @@ function createApp(options = {}) {
       if (path === "/api/miniapp/image-generations" && request.method === "POST") {
         const payload = await getAuthPayload(request, authService);
         const user = await store.ensureUser(payload);
+        const limited = checkRateLimit("generation", `user:${user.id}`);
+        if (limited) return limited;
         const body = await readJson(request);
         const validation = validateGenerationBody(body);
         modelRegistry.validate({
@@ -1211,6 +1269,8 @@ function createApp(options = {}) {
       if (regenerateMatch && request.method === "POST") {
         const payload = await getAuthPayload(request, authService);
         const user = await store.ensureUser(payload);
+        const limited = checkRateLimit("generation", `user:${user.id}`);
+        if (limited) return limited;
         const original = await store.getTask(decodeURIComponent(regenerateMatch[1]));
         if (!original || original.ownerId !== user.id) {
           return json({ success: false, error: "Task not found" }, 404);
