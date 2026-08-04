@@ -118,9 +118,13 @@ describe("createWaffoCheckout", () => {
     expect(mocks.waffoCheckoutCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         productId: "PROD_creatorMonthly",
-        currency: "USD",
+        currency: "CNY",
         buyerIdentity: "user_123",
         buyerEmail: "user@example.com",
+        billingDetail: {
+          country: "CN",
+          isBusiness: false,
+        },
         successUrl: "https://example.com/pricing?checkout=success&provider=waffo",
         metadata: expect.objectContaining({
           userId: "user_123",
