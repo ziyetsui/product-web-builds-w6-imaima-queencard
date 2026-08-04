@@ -81,6 +81,38 @@ describe("Waffo webhooks", () => {
     );
   });
 
+  it("activates a fixed-term membership from a CNY one-time order", async () => {
+    await handleWaffoEvent(
+      event("order.completed", {
+        currency: "CNY",
+        amount: "99.00",
+        orderMetadata: {
+          userId: "user_123",
+          productKey: "creator_monthly",
+        },
+      })
+    );
+
+    expect(mocks.upsertCustomerByAuthUserId).toHaveBeenCalledWith(
+      "user_123",
+      expect.objectContaining({
+        billingProvider: "waffo",
+        billingSubscriptionId: null,
+        billingProductId: "PROD_creatorMonthly",
+        billingCurrentPeriodEnd: new Date("2026-09-03T08:00:00.000Z"),
+        plan: "PRO",
+      })
+    );
+    expect(mocks.fulfillCreditGrantOnce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        productKey: "creator_monthly",
+        credits: 600,
+        transType: "SUBSCRIPTION",
+        expiryDays: 30,
+      })
+    );
+  });
+
   it("syncs an activated subscription and grants its first period", async () => {
     await handleWaffoEvent(
       event("subscription.activated", {

@@ -42,6 +42,9 @@ const modes: Array<{
   { value: "yearly", label: "年付", helper: "省约 17%" },
 ];
 
+const usesFixedTermMemberships =
+  process.env.NEXT_PUBLIC_BILLING_PROVIDER === "waffo";
+
 function formatCny(amount: number) {
   return `¥${Number.isInteger(amount) ? amount : amount.toFixed(2)}`;
 }
@@ -72,15 +75,29 @@ function toSubscriptionCards(
         eyebrow: `[ ${plan.title} ]`,
         description: plan.description,
         price,
-        priceSuffix: isFree ? "/ 月" : mode === "yearly" ? "/ 年" : "/ 月",
+        priceSuffix: usesFixedTermMemberships
+          ? mode === "yearly"
+            ? "/ 365 天"
+            : "/ 30 天"
+          : mode === "yearly"
+            ? "/ 年"
+            : "/ 月",
         creditLine: getSubscriptionCreditLine(plan, mode),
         benefits: plan.benefits,
         productKey,
-        cta: isFree ? "免费开始" : mode === "yearly" ? "选择年付" : "选择月付",
+        cta: usesFixedTermMemberships
+          ? mode === "yearly"
+            ? "购买 365 天"
+            : "购买 30 天"
+          : mode === "yearly"
+            ? "选择年付"
+            : "选择月付",
         tone: index === 1 ? "lemon" : "seafoam",
         paymentNote: isFree
           ? "注册后领取欢迎积分"
-          : "银行卡 / Apple Pay / Link · 支付宝订阅开通后支持",
+          : usesFixedTermMemberships
+            ? "人民币一次性付款 · 到期后手动续费"
+            : "银行卡 / Apple Pay / Link · 支付宝订阅开通后支持",
         highlighted: index === 1,
         href: isFree ? "/register" : undefined,
       },

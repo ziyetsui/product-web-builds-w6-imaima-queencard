@@ -107,7 +107,20 @@ export async function createWaffoCheckout(
     };
   }
 
-  await ensureCustomer(userId);
+  const customer = await ensureCustomer(userId);
+  const currentMembershipEndsAt =
+    customer?.billingCurrentPeriodEnd ?? customer?.stripeCurrentPeriodEnd;
+  if (
+    product.plan &&
+    currentMembershipEndsAt &&
+    currentMembershipEndsAt.getTime() > Date.now()
+  ) {
+    return {
+      success: false,
+      url: null,
+      error: "Current membership is still active; renew after it expires",
+    };
+  }
   const user = await getCurrentUser();
   if (!user?.email) {
     return { success: false, url: null, error: "Missing user email" };
@@ -131,7 +144,12 @@ export async function createWaffoCheckout(
       metadata: {
         userId,
         productKey: product.key,
-        mode: product.mode,
+        mode: product.waffoMode,
+        membershipMode:
+          product.plan && product.waffoMode === "payment"
+            ? "fixed-term"
+            : undefined,
+        validityDays: String(product.validityDays),
         credits: String(product.credits),
         requestId,
       },

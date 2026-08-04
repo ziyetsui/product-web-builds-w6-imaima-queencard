@@ -19,14 +19,18 @@
 
 | productKey | 类型 | 周期 | USD | 积分 | Waffo 环境变量 |
 | --- | --- | --- | ---: | ---: | --- |
-| `creator_monthly` | subscription | monthly | 14.90 | 600 | `WAFFO_PRODUCT_CREATOR_MONTHLY` |
-| `creator_annual` | subscription | yearly | 149.00 | 7,200 | `WAFFO_PRODUCT_CREATOR_ANNUAL` |
-| `studio_monthly` | subscription | monthly | 39.90 | 1,800 | `WAFFO_PRODUCT_STUDIO_MONTHLY` |
-| `studio_annual` | subscription | yearly | 399.00 | 21,600 | `WAFFO_PRODUCT_STUDIO_ANNUAL` |
+| `creator_monthly` | onetime membership | 30 天 | 14.90 | 600 | `WAFFO_PRODUCT_CREATOR_MONTHLY` |
+| `creator_annual` | onetime membership | 365 天 | 149.00 | 7,200 | `WAFFO_PRODUCT_CREATOR_ANNUAL` |
+| `studio_monthly` | onetime membership | 30 天 | 39.90 | 1,800 | `WAFFO_PRODUCT_STUDIO_MONTHLY` |
+| `studio_annual` | onetime membership | 365 天 | 399.00 | 21,600 | `WAFFO_PRODUCT_STUDIO_ANNUAL` |
 | `credit_creator` | onetime | 无 | 14.90 | 600 | `WAFFO_PRODUCT_CREDIT_CREATOR` |
 | `credit_studio` | onetime | 无 | 39.90 | 1,800 | `WAFFO_PRODUCT_CREDIT_STUDIO` |
 
 Waffo Product ID 必须为 `PROD_` 前缀。客户端只能提交 `productKey`；价格、商品 ID、积分、方案和有效期全部由服务端目录决定。
+
+Waffo 不支持 CNY subscription checkout。Waffo 渠道的四个会员商品必须使用
+一次性商品并固定 CNY 结账；月付、年付分别代表 30 天、365 天权益，到期后
+由用户手动续费。Stripe 与 Creem 的商品模式保持原有 subscription 合同。
 
 ## 4. Checkout 合同
 

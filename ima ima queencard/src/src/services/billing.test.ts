@@ -129,6 +129,9 @@ describe("createWaffoCheckout", () => {
         metadata: expect.objectContaining({
           userId: "user_123",
           productKey: "creator_monthly",
+          mode: "payment",
+          membershipMode: "fixed-term",
+          validityDays: "30",
           credits: "600",
         }),
       })
@@ -154,6 +157,23 @@ describe("createWaffoCheckout", () => {
       success: false,
       url: null,
       error: "Missing or invalid Waffo product ID",
+    });
+    expect(mocks.waffoCheckoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("prevents overlapping fixed-term membership purchases", async () => {
+    mocks.ensureCustomer.mockResolvedValue({
+      id: 1,
+      authUserId: "user_123",
+      billingCurrentPeriodEnd: new Date(Date.now() + 86_400_000),
+    });
+
+    await expect(
+      createWaffoCheckout("user_123", "creator_monthly")
+    ).resolves.toEqual({
+      success: false,
+      url: null,
+      error: "Current membership is still active; renew after it expires",
     });
     expect(mocks.waffoCheckoutCreate).not.toHaveBeenCalled();
   });
