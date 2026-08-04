@@ -20,6 +20,7 @@ function productionEnv(overrides = {}) {
     STORAGE_BUCKET: "miniapp-assets",
     STORAGE_ACCESS_KEY_ID: "storage-access-key",
     STORAGE_SECRET_ACCESS_KEY: "storage-secret-key",
+    MINIAPP_ASSET_SIGNING_SECRET: "asset-signing-secret",
     WECHAT_MINIAPP_APP_ID: "wx-production",
     WECHAT_MINIAPP_APP_SECRET: "wechat-app-secret",
     ...overrides,
@@ -56,6 +57,7 @@ test("requires the production database, storage, and WeChat credential groups", 
     "STORAGE_BUCKET",
     "STORAGE_ACCESS_KEY_ID",
     "STORAGE_SECRET_ACCESS_KEY",
+    "MINIAPP_ASSET_SIGNING_SECRET",
     "WECHAT_MINIAPP_APP_ID",
     "WECHAT_MINIAPP_APP_SECRET",
   ]) {
@@ -99,6 +101,7 @@ test("returns typed runtime sections and redacted public diagnostics", () => {
   assert.equal(config.payment.provider, "disabled");
   assert.equal(config.public.database.url, undefined);
   assert.equal(config.public.storage.secretAccessKey, undefined);
+  assert.equal(config.public.storage.signingSecret, undefined);
   assert.equal(config.public.auth.tokenSecret, undefined);
   assert.doesNotMatch(JSON.stringify(config.public), /db-password|storage-secret-key/);
 });
@@ -172,6 +175,7 @@ test("redacts every configured secret field including the WeChat Pay API v3 key"
     storage: {
       accessKeyId: "access-key",
       secretAccessKey: "secret-access-key",
+      signingSecret: "asset-signing-secret",
     },
     generation: { upstreamAuthToken: "upstream-token" },
     payment: {
@@ -185,6 +189,7 @@ test("redacts every configured secret field including the WeChat Pay API v3 key"
   assert.equal(redacted.wechat.appSecret, REDACTED_SECRET);
   assert.equal(redacted.storage.accessKeyId, REDACTED_SECRET);
   assert.equal(redacted.storage.secretAccessKey, REDACTED_SECRET);
+  assert.equal(redacted.storage.signingSecret, REDACTED_SECRET);
   assert.equal(redacted.generation.upstreamAuthToken, REDACTED_SECRET);
   assert.equal(redacted.payment.apiV3Key, REDACTED_SECRET);
   assert.equal(redacted.payment.privateKey, REDACTED_SECRET);

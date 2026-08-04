@@ -487,6 +487,11 @@ for (const adapter of mockAdapters) {
           status: "pending",
           requestedCredits: 2,
           outputCount: 2,
+          referenceImages: [`${adapter.name}-reference-asset`],
+          referenceAssetIds: [`${adapter.name}-reference-asset`],
+          metadata: {
+            request: { referenceAssetIds: [`${adapter.name}-reference-asset`] },
+          },
         },
         hold: {
           id: `${adapter.name}-durable-hold`,
@@ -504,9 +509,11 @@ for (const adapter of mockAdapters) {
       });
       assert.equal(replay.task.id, first.task.id);
       assert.equal(replay.hold.id, first.hold.id);
+      assert.deepEqual(replay.task.referenceAssetIds, [`${adapter.name}-reference-asset`]);
       assert.equal((await store.getUser(user.id)).balance, 0);
       const claimed = await store.claimTask(`${adapter.name}-worker`, { leaseDurationMs: 10 });
       assert.equal(claimed.id, first.task.id);
+      assert.deepEqual(claimed.referenceAssetIds, [`${adapter.name}-reference-asset`]);
       const reclaimed = await store.reclaimExpiredTasks(new Date(Date.now() + 20));
       assert.equal(reclaimed[0].id, first.task.id);
       assert.equal(reclaimed[0].status, "retryable");

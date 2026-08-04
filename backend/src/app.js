@@ -85,14 +85,14 @@ function estimateCredits(body = {}) {
   return positiveInt(body.outputCount || body.outputNumber, 1);
 }
 
-function generationCapability(body = {}, referenceImages = []) {
-  return body.capability || (referenceImages.length > 0 ? "image-edit" : "text-to-image");
+function generationCapability(body = {}, referenceImages = [], referenceAssetIds = []) {
+  return body.capability || (referenceImages.length + referenceAssetIds.length > 0 ? "image-edit" : "text-to-image");
 }
 
 function validateGenerationBody(body = {}) {
   const referenceImages = Array.isArray(body.referenceImages) ? body.referenceImages : [];
   const referenceAssetIds = Array.isArray(body.referenceAssetIds) ? body.referenceAssetIds : [];
-  const capability = generationCapability(body, referenceImages);
+  const capability = generationCapability(body, referenceImages, referenceAssetIds);
   const outputCount = estimateCredits(body);
 
   if (!["text-to-image", "image-edit", "image-to-image"].includes(capability)) {
@@ -107,8 +107,9 @@ function validateGenerationBody(body = {}) {
     throw error;
   }
 
-  if (capability === "text-to-image" && referenceImages.length > 0) {
+  if (capability === "text-to-image" && referenceImages.length + referenceAssetIds.length > 0) {
     const error = new Error("Text-to-image generation must not include reference images");
+    error.code = "MODEL_REFERENCES_UNSUPPORTED";
     error.status = 400;
     throw error;
   }

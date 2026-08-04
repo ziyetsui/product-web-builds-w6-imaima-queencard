@@ -21,6 +21,7 @@ function productionEnv(overrides = {}) {
     STORAGE_BUCKET: "miniapp-assets",
     STORAGE_ACCESS_KEY_ID: "runtime-access-key",
     STORAGE_SECRET_ACCESS_KEY: "runtime-storage-secret",
+    MINIAPP_ASSET_SIGNING_SECRET: "runtime-asset-signing-secret",
     WECHAT_MINIAPP_APP_ID: "wx-runtime",
     WECHAT_MINIAPP_APP_SECRET: "runtime-wechat-secret",
     GENERATION_WORKER_MODE: "durable",
@@ -34,6 +35,18 @@ function quietLogger() {
   return {
     log() {},
     error() {},
+  };
+}
+
+function storageAdapter(overrides = {}) {
+  return {
+    ready: true,
+    async put() {},
+    async head() {},
+    async getSignedDownloadUrl() {},
+    async delete() {},
+    close() {},
+    ...overrides,
   };
 }
 
@@ -115,7 +128,7 @@ test("fully configured production listens when its runtime adapters are injected
       storeCloseCalls += 1;
     },
   };
-  const storage = { ready: true, close() {} };
+  const storage = storageAdapter();
   const runtime = await createServer({
     env: productionEnv(),
     factories: {
@@ -166,7 +179,7 @@ test("shutdown waits for the internally owned asynchronous store close exactly o
         };
       },
       createStorage() {
-        return { ready: true, close() {} };
+        return storageAdapter();
       },
     },
     dependencies: {
@@ -207,7 +220,7 @@ test("asynchronous store close rejection follows sanitized aggregate shutdown", 
         };
       },
       createStorage() {
-        return { ready: true, close() {} };
+        return storageAdapter();
       },
     },
     dependencies: {
@@ -229,7 +242,7 @@ test("asynchronous store close rejection follows sanitized aggregate shutdown", 
   assert.equal(closeCalls, 1);
 });
 
-test("default production entrypoint uses PostgreSQL and fails closed until storage adapter lands", async () => {
+test("default production entrypoint fails closed when the asset signing secret is absent", async () => {
   const secrets = [
     "runtime-password",
     "runtime-storage-secret",
@@ -238,10 +251,13 @@ test("default production entrypoint uses PostgreSQL and fails closed until stora
   ];
 
   await assert.rejects(
-    createServer({ env: productionEnv(), logger: quietLogger() }),
+    createServer({
+      env: productionEnv({ MINIAPP_ASSET_SIGNING_SECRET: "" }),
+      logger: quietLogger(),
+    }),
     (error) => {
-      assert.equal(error.code, "RUNTIME_DEPENDENCY_MISSING");
-      assert.match(error.message, /storage adapter/i);
+      assert.equal(error.code, "CONFIG_INVALID");
+      assert.match(error.message, /MINIAPP_ASSET_SIGNING_SECRET/);
       for (const secret of secrets) assert.doesNotMatch(error.message, new RegExp(secret));
       return true;
     },

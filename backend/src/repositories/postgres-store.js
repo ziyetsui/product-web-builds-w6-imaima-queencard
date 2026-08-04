@@ -228,6 +228,7 @@ function rowToTransaction(row) {
 
 function rowToTask(row) {
   if (!row) return null;
+  const metadata = parseJson(row.metadata, {});
   return {
     id: row.id,
     taskId: row.id,
@@ -243,6 +244,9 @@ function rowToTask(row) {
     prompt: row.prompt || "",
     topic: row.topic || "",
     referenceImages: parseJson(row.reference_images, []),
+    referenceAssetIds: Array.isArray(metadata.request?.referenceAssetIds)
+      ? metadata.request.referenceAssetIds
+      : [],
     model: row.model || "",
     outputCount: Number(row.output_count || 1),
     aspectRatio: row.aspect_ratio || "",
@@ -251,7 +255,7 @@ function rowToTask(row) {
     settledCredits: Number(row.settled_credits || 0),
     creditHoldId: row.credit_hold_id || null,
     rawProviderResult: parseJson(row.raw_provider_result, null),
-    metadata: parseJson(row.metadata, {}),
+    metadata,
     errorCode: row.error_code || "",
     errorMessage: row.error_message || "",
     attempt: Number(row.attempt || 0),

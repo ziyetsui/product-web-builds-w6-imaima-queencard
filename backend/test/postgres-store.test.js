@@ -121,8 +121,12 @@ test("postgres repository contract persists identity, sessions, credits, tasks, 
     requestedCredits: 2,
     prompt: "A test card",
     model: "test-model",
+    referenceImages: ["reference-asset-1"],
+    referenceAssetIds: ["reference-asset-1"],
+    metadata: { request: { referenceAssetIds: ["reference-asset-1"] } },
   });
   assert.equal(task.id, "task-1");
+  assert.deepEqual(task.referenceAssetIds, ["reference-asset-1"]);
   assert.equal((await store.claimTask("worker-1", { leaseDurationMs: 60_000 })).id, task.id);
   assert.equal((await store.renewTaskLease(task.id, "worker-1", { leaseDurationMs: 60_000 })).leaseOwner, "worker-1");
   assert.equal((await store.releaseTaskLease(task.id, "worker-1", { status: "completed" })).status, "completed");

@@ -2681,6 +2681,7 @@ function rowToAsset(row) {
 }
 
 function rowToTask(row) {
+  const metadata = parseJson(row.metadata_json, {});
   return {
     id: row.id,
     taskId: row.id,
@@ -2694,12 +2695,15 @@ function rowToTask(row) {
     prompt: row.prompt || "",
     topic: row.topic || "",
     referenceImages: parseJson(row.reference_images_json, []),
+    referenceAssetIds: Array.isArray(metadata.request?.referenceAssetIds)
+      ? metadata.request.referenceAssetIds
+      : [],
     model: row.model || "",
     outputCount: row.output_count || 1,
     aspectRatio: row.aspect_ratio || "",
     resolution: row.resolution || "",
     rawProviderResult: parseJson(row.raw_provider_result_json, null),
-    metadata: parseJson(row.metadata_json, {}),
+    metadata,
     idempotencyKey: row.idempotency_key || "",
     requestedCredits: Number(row.requested_credits || 0),
     settledCredits: Number(row.settled_credits || 0),

@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const sharp = require("sharp");
 
 const { createApp } = require("../src/app");
 const { createMemoryStore, createSqliteStore } = require("../src/store");
@@ -13,6 +14,17 @@ async function readJson(response) {
 
 function tempDbPath() {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ima-app-db-")), "miniapp.sqlite");
+}
+
+function validPngBytes() {
+  return sharp({
+    create: {
+      width: 2,
+      height: 2,
+      channels: 4,
+      background: { r: 240, g: 220, b: 40, alpha: 1 },
+    },
+  }).png().toBuffer();
 }
 
 function deferred() {
@@ -491,7 +503,7 @@ test("uploads a reference image and creates a generic generation task", async ()
   })));
   const auth = `Bearer ${login.data.token}`;
   const form = new FormData();
-  form.set("file", new Blob(["image-bytes"], { type: "image/png" }), "reference.png");
+  form.set("file", new Blob([await validPngBytes()], { type: "image/png" }), "reference.png");
 
   const uploaded = await readJson(await app.fetch(new Request("http://local/api/miniapp/uploads/reference-image", {
     method: "POST",
@@ -499,21 +511,24 @@ test("uploads a reference image and creates a generic generation task", async ()
     body: form,
   })));
   assert.equal(uploaded.success, true);
-  assert.match(uploaded.data.url, /^http:\/\/local\/uploads\/reference\/.+\.png$/);
+  assert.match(uploaded.data.assetId, /^asset_/);
+  assert.match(uploaded.data.url, /^http:\/\/local\/uploads\/reference\/.+\.png\?expires=\d+&signature=[A-Za-z0-9_-]+$/);
 
   const generated = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations", {
     method: "POST",
     headers: { Authorization: auth },
     body: JSON.stringify({
       prompt: "Generate with uploaded reference",
-      referenceImages: [uploaded.data.url],
+      referenceAssetIds: [uploaded.data.assetId],
       outputCount: 1,
     }),
   })));
+  assert.equal(generated.success, true, JSON.stringify(generated));
   const task = await waitForTask(app, generated.data.taskId, auth);
 
   assert.equal(providerInput.prompt, "Generate with uploaded reference");
-  assert.deepEqual(providerInput.referenceImages, [uploaded.data.url]);
+  assert.equal(providerInput.referenceImages.length, 1);
+  assert.match(providerInput.referenceImages[0], /^http:\/\/local\/uploads\/reference\/.+\.png\?expires=\d+&signature=/);
   assert.equal(task.data.status, "completed");
   assert.deepEqual(task.data.images, [uploaded.data.url]);
   app.close();
@@ -609,7 +624,7 @@ test("lists completed image generations with reusable request metadata", async (
       model: "gpt-image-2-edit",
       outputCount: 2,
       aspectRatio: "1:1",
-      resolution: "1024x1024",
+      resolution: "1k",
     }),
   })));
   const completed = await waitForTask(app, created.data.taskId, auth);
@@ -628,7 +643,7 @@ test("lists completed image generations with reusable request metadata", async (
   assert.equal(list.data.records[0].model, "gpt-image-2-edit");
   assert.equal(list.data.records[0].outputCount, 2);
   assert.equal(list.data.records[0].aspectRatio, "1:1");
-  assert.equal(list.data.records[0].resolution, "1024x1024");
+  assert.equal(list.data.records[0].resolution, "1k");
   app.close();
 });
 
@@ -668,7 +683,7 @@ test("filters image generation history by prompt, model, and template id", async
     headers: { Authorization: auth },
     body: JSON.stringify({
       prompt: "Searchable rose prompt",
-      model: "model-filter",
+      model: "seedream-5.0",
       outputCount: 1,
     }),
   })));
@@ -688,7 +703,7 @@ test("filters image generation history by prompt, model, and template id", async
   const promptMatches = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations?q=rose", {
     headers: { Authorization: auth },
   })));
-  const modelMatches = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations?q=model-filter", {
+  const modelMatches = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations?q=seedream-5.0", {
     headers: { Authorization: auth },
   })));
   const templateMatches = await readJson(await app.fetch(new Request("http://local/api/miniapp/image-generations?q=tpl-filter", {
@@ -810,7 +825,7 @@ test("regenerates a task from the original prompt, references, and model", async
       model: "gpt-image-2-edit",
       outputCount: 2,
       aspectRatio: "3:4",
-      resolution: "768x1024",
+      resolution: "1k",
     }),
   })));
   await waitForTask(app, original.data.taskId, auth);
@@ -845,6 +860,14 @@ test("returns credit transaction history with pagination", async () => {
       WECHAT_MINIAPP_APP_ID: "wx-test",
       MINIAPP_INITIAL_CREDITS: "10",
       MINIAPP_DB_PATH: tempDbPath(),
+    },
+    imageProvider: {
+      name: "test-provider",
+      generate: async () => ({
+        provider: "test-provider",
+        status: "completed",
+        images: ["https://cdn.example.com/credit-history.png"],
+      }),
     },
   });
   const auth = await login(app);

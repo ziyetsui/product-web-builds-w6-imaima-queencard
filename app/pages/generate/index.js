@@ -4,7 +4,7 @@ var auth = require("../../services/auth.js");
 var generation = require("../../services/generation.js");
 var templatesService = require("../../services/templates.js");
 
-var DEFAULT_MODEL_VALUE = "gpt-image-2";
+var DEFAULT_MODEL_VALUE = "gpt-image-2-edit";
 var DEFAULT_MODEL_LABEL = "GPT Image 2";
 var DEFAULT_TEXT_MODEL_VALUE = "gpt-image-2";
 var MODE_IMAGE_EDIT = "image-edit";
