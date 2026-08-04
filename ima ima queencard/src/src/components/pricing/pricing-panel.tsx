@@ -60,7 +60,7 @@ function toSubscriptionCards(
   return plans.flatMap((plan, index) => {
     const isFree = plan.pricesCny.monthly === 0;
 
-    if (mode === "monthly" && isFree) return [];
+    if (isFree) return [];
 
     const productKey = mode === "yearly" ? plan.productKeys.yearly : plan.productKeys.monthly;
     const price = mode === "yearly" ? plan.pricesCny.yearly : plan.pricesCny.monthly;
