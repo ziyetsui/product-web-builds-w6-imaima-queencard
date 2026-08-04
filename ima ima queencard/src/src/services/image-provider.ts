@@ -4,9 +4,12 @@ import { calculateModelCredits } from "@/config/credits";
 import { getImageGenerationModelMaxOutputCount } from "@/config/image-generation-models";
 import { creditService } from "@/services/credit";
 import {
+  type GptProtoConfig,
   type GptProtoImageFile,
   createGptProtoV3ImagePrediction,
   createOpenAIImageEdit,
+  getGptProtoConfigs,
+  shouldFailOverGptProto,
 } from "@/services/gptproto";
 
 export interface NormalizedImage {
@@ -16,7 +19,7 @@ export interface NormalizedImage {
 }
 
 export interface NormalizedImageGenerationResult {
-  provider: "gptproto";
+  provider: "gptproto" | "gptproto-fallback";
   model: string;
   capability?: "image-edit" | "image-to-image" | "tool";
   images: NormalizedImage[];
@@ -28,6 +31,7 @@ export interface NormalizedImageGenerationResult {
     providerCostUsd?: number;
   };
   holdKey?: string;
+  providerWarnings?: Array<{ code: string; message: string }>;
 }
 
 export interface ImageGenerationInput {
@@ -375,14 +379,10 @@ function appendAspectRatioHint(prompt: string, aspectRatio: string | undefined) 
   return `${prompt.trim()} --ar ${aspectRatio}`.trim();
 }
 
-export async function generateImage(
-  input: ImageGenerationInput
+async function generateWithGptProtoConfig(
+  input: ImageGenerationInput,
+  config: GptProtoConfig
 ): Promise<ImageProviderResult> {
-  const provider = getImageProvider();
-  if (provider !== "gptproto") {
-    throw new Error(`Unsupported image provider: ${provider}`);
-  }
-
   const outputNumber = clampOutputNumber(input.model, input.outputNumber);
   const referenceImageUrls = input.referenceImageUrls ?? [];
   const hasReferenceImages =
@@ -397,7 +397,7 @@ export async function generateImage(
       ? await createGptProtoV3ImagePrediction({
           endpoint: route.endpoint ?? "/api/v3/images/generations",
           body: buildV3Body(route, input, referenceImageUrls, outputNumber),
-        })
+        }, config)
       : await createOpenAIImageEdit({
           model: route.providerModel,
           prompt: input.prompt,
@@ -407,10 +407,10 @@ export async function generateImage(
           size: openAIEditSize(route, input),
           n: outputNumber,
           responseFormat: input.responseFormat,
-        });
+        }, config);
 
   return {
-    provider: "gptproto",
+    provider: config.route === "fallback" ? "gptproto-fallback" : "gptproto",
     model: route.providerModel,
     capability: input.capability ?? route.capability,
     images: result.images,
@@ -420,6 +420,47 @@ export async function generateImage(
       result.providerCostUsd ??
       estimateProviderCostUsd(route, input, outputNumber, referenceImageCount),
   };
+}
+
+export async function generateImage(
+  input: ImageGenerationInput
+): Promise<ImageProviderResult> {
+  const provider = getImageProvider();
+  if (provider !== "gptproto") {
+    throw new Error(`Unsupported image provider: ${provider}`);
+  }
+
+  const configs = getGptProtoConfigs();
+  let primaryError: unknown;
+  for (const [index, config] of configs.entries()) {
+    try {
+      const result = await generateWithGptProtoConfig(input, config);
+      if (index > 0) {
+        result.providerWarnings = [
+          {
+            code:
+              primaryError &&
+              typeof primaryError === "object" &&
+              "code" in primaryError &&
+              typeof primaryError.code === "string"
+                ? primaryError.code
+                : "GPTPROTO_PRIMARY_UNAVAILABLE",
+            message:
+              primaryError instanceof Error
+                ? primaryError.message
+                : "GPTProto primary route unavailable",
+          },
+        ];
+      }
+      return result;
+    } catch (error) {
+      if (index === 0) primaryError = error;
+      const hasFallback = index < configs.length - 1;
+      if (!hasFallback || !shouldFailOverGptProto(error)) throw error;
+    }
+  }
+
+  throw primaryError ?? new Error("No GPTProto route is configured");
 }
 
 /*

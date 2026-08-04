@@ -53,6 +53,10 @@ vi.mock("@/services/credit", () => ({
   creditService: mocks.creditService,
 }));
 
+vi.mock("@/services/generation-provider-health", () => ({
+  assertGenerationProviderAvailable: vi.fn(async () => undefined),
+}));
+
 import {
   createImageGenerationTask,
   estimateImageGeneration,

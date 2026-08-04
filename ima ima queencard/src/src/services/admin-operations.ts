@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, inArray, isNotNull } from "drizzle-orm";
 
 import { getPricingProduct } from "@/config/pricing-products";
-import { db, paymentFulfillments, users } from "@/db";
+import { db, generationProviderHealth, paymentFulfillments, users } from "@/db";
 
 const PAYMENT_SUCCESS_EVENTS = [
   "checkout.session.completed",
@@ -29,7 +29,7 @@ function shanghaiDayStart(now = new Date()) {
 
 export async function getOperationsOverview(now = new Date()) {
   const start = shanghaiDayStart(now);
-  const [newUsers, fulfilledToday, recentPayments, failedToday] = await Promise.all([
+  const [newUsers, fulfilledToday, recentPayments, failedToday, providerHealth] = await Promise.all([
     db.select({ id: users.id }).from(users).where(gte(users.createdAt, start)),
     db
       .select({
@@ -64,6 +64,11 @@ export async function getOperationsOverview(now = new Date()) {
         isNotNull(paymentFulfillments.eventId),
         inArray(paymentFulfillments.eventType, [...PAYMENT_SUCCESS_EVENTS])
       )),
+    db
+      .select()
+      .from(generationProviderHealth)
+      .where(eq(generationProviderHealth.provider, "gptproto"))
+      .limit(1),
   ]);
 
   const payingUsers = new Set(fulfilledToday.flatMap((row) => row.userId ? [row.userId] : []));
@@ -82,11 +87,21 @@ export async function getOperationsOverview(now = new Date()) {
       productTitle: getPricingProduct(row.productKey)?.title ?? row.productKey ?? "未知商品",
       listedPriceCny: getPricingProduct(row.productKey)?.priceCny ?? null,
     })),
-    gptproto: {
-      status: process.env.GPTPROTO_API_KEY ? "configured" as const : "unavailable" as const,
-      label: process.env.GPTPROTO_API_KEY
-        ? "已配置（余额需在 GPTProto 控制台确认）"
-        : "未配置，图像生成不可用",
-    },
+    gptproto: (() => {
+      const health = providerHealth[0];
+      if (!process.env.GPTPROTO_API_KEY) {
+        return { status: "unavailable" as const, label: "未配置，图像生成不可用" };
+      }
+      if (!health) {
+        return { status: "configured" as const, label: "已配置，等待首次健康检查" };
+      }
+      const balance = health.balanceCny === null ? "" : `，余额约 ¥${health.balanceCny}`;
+      const labels = {
+        available: `运行正常${balance}`,
+        degraded: `备用线路运行中${balance}`,
+        unavailable: `暂不可用${balance}：${health.reason ?? "请检查供应商"}`,
+      };
+      return { status: health.status, label: labels[health.status] };
+    })(),
   };
 }

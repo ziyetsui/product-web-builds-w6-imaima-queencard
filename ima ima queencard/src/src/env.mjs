@@ -33,6 +33,11 @@ export const env = createEnv({
     IMAGE_PROVIDER: z.enum(["gptproto", "apiyi"]).optional(),
     GPTPROTO_API_KEY: z.string().optional(),
     GPTPROTO_BASE_URL: z.string().url().optional(),
+    GPTPROTO_FALLBACK_API_KEY: z.string().optional(),
+    GPTPROTO_FALLBACK_BASE_URL: z.string().url().optional(),
+    GPTPROTO_BALANCE_API_URL: z.string().url().optional(),
+    GPTPROTO_LOW_BALANCE_CNY: z.coerce.number().nonnegative().optional(),
+    GPTPROTO_BALANCE_CHECK_INTERVAL_MS: z.coerce.number().int().positive().optional(),
     GPTPROTO_IMAGE_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
     GPTPROTO_POLL_INTERVAL_MS: z.coerce.number().int().positive().optional(),
     GPTPROTO_MAX_POLL_ATTEMPTS: z.coerce.number().int().positive().optional(),
@@ -91,6 +96,13 @@ export const env = createEnv({
     IMAGE_PROVIDER: process.env.IMAGE_PROVIDER?.trim(),
     GPTPROTO_API_KEY: process.env.GPTPROTO_API_KEY?.trim(),
     GPTPROTO_BASE_URL: process.env.GPTPROTO_BASE_URL?.trim(),
+    GPTPROTO_FALLBACK_API_KEY: process.env.GPTPROTO_FALLBACK_API_KEY?.trim(),
+    GPTPROTO_FALLBACK_BASE_URL:
+      process.env.GPTPROTO_FALLBACK_BASE_URL?.trim(),
+    GPTPROTO_BALANCE_API_URL: process.env.GPTPROTO_BALANCE_API_URL?.trim(),
+    GPTPROTO_LOW_BALANCE_CNY: process.env.GPTPROTO_LOW_BALANCE_CNY?.trim(),
+    GPTPROTO_BALANCE_CHECK_INTERVAL_MS:
+      process.env.GPTPROTO_BALANCE_CHECK_INTERVAL_MS?.trim(),
     GPTPROTO_IMAGE_TIMEOUT_MS: process.env.GPTPROTO_IMAGE_TIMEOUT_MS?.trim(),
     GPTPROTO_POLL_INTERVAL_MS: process.env.GPTPROTO_POLL_INTERVAL_MS?.trim(),
     GPTPROTO_MAX_POLL_ATTEMPTS:

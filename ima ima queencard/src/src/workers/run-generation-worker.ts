@@ -8,6 +8,7 @@ import { createGenerationQueue } from "@/services/generation-queue";
 import { creditService } from "@/services/credit";
 import { createGenerationTaskExecutor } from "@/services/generation-task-executor";
 import { createGenerationObservability } from "@/services/generation-observability";
+import { checkGptProtoBalance } from "@/services/generation-provider-health";
 import { createGenerationWorker } from "./generation-worker";
 
 const config = loadGenerationWorkerConfig(process.env);
@@ -60,6 +61,22 @@ const health = createServer(async (request, response) => {
 
 health.listen(healthPort, "0.0.0.0");
 await worker.start();
+const balanceCheckIntervalMs = Number(
+  process.env.GPTPROTO_BALANCE_CHECK_INTERVAL_MS ?? 15 * 60 * 1_000
+);
+async function checkProviderBalance() {
+  try {
+    await checkGptProtoBalance();
+  } catch (error) {
+    console.error("GPTProto balance check failed:", error);
+  }
+}
+void checkProviderBalance();
+const balanceMonitor = setInterval(
+  () => void checkProviderBalance(),
+  balanceCheckIntervalMs
+);
+balanceMonitor.unref();
 observability.event("generation_worker_started", {
   workerId: worker.status().workerId,
   healthPort,
@@ -75,6 +92,7 @@ async function shutdown(signal: string) {
     new Promise<false>((resolve) => setTimeout(() => resolve(false), 330_000)),
   ]);
   if (!drained) worker.abort();
+  clearInterval(balanceMonitor);
   await new Promise<void>((resolve) => health.close(() => resolve()));
   process.exitCode = drained ? 0 : 1;
 }

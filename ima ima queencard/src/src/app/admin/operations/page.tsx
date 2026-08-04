@@ -36,7 +36,7 @@ export default async function OperationsPage() {
 
         <section className="rounded-lg border border-slate-200 bg-white p-5">
           <div className="flex items-center gap-3">
-            <Zap className={data.gptproto.status === "configured" ? "size-5 text-emerald-600" : "size-5 text-red-600"} />
+            <Zap className={data.gptproto.status === "unavailable" ? "size-5 text-red-600" : data.gptproto.status === "degraded" ? "size-5 text-amber-600" : "size-5 text-emerald-600"} />
             <div>
               <h2 className="text-lg font-black">GPTProto 服务状态</h2>
               <p className="text-sm font-semibold text-slate-600">{data.gptproto.label}</p>
@@ -74,4 +74,3 @@ export default async function OperationsPage() {
     </AdminShell>
   );
 }
-

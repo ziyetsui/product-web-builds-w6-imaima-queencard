@@ -14,6 +14,15 @@ import {
   nextGenerationAttemptAt,
 } from "@/services/generation-task-policy";
 import {
+  GENERATION_MAINTENANCE_MESSAGE,
+  recordGenerationProviderFailure,
+  recordGenerationProviderSuccess,
+} from "@/services/generation-provider-health";
+import {
+  isGptProtoInsufficientBalanceError,
+  shouldFailOverGptProto,
+} from "@/services/gptproto";
+import {
   generateImage,
   type ImageGenerationInput,
   type NormalizedImage,
@@ -71,6 +80,9 @@ function providerResultUrl(result: ProviderResult) {
 }
 
 function publicFailureMessage(error: unknown) {
+  if (isGptProtoInsufficientBalanceError(error)) {
+    return GENERATION_MAINTENANCE_MESSAGE;
+  }
   if (!(error instanceof Error)) return "Image generation failed";
   return error.message.slice(0, 1_000);
 }
@@ -153,6 +165,23 @@ export function createGenerationTaskExecutor({
           config.providerTimeoutMs,
           signal
         );
+        try {
+          if (result.providerWarnings?.length) {
+            await recordGenerationProviderFailure(
+              new Error(result.providerWarnings[0]?.message),
+              {
+                degraded: true,
+                errorCode: result.providerWarnings[0]?.code,
+              }
+            );
+          } else {
+            await recordGenerationProviderSuccess(
+              result.provider === "gptproto-fallback" ? "fallback" : "primary"
+            );
+          }
+        } catch (healthError) {
+          console.error("Failed to update generation provider health:", healthError);
+        }
         const finalizedAt = now();
         const rows = result.images.flatMap((image, outputIndex) => {
           const storageUrl = assetUrlFor(image);
@@ -245,6 +274,13 @@ export function createGenerationTaskExecutor({
         );
         return finalized ? terminalStatus : "stale";
       } catch (error) {
+        if (shouldFailOverGptProto(error)) {
+          try {
+            await recordGenerationProviderFailure(error);
+          } catch (healthError) {
+            console.error("Failed to record generation provider failure:", healthError);
+          }
+        }
         const failure = classifyGenerationFailure(error);
         const failedAt = now();
         const retryable =

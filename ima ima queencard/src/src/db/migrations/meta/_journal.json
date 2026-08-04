@@ -57,6 +57,13 @@
       "when": 1785806400000,
       "tag": "0007_async_generation_worker",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785822000000,
+      "tag": "0008_generation_provider_health",
+      "breakpoints": true
     }
   ]
 }

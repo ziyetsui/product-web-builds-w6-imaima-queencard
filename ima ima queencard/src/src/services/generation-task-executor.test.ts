@@ -4,6 +4,13 @@ import type { GenerationWorkerConfig } from "@/config/generation-worker";
 import type { ClaimedGenerationTask } from "@/services/generation-queue";
 import { createGenerationTaskExecutor } from "./generation-task-executor";
 
+vi.mock("@/services/generation-provider-health", () => ({
+  GENERATION_MAINTENANCE_MESSAGE:
+    "图片生成服务正在补充额度，请稍后再试。此次请求未扣除积分。",
+  recordGenerationProviderFailure: vi.fn(async () => undefined),
+  recordGenerationProviderSuccess: vi.fn(async () => undefined),
+}));
+
 const NOW = new Date("2026-08-04T00:00:00.000Z");
 const config: GenerationWorkerConfig = {
   enabled: true,
@@ -134,6 +141,18 @@ describe("generation task executor", () => {
     const error = Object.assign(new Error("invalid request"), { status: 400 });
     const { executor, credits, taskUpdates } = harness({ providerError: error });
     await expect(executor.execute(claimed())).resolves.toBe("permanently_failed");
+    expect(credits.releaseInTx).toHaveBeenCalledOnce();
+    expect(taskUpdates.at(-1)).toMatchObject({ status: "permanently_failed" });
+  });
+
+  it("immediately releases credits when GPTProto balance is insufficient", async () => {
+    const error = Object.assign(new Error("insufficient balance"), {
+      status: 403,
+      code: "GPTPROTO_INSUFFICIENT_BALANCE",
+    });
+    const { executor, queue, credits, taskUpdates } = harness({ providerError: error });
+    await expect(executor.execute(claimed())).resolves.toBe("permanently_failed");
+    expect(queue.scheduleRetry).not.toHaveBeenCalled();
     expect(credits.releaseInTx).toHaveBeenCalledOnce();
     expect(taskUpdates.at(-1)).toMatchObject({ status: "permanently_failed" });
   });
