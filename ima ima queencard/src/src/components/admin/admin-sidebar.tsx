@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   BarChart3,
+  Activity,
   FileClock,
   KeyRound,
   ShieldCheck,
@@ -13,6 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const items = [
+  { href: "/admin/operations", label: "运营概览", icon: Activity },
   { href: "/admin/recharges", label: "用户充值管理", icon: WalletCards },
   { href: "/admin/invites", label: "邀请码管理", icon: KeyRound },
   { href: "/admin/risk", label: "风控配置", icon: ShieldCheck },
