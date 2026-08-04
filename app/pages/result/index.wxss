@@ -5,9 +5,9 @@
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 112rpx minmax(0, 1fr) 112rpx;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 30rpx;
 }
 
@@ -28,18 +28,21 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 68rpx;
+  width: 68rpx !important;
   height: 68rpx;
   background: #fff;
   font-size: 46rpx;
   line-height: 1;
+  justify-self: start;
 }
 
 .refresh-button {
+  width: 112rpx !important;
   min-width: 112rpx;
   height: 66rpx;
   background: #e7db4c;
   font-size: 24rpx;
+  justify-self: end;
 }
 
 .brand {
@@ -48,6 +51,7 @@
   align-items: center;
   font-weight: 900;
   line-height: 1;
+  min-width: 0;
 }
 
 .brand-main,
@@ -160,6 +164,8 @@
 }
 
 .secondary-button {
+  width: 100% !important;
+  min-width: 0;
   height: 78rpx;
   font-size: 25rpx;
 }
@@ -198,7 +204,7 @@
 
 .save-button,
 .reuse-button {
-  width: 100%;
+  width: 100% !important;
   height: 72rpx;
   border-bottom: 0;
   border-radius: 0;
@@ -253,7 +259,7 @@
 }
 
 .primary-button {
-  width: 100%;
+  width: 100% !important;
   height: 90rpx;
   background: #ef724f;
   font-size: 30rpx;

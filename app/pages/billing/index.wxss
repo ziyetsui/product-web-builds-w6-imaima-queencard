@@ -12,6 +12,8 @@
 }
 
 .topbar {
+  display: grid;
+  grid-template-columns: 112rpx minmax(0, 1fr) 112rpx;
   justify-content: space-between;
   margin-bottom: 30rpx;
 }
@@ -27,19 +29,22 @@
 }
 
 .icon-button {
-  width: 68rpx;
+  width: 68rpx !important;
   height: 68rpx;
   background: #fff;
   font-size: 34rpx;
   line-height: 1;
+  justify-self: start;
 }
 
 .text-button {
-  min-width: 92rpx;
+  width: 112rpx !important;
+  min-width: 112rpx;
   height: 66rpx;
   padding: 0 20rpx;
   background: #fff;
   font-size: 24rpx;
+  justify-self: end;
 }
 
 .brand {
@@ -48,6 +53,7 @@
   align-items: center;
   font-weight: 900;
   line-height: 1;
+  min-width: 0;
 }
 
 .brand-main,
@@ -135,6 +141,8 @@
 
 .tab-button {
   flex: 1;
+  width: auto !important;
+  min-width: 0;
   height: 70rpx;
   background: #fff;
   font-size: 24rpx;

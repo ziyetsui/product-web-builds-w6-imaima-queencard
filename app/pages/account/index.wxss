@@ -5,9 +5,9 @@
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 68rpx minmax(0, 1fr) 68rpx;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 30rpx;
 }
 
@@ -22,11 +22,12 @@
 }
 
 .icon-button {
-  width: 68rpx;
+  width: 68rpx !important;
   height: 68rpx;
   background: #fff;
   font-size: 34rpx;
   line-height: 1;
+  justify-self: start;
 }
 
 .brand {
@@ -35,6 +36,7 @@
   align-items: center;
   font-weight: 900;
   line-height: 1;
+  min-width: 0;
 }
 
 .brand-main,
@@ -51,6 +53,7 @@
   height: 28rpx;
   border: 4rpx solid #0d0d0d;
   border-radius: 50%;
+  justify-self: end;
 }
 
 .ready {
@@ -173,18 +176,20 @@
 .button-grid,
 .nav-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16rpx;
 }
 
 .small-button,
 .nav-button {
+  width: 100% !important;
+  min-width: 0;
   height: 70rpx;
   font-size: 24rpx;
 }
 
 .nav-grid {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .nav-button {

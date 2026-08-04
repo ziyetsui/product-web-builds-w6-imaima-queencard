@@ -5,9 +5,9 @@
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 68rpx minmax(0, 1fr) 68rpx;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 22rpx;
 }
 
@@ -15,7 +15,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 68rpx;
+  width: 68rpx !important;
   height: 68rpx;
   border: 4rpx solid #0d0d0d;
   border-radius: 8px;
@@ -24,6 +24,7 @@
   font-size: 46rpx;
   font-weight: 900;
   line-height: 1;
+  justify-self: start;
 }
 
 .brand {
@@ -32,6 +33,7 @@
   align-items: center;
   font-weight: 900;
   line-height: 1;
+  min-width: 0;
 }
 
 .brand-main,
@@ -48,6 +50,7 @@
   height: 28rpx;
   border: 4rpx solid #0d0d0d;
   border-radius: 50%;
+  justify-self: end;
 }
 
 .ready {
@@ -145,6 +148,8 @@
 }
 
 .mode-chip {
+  width: 100% !important;
+  min-width: 0;
   min-height: 70rpx;
   padding: 0 18rpx;
   border: 4rpx solid #0d0d0d;
@@ -215,6 +220,7 @@
 }
 
 .small-button {
+  width: auto !important;
   min-width: 144rpx;
   height: 66rpx;
   padding: 0 22rpx;
@@ -272,7 +278,7 @@
 }
 
 .remove-chip {
-  width: 100%;
+  width: 100% !important;
   height: 58rpx;
   margin-top: 10rpx;
   padding: 0;
@@ -320,7 +326,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 100%;
+  width: 100% !important;
   min-height: 250rpx;
   border: 4rpx dashed #0d0d0d;
   border-radius: 8px;
@@ -358,6 +364,7 @@
 }
 
 .text-button {
+  width: auto !important;
   color: #0d0d0d;
   font-size: 24rpx;
   font-weight: 900;
@@ -437,7 +444,7 @@
 }
 
 .submit-button {
-  width: 100%;
+  width: 100% !important;
   height: 90rpx;
   border: 4rpx solid #0d0d0d;
   border-radius: 8px;

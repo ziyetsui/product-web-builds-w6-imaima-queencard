@@ -14,7 +14,9 @@ test("Dockerfile documents its backend build context from the repository root", 
   assert.doesNotMatch(deploymentGuide, /detect the root `Dockerfile`/i);
   assert.equal(fs.existsSync(path.join(repositoryRoot, "Dockerfile")), false);
 
-  for (const source of ["package.json", "package-lock.json", "src", "public", "template-data"]) {
+  for (const source of ["package.json", "package-lock.json", "src", "public", "template-data", "migrations"]) {
     assert.equal(fs.existsSync(path.join(backendRoot, source)), true, `${source} must exist in the backend build context`);
   }
+
+  assert.match(dockerfile, /COPY migrations \.\/migrations/);
 });

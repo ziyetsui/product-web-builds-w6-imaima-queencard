@@ -5,9 +5,9 @@
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 68rpx minmax(0, 1fr) 68rpx;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 30rpx;
 }
 
@@ -24,11 +24,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 68rpx;
+  width: 68rpx !important;
   height: 68rpx;
   background: #fff;
   font-size: 34rpx;
   line-height: 1;
+  justify-self: start;
 }
 
 .brand {
@@ -37,6 +38,7 @@
   align-items: center;
   font-weight: 900;
   line-height: 1;
+  min-width: 0;
 }
 
 .brand-main,
@@ -53,6 +55,7 @@
   height: 28rpx;
   border: 4rpx solid #0d0d0d;
   border-radius: 50%;
+  justify-self: end;
 }
 
 .ready {
@@ -136,12 +139,13 @@
 }
 
 .account-actions {
-  display: flex;
-  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, 104rpx);
   gap: 10rpx;
 }
 
 .small-button {
+  width: 104rpx !important;
   min-width: 104rpx;
   height: 66rpx;
   padding: 0 16rpx;

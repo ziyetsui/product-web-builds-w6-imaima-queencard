@@ -5,9 +5,9 @@
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 112rpx minmax(0, 1fr) 112rpx;
   align-items: center;
-  justify-content: space-between;
   margin-bottom: 30rpx;
 }
 
@@ -25,11 +25,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 68rpx;
+  width: 68rpx !important;
   height: 68rpx;
   background: #fff;
   font-size: 46rpx;
   line-height: 1;
+  justify-self: start;
 }
 
 .top-spacer {
@@ -38,11 +39,13 @@
 }
 
 .text-button {
-  min-width: 92rpx;
+  width: 112rpx !important;
+  min-width: 112rpx;
   height: 66rpx;
   padding: 0 20rpx;
   background: #fff;
   font-size: 24rpx;
+  justify-self: end;
 }
 
 .brand {
@@ -51,6 +54,7 @@
   align-items: center;
   font-weight: 900;
   line-height: 1;
+  min-width: 0;
 }
 
 .brand-main,
@@ -168,7 +172,7 @@
 }
 
 .pay-button {
-  width: 100%;
+  width: 100% !important;
   height: 82rpx;
   margin-top: 24rpx;
   background: #fff;
@@ -177,7 +181,7 @@
 }
 
 .pay-button.slim {
-  width: 180rpx;
+  width: 180rpx !important;
   height: 66rpx;
   margin-top: 18rpx;
   font-size: 24rpx;
