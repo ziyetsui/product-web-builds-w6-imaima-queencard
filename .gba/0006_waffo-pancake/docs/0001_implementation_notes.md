@@ -11,10 +11,25 @@
 
 ## 外部待办
 
-- 登录 Waffo Dashboard，确认唯一目标 Store；如果存在多个 Store，必须由用户明确选择。
-- 在测试环境创建或匹配六个商品，记录六个 `PROD_` ID。
-- 创建测试 webhook，地址为 `/api/webhooks/waffo`，订阅规范列出的十类事件。
 - 将 Merchant ID、PEM 私钥、六个 Product ID 和渠道开关写入 Zeabur。
 - 完成一次性支付、订阅首期、重复 webhook 与取消订阅测试。
 
 任何日志、文档和提交都不得保存真实私钥或完整 webhook 载荷。
+
+## Waffo 测试资源（2026-08-04）
+
+- Merchant ID：`MER_6FCSfEgP1oX6A5vmoYz0TS`
+- Store：`ima ima queencard`（`STO_2bvXL7lJ3D2g4rc5shaRXs`）
+- 测试 Webhook：`https://queencard-imaima.zeabur.app/api/webhooks/waffo`
+- Webhook ID：`52007221-f820-4bb9-8f04-3f394194a724`
+
+| productKey | Waffo 测试 Product ID |
+| --- | --- |
+| `creator_monthly` | `PROD_2dTpHDPfo5nBRRtyZZMIBW` |
+| `creator_annual` | `PROD_5ZUfRCSaMhuzpsgkFLClKm` |
+| `studio_monthly` | `PROD_4kikBFdByhS2SyZPgr8Srn` |
+| `studio_annual` | `PROD_4HPnwuzvBMshUXJyqEKjBb` |
+| `credit_creator` | `PROD_1ZrxNKSxJV0y2xM7ix0j8k` |
+| `credit_studio` | `PROD_2Fg2b6EE1rvtCe1kpabtdV` |
+
+上述资源均为测试环境资源，未调用 `.publish()`。
