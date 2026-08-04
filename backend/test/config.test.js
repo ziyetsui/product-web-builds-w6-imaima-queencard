@@ -206,3 +206,25 @@ test("propagates the configured WeChat login endpoint into the app runtime", () 
     "https://wechat-gateway.example/code2session",
   );
 });
+
+test("propagates WeChat Pay v3 credentials into the app runtime", () => {
+  const config = loadConfig({
+    NODE_ENV: "test",
+    PAYMENT_PROVIDER: "wechat",
+    WECHAT_PAY_MERCHANT_ID: "merchant-test",
+    WECHAT_PAY_CERTIFICATE_SERIAL: "serial-test",
+    WECHAT_PAY_API_V3_KEY: "12345678901234567890123456789012",
+    WECHAT_PAY_PRIVATE_KEY: "private-key-test",
+    WECHAT_PAY_NOTIFY_URL: "https://pay.example/notify",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "public-key-test",
+  });
+  const runtimeEnv = toRuntimeEnv(config);
+
+  assert.equal(runtimeEnv.PAYMENT_PROVIDER, "wechat");
+  assert.equal(runtimeEnv.WECHAT_PAY_MERCHANT_ID, "merchant-test");
+  assert.equal(runtimeEnv.WECHAT_PAY_CERTIFICATE_SERIAL, "serial-test");
+  assert.equal(runtimeEnv.WECHAT_PAY_API_V3_KEY, "12345678901234567890123456789012");
+  assert.equal(runtimeEnv.WECHAT_PAY_PRIVATE_KEY, "private-key-test");
+  assert.equal(runtimeEnv.WECHAT_PAY_NOTIFY_URL, "https://pay.example/notify");
+  assert.equal(runtimeEnv.WECHAT_PAY_PLATFORM_PUBLIC_KEY, "public-key-test");
+});

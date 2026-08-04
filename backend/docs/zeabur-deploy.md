@@ -77,17 +77,23 @@ GPTPROTO_API_KEY=your-gptproto-key
 ```
 
 For a production payment flow, keep miniapp order creation in this backend and
-switch the payment adapter only after the WeChat merchant prepay service is
-ready:
+switch the payment adapter only after the WeChat merchant credentials and
+notify URL are ready:
 
 ```bash
-MINIAPP_PAYMENT_MODE=wechat
+PAYMENT_PROVIDER=wechat
+WECHAT_PAY_MERCHANT_ID=your-merchant-id
+WECHAT_PAY_CERTIFICATE_SERIAL=your-certificate-serial
+WECHAT_PAY_API_V3_KEY=your-32-byte-api-v3-key
+WECHAT_PAY_PRIVATE_KEY=your-pkcs8-private-key
+WECHAT_PAY_PLATFORM_PUBLIC_KEY=your-platform-public-key
+WECHAT_PAY_NOTIFY_URL=https://your-domain/api/miniapp/payments/wechat/notify
 MINIAPP_ADMIN_OPENIDS=real-admin-openid-1,real-admin-openid-2
 ```
 
-`MINIAPP_WECHAT_PAYMENT_PARAMS_JSON` is only a development bridge for fixed
-`wx.requestPayment` params. Real deployments should generate those params per
-order server-side and then fulfill credits from the payment notify callback.
+Production configuration rejects incomplete WeChat v3 credentials. Keep the
+platform public key updated when WeChat rotates it, and do not put any private
+key or API v3 key in the mini-program frontend.
 
 ## After Deployment
 

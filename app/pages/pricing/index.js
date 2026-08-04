@@ -142,6 +142,27 @@ Page({
     });
   },
 
+  waitForOrder: function (orderId, attempt) {
+    var page = this;
+    var currentAttempt = attempt || 0;
+    return billing.getOrder(orderId).then(function (latest) {
+      var paymentStatus = String(latest.paymentStatus || "").toLowerCase();
+      var status = String(latest.status || "").toLowerCase();
+      if (paymentStatus === "fulfilled" || status === "paid") return latest;
+      if (["failed", "canceled", "refunded"].indexOf(paymentStatus) >= 0 || ["failed", "canceled", "refunded"].indexOf(status) >= 0) {
+        throw new Error("订单状态为" + (latest.status || latest.paymentStatus));
+      }
+      if (currentAttempt >= 10) {
+        throw new Error("支付已提交，积分仍在同步，请稍后到订单页查看。");
+      }
+      return new Promise(function (resolve) {
+        setTimeout(function () {
+          resolve(page.waitForOrder(orderId, currentAttempt + 1));
+        }, 1500);
+      });
+    });
+  },
+
   offerMockPay: function (order) {
     var page = this;
     wx.showModal({
@@ -202,7 +223,18 @@ Page({
         }
         requestPayment(result.paymentParams)
           .then(function () {
-            page.completeOrder(order, "微信支付已完成，积分已刷新。");
+            page.waitForOrder(order.id)
+              .then(function (latest) {
+                page.completeOrder(latest || order, "微信支付已完成，积分已刷新。");
+              })
+              .catch(function (error) {
+                page.setData({
+                  payingProductId: "",
+                  notice: error.message || "支付已提交，请稍后查看订单状态。",
+                  error: "",
+                });
+                page.refreshCredits();
+              });
           })
           .catch(function (error) {
             page.setData({

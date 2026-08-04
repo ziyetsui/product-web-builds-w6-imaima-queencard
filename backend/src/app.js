@@ -13,6 +13,7 @@ const { createCreditService } = require("./services/credit-service");
 const { createGenerationService } = require("./services/generation-service");
 const { createGenerationWorker } = require("./worker/generation-worker");
 const { createModelRegistry } = require("./services/model-registry");
+const { createPaymentProvider } = require("./payments");
 const orderService = require("./services/order-service");
 const { fetchTemplateById, fetchTemplateList } = require("./templates");
 const { importCatalog, validateCatalog } = require("./services/catalog-service");
@@ -305,29 +306,6 @@ function paymentMode(env) {
   return getEnv(env, "MINIAPP_PAYMENT_MODE", env.MINIAPP_DEV_LOGIN === "1" ? "mock" : "manual");
 }
 
-function wxPaymentParams(env, order, product) {
-  const configured = parseEnvJson(env, "MINIAPP_WECHAT_PAYMENT_PARAMS_JSON", null);
-  if (!configured) return null;
-  return {
-    ...configured,
-    package: configured.package || configured.packageValue || `prepay_id=${order.id}`,
-    nonceStr: configured.nonceStr || crypto.randomBytes(12).toString("hex"),
-    timeStamp: configured.timeStamp || Math.floor(Date.now() / 1000).toString(),
-    productId: product.id,
-    orderId: order.id,
-  };
-}
-
-function paymentCreatePayload(env, order, product) {
-  const mode = paymentMode(env);
-  if (mode === "wechat") {
-    const params = wxPaymentParams(env, order, product);
-    if (params) return { paymentStatus: "created", paymentParams: params, paymentMode: "wechat" };
-  }
-  if (mode === "mock") return { paymentStatus: "mock_pending", paymentParams: null, paymentMode: "mock" };
-  return { paymentStatus: "manual_pending", paymentParams: null, paymentMode: "manual" };
-}
-
 function paymentInstructions(order) {
   if (order.paymentMode === "mock") {
     return {
@@ -368,6 +346,12 @@ function createApp(options = {}) {
     env,
     fetchImpl,
     clock: options.clock,
+  });
+  const paymentProvider = options.paymentProvider || createPaymentProvider({
+    env,
+    fetch: fetchImpl,
+    clock: options.clock,
+    nonce: options.paymentNonce,
   });
   const imageProvider = options.imageProvider || createImageProvider({
     env,
@@ -631,6 +615,91 @@ function createApp(options = {}) {
         return json({ success: true, data: null });
       }
 
+      if (path === "/api/miniapp/payments/wechat/notify" && request.method === "POST") {
+        if (paymentProvider.mode !== "wechat" || typeof paymentProvider.parseNotification !== "function") {
+          return json({ code: "FAIL", message: "Payment notification endpoint is disabled" }, 503);
+        }
+        const rawBody = await request.text();
+        const transaction = paymentProvider.parseNotification({
+          headers: Object.fromEntries(request.headers.entries()),
+          body: rawBody,
+        });
+        if (transaction.trade_state !== "SUCCESS") {
+          return json({ code: "SUCCESS", message: "非成功交易已忽略" });
+        }
+        const appId = getEnv(env, "WECHAT_MINIAPP_APP_ID", getEnv(env, "WECHAT_APP_ID"));
+        const merchantId = getEnv(env, "WECHAT_PAY_MERCHANT_ID", getEnv(env, "WECHAT_MCHID"));
+        if ((transaction.appid && transaction.appid !== appId) || (transaction.mchid && transaction.mchid !== merchantId)) {
+          const error = new Error("WeChat payment identity does not match this application");
+          error.status = 400;
+          error.code = "PAYMENT_NOTIFICATION_IDENTITY_MISMATCH";
+          throw error;
+        }
+        const orderId = String(transaction.out_trade_no || "").trim();
+        const transactionId = String(transaction.transaction_id || "").trim();
+        if (!orderId || !transactionId) {
+          const error = new Error("WeChat payment notification is missing order identity");
+          error.status = 400;
+          error.code = "PAYMENT_NOTIFICATION_INVALID";
+          throw error;
+        }
+        const order = await store.getOrder(orderId);
+        if (!order || order.paymentMode !== "wechat") {
+          const error = new Error("WeChat payment order not found");
+          error.status = 404;
+          error.code = "PAYMENT_ORDER_NOT_FOUND";
+          throw error;
+        }
+        const total = Number(transaction.amount && transaction.amount.total);
+        if (!Number.isSafeInteger(total) || total !== Number(order.amountCents)) {
+          const error = new Error("WeChat payment amount does not match the order");
+          error.status = 400;
+          error.code = "PAYMENT_AMOUNT_MISMATCH";
+          throw error;
+        }
+        const fulfillmentKey = `wechat:${transactionId}`;
+        const existingFulfillment = store.getPaymentFulfillment
+          ? await store.getPaymentFulfillment(fulfillmentKey)
+          : null;
+        const fulfillment = await store.fulfillPayment({
+          fulfillmentKey,
+          orderId,
+          provider: "wechat",
+          eventId: transactionId,
+          eventType: "TRANSACTION.SUCCESS",
+          providerOrderId: orderId,
+          providerTransactionId: transactionId,
+          status: "FULFILLED",
+          paymentVerified: true,
+          paidAt: transaction.success_time || undefined,
+          metadata: {
+            paymentVerified: true,
+            tradeState: transaction.trade_state,
+            appid: transaction.appid || "",
+            mchid: transaction.mchid || "",
+          },
+        });
+        if (!existingFulfillment) {
+          await store.recordPaymentEvent({
+            orderId,
+            userId: order.userId,
+            type: "pay",
+            actorId: "wechat-pay",
+            message: "WeChat payment completed",
+            metadata: { transactionId, amountCents: total },
+          });
+          await store.recordPaymentEvent({
+            orderId,
+            userId: order.userId,
+            type: "fulfill",
+            actorId: "wechat-pay",
+            message: "Credits granted",
+            metadata: { credits: order.credits },
+          });
+        }
+        return json({ code: "SUCCESS", message: "成功", data: { fulfillmentId: fulfillment && fulfillment.id } });
+      }
+
       if (path === "/api/miniapp/pricing" && request.method === "GET") {
         const mode = paymentMode(env);
         return json({
@@ -707,7 +776,7 @@ function createApp(options = {}) {
       }
 
       if (path === "/api/miniapp/orders" && request.method === "POST") {
-        const { user } = await getCurrentUser(request, authService);
+        const { payload, user } = await getCurrentUser(request, authService);
         const body = await readJson(request);
         const productId = String(body.productId || "").trim();
         const product = findProduct(env, productId);
@@ -728,12 +797,37 @@ function createApp(options = {}) {
           credits: product.credits,
           productSnapshot: orderService.cloneProduct(product),
         };
-        const payment = paymentCreatePayload(env, draft, product);
+        if (idempotencyKey && store.getOrderByIdempotencyKey) {
+          const existing = await store.getOrderByIdempotencyKey(user.id, idempotencyKey);
+          if (existing) {
+            if (existing.productId !== product.id || existing.channel !== channel || Number(existing.amountCents) !== Number(product.amountCents)) {
+              const error = new Error("Order idempotency conflict");
+              error.status = 409;
+              throw error;
+            }
+            return json({
+              success: true,
+              data: {
+                order: orderService.serializeOrder(existing),
+                paymentParams: existing.paymentParams || null,
+                payment: existing.paymentParams
+                  ? { mode: existing.paymentMode, status: existing.paymentStatus }
+                  : paymentInstructions(existing),
+              },
+            });
+          }
+        }
+        const payment = await paymentProvider.createPayment({
+          order: draft,
+          product,
+          openid: payload.openid,
+        });
         const order = await store.createOrder({
           ...draft,
           paymentStatus: payment.paymentStatus,
           paymentMode: payment.paymentMode,
           paymentParams: payment.paymentParams,
+          metadata: payment.providerOrderId ? { paymentProviderOrderId: payment.providerOrderId } : {},
         });
         if (order.created !== false) {
           await store.recordPaymentEvent({
@@ -875,6 +969,21 @@ function createApp(options = {}) {
         const action = adminOrderActionMatch[2];
         const body = await readJson(request);
         const reason = body.reason || `admin:${action}`;
+        const currentOrder = action === "refund" ? await store.getOrder(orderId) : null;
+        if (action === "refund" && currentOrder && currentOrder.paymentMode === "wechat" && !currentOrder.refundedAt) {
+          if (paymentProvider.mode !== "wechat" || typeof paymentProvider.refund !== "function") {
+            const error = new Error("WeChat refund provider is not configured");
+            error.status = 503;
+            error.code = "PAYMENT_PROVIDER_NOT_CONFIGURED";
+            throw error;
+          }
+          await paymentProvider.refund({
+            order: currentOrder,
+            providerTransactionId: currentOrder.externalPaymentId,
+            refundAmountCents: currentOrder.amountCents,
+            reason,
+          });
+        }
         const result = action === "refund"
           ? await store.refundOrder(orderId, { reason, revokeCredits: body.revokeCredits !== false })
           : await store.cancelOrder(orderId, { reason });

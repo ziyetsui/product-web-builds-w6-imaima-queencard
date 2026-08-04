@@ -230,6 +230,12 @@ function listOrders(query) {
   });
 }
 
+function getOrder(orderId) {
+  return request({
+    path: "/orders/" + encodeURIComponent(orderId || ""),
+  });
+}
+
 function getBilling(query) {
   return request({
     path: "/billing",
@@ -365,6 +371,7 @@ module.exports = {
   listImageModels: listImageModels,
   createOrder: createOrder,
   listOrders: listOrders,
+  getOrder: getOrder,
   getBilling: getBilling,
   mockPayOrder: mockPayOrder,
   getAccountMe: getAccountMe,

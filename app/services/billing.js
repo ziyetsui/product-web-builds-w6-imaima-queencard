@@ -149,6 +149,12 @@ function listOrders(query) {
   return api.listOrders(query || {}).then(normalizeOrderList);
 }
 
+function getOrder(orderId) {
+  return api.getOrder(orderId).then(function (payload) {
+    return normalizeOrderResult(payload).order;
+  });
+}
+
 function getBilling(query) {
   return api.getBilling(query || {}).then(normalizeBillingList);
 }
@@ -158,6 +164,7 @@ module.exports = {
   createOrder: createOrder,
   mockPayOrder: mockPayOrder,
   listOrders: listOrders,
+  getOrder: getOrder,
   getBilling: getBilling,
   normalizeProducts: normalizeProducts,
   normalizeOrderResult: normalizeOrderResult,

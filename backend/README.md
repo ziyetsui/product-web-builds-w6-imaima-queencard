@@ -222,13 +222,23 @@ POST /api/miniapp/orders
 ```
 
 The response includes `order` plus either `paymentParams` for
-`wx.requestPayment` or a local/manual `payment` status. Real WeChat payment
-params are only returned when:
+`wx.requestPayment` or a local/manual `payment` status. In local development,
+use `mock`; for real payment, use the WeChat Pay v3 adapter:
 
 ```text
-MINIAPP_PAYMENT_MODE=wechat
-MINIAPP_WECHAT_PAYMENT_PARAMS_JSON={"nonceStr":"...","package":"prepay_id=...","paySign":"...","signType":"RSA","timeStamp":"..."}
+PAYMENT_PROVIDER=wechat
+WECHAT_PAY_MERCHANT_ID=...
+WECHAT_PAY_CERTIFICATE_SERIAL=...
+WECHAT_PAY_API_V3_KEY=...
+WECHAT_PAY_PRIVATE_KEY=...
+WECHAT_PAY_PLATFORM_PUBLIC_KEY=...
+WECHAT_PAY_NOTIFY_URL=https://your-domain/api/miniapp/payments/wechat/notify
 ```
+
+The backend signs the JSAPI request per order and only grants credits after a
+verified `POST /api/miniapp/payments/wechat/notify` event. The old
+`MINIAPP_WECHAT_PAYMENT_PARAMS_JSON` value is retained only as a migration
+reference and is not used by the v3 adapter.
 
 Local development can use:
 

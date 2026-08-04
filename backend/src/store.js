@@ -162,6 +162,7 @@ function createMemoryStore(options = {}) {
   let activeCatalogVersionId = null;
   const orders = new Map();
   const paymentAudit = [];
+  const paymentFulfillments = new Map();
 
   function nowIso(value) {
     const current = value instanceof Date ? value : typeof value === "number" ? new Date(value) : clock();
@@ -363,6 +364,7 @@ function createMemoryStore(options = {}) {
       currency: order.currency || "CNY",
       credits: Number(order.credits || 0),
       productSnapshot: order.productSnapshot || null,
+      metadata: order.metadata || {},
       paymentParams: order.paymentParams || null,
       externalPaymentId: order.externalPaymentId || "",
       mockFulfillmentKey: order.mockFulfillmentKey || "",
@@ -446,6 +448,56 @@ function createMemoryStore(options = {}) {
       reason: input.reason,
       [mockFulfillmentIdentity]: identity.expected,
     });
+  }
+
+  function getPaymentFulfillment(key) {
+    return paymentFulfillments.get(String(key || "")) || null;
+  }
+
+  function fulfillPayment(input = {}) {
+    if (input.paymentVerified !== true || input.provider !== "wechat" || input.status !== "FULFILLED" || !input.fulfillmentKey || !input.orderId || !input.eventId || !input.providerTransactionId) {
+      throw memoryCreditError("Verified WeChat payment required", 409);
+    }
+    const existing = getPaymentFulfillment(input.fulfillmentKey);
+    if (existing) {
+      if (existing.orderId !== input.orderId || existing.eventId !== input.eventId || existing.providerTransactionId !== input.providerTransactionId) {
+        throw memoryCreditError("Payment fulfillment identity conflict", 409);
+      }
+      return existing;
+    }
+    const order = getOrder(input.orderId);
+    if (!order || order.paymentMode !== "wechat") throw memoryCreditError("Verified WeChat payment required", 409);
+    if (order.fulfilledAt || order.status === "paid") throw memoryCreditError("Payment fulfillment identity conflict", 409);
+    const result = fulfillOrder(order.id, {
+      paidAt: input.paidAt,
+      reason: `wechat-payment:${input.eventId}`,
+    });
+    result.order.externalPaymentId = input.providerTransactionId;
+    result.order.paymentVerified = true;
+    result.order.metadata = {
+      ...(result.order.metadata || {}),
+      ...(input.metadata || {}),
+      paymentVerification: "verified",
+      paymentEventId: input.eventId,
+    };
+    const fulfillment = {
+      id: input.id || `fulfillment_${crypto.randomUUID()}`,
+      fulfillmentKey: input.fulfillmentKey,
+      orderId: input.orderId,
+      provider: "wechat",
+      eventId: input.eventId,
+      eventType: input.eventType || "",
+      providerOrderId: input.providerOrderId || "",
+      providerTransactionId: input.providerTransactionId,
+      status: "FULFILLED",
+      errorMessage: "",
+      metadata: { ...(input.metadata || {}), paymentVerified: true, verificationMode: "wechat" },
+      fulfilledAt: input.paidAt || nowIso(),
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    paymentFulfillments.set(fulfillment.fulfillmentKey, fulfillment);
+    return fulfillment;
   }
 
   function cancelOrder(id, input = {}) {
@@ -1033,6 +1085,8 @@ function createMemoryStore(options = {}) {
     listAllOrders,
     fulfillOrder,
     fulfillMockOrder,
+    fulfillPayment,
+    getPaymentFulfillment,
     cancelOrder,
     refundOrder,
     recordPaymentEvent,
@@ -1488,6 +1542,60 @@ function createSqliteStore(options = {}) {
       db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  function getPaymentFulfillment(key) {
+    const row = db.prepare("SELECT * FROM payment_fulfillments WHERE fulfillment_key = ?").get(String(key || ""));
+    return row ? rowToPaymentFulfillment(row) : null;
+  }
+
+  function fulfillPayment(input = {}) {
+    if (input.paymentVerified !== true || input.provider !== "wechat" || input.status !== "FULFILLED" || !input.fulfillmentKey || !input.orderId || !input.eventId || !input.providerTransactionId) {
+      const error = new Error("Verified WeChat payment required");
+      error.status = 409;
+      throw error;
+    }
+    const existing = getPaymentFulfillment(input.fulfillmentKey);
+    if (existing) {
+      if (existing.orderId !== input.orderId || existing.eventId !== input.eventId || existing.providerTransactionId !== input.providerTransactionId) {
+        const error = new Error("Payment fulfillment identity conflict");
+        error.status = 409;
+        throw error;
+      }
+      return existing;
+    }
+    const order = getOrder(input.orderId);
+    if (!order || order.paymentMode !== "wechat" || order.fulfilledAt || order.status === "paid") {
+      const error = new Error("Verified WeChat payment required");
+      error.status = 409;
+      throw error;
+    }
+    const result = fulfillOrder(order.id, { paidAt: input.paidAt, reason: `wechat-payment:${input.eventId}` });
+    db.prepare("UPDATE orders SET external_payment_id = ? WHERE id = ?").run(input.providerTransactionId, order.id);
+    const createdAt = new Date().toISOString();
+    const fulfillmentId = input.id || `fulfillment_${crypto.randomUUID()}`;
+    db.prepare(`
+      INSERT INTO payment_fulfillments (
+        id, fulfillment_key, order_id, provider, event_id, event_type,
+        provider_order_id, provider_transaction_id, status, metadata_json,
+        fulfilled_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      fulfillmentId,
+      input.fulfillmentKey,
+      order.id,
+      "wechat",
+      input.eventId,
+      input.eventType || "",
+      input.providerOrderId || "",
+      input.providerTransactionId,
+      "FULFILLED",
+      stringify({ ...(input.metadata || {}), paymentVerified: true, verificationMode: "wechat" }),
+      input.paidAt || createdAt,
+      createdAt,
+      createdAt,
+    );
+    return getPaymentFulfillment(input.fulfillmentKey) || result.order;
   }
 
   function cancelOrder(id, input = {}) {
@@ -2185,6 +2293,8 @@ function createSqliteStore(options = {}) {
     listAllOrders,
     fulfillOrder,
     fulfillMockOrder,
+    fulfillPayment,
+    getPaymentFulfillment,
     cancelOrder,
     refundOrder,
     recordPaymentEvent,
@@ -2410,6 +2520,21 @@ function migrate(db) {
       message TEXT,
       metadata_json TEXT,
       created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS payment_fulfillments (
+      id TEXT PRIMARY KEY,
+      fulfillment_key TEXT NOT NULL UNIQUE,
+      order_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      event_type TEXT,
+      provider_order_id TEXT,
+      provider_transaction_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      fulfilled_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
   `);
   ensureColumn(db, "users", "status", "TEXT NOT NULL DEFAULT 'active'");
@@ -2763,6 +2888,25 @@ function rowToPaymentEvent(row) {
     message: row.message || "",
     metadata: parseJson(row.metadata_json, null),
     createdAt: row.created_at,
+  };
+}
+
+function rowToPaymentFulfillment(row) {
+  return {
+    id: row.id,
+    fulfillmentKey: row.fulfillment_key,
+    orderId: row.order_id,
+    provider: row.provider,
+    eventId: row.event_id,
+    eventType: row.event_type || "",
+    providerOrderId: row.provider_order_id || "",
+    providerTransactionId: row.provider_transaction_id || "",
+    status: row.status,
+    errorMessage: row.error_message || "",
+    metadata: parseJson(row.metadata_json, {}),
+    fulfilledAt: row.fulfilled_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 

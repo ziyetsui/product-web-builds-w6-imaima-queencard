@@ -178,6 +178,14 @@ function loadConfig(env = process.env) {
   ).toLowerCase();
   if (production && legacyPaymentMode === "mock") invalid.push("MINIAPP_PAYMENT_MODE");
   if (production && paymentProvider === "mock") invalid.push("PAYMENT_PROVIDER");
+  if (production && paymentProvider === "wechat") {
+    requiredValue(env, ["WECHAT_PAY_MERCHANT_ID", "WECHAT_MCHID"], "WECHAT_PAY_MERCHANT_ID", missing);
+    requiredValue(env, ["WECHAT_PAY_CERTIFICATE_SERIAL"], "WECHAT_PAY_CERTIFICATE_SERIAL", missing);
+    requiredValue(env, ["WECHAT_PAY_API_V3_KEY"], "WECHAT_PAY_API_V3_KEY", missing);
+    requiredValue(env, ["WECHAT_PAY_PRIVATE_KEY"], "WECHAT_PAY_PRIVATE_KEY", missing);
+    requiredValue(env, ["WECHAT_PAY_NOTIFY_URL"], "WECHAT_PAY_NOTIFY_URL", missing);
+    requiredValue(env, ["WECHAT_PAY_PLATFORM_PUBLIC_KEY", "WECHAT_PAY_PUBLIC_KEY"], "WECHAT_PAY_PLATFORM_PUBLIC_KEY", missing);
+  }
   const paymentMode = paymentProvider === "mock"
     ? "mock"
     : paymentProvider === "wechat" ? "wechat" : "manual";
@@ -239,6 +247,7 @@ function loadConfig(env = process.env) {
       apiV3Key: valueFor(env, ["WECHAT_PAY_API_V3_KEY"], ""),
       privateKey: valueFor(env, ["WECHAT_PAY_PRIVATE_KEY"], ""),
       notifyUrl: valueFor(env, ["WECHAT_PAY_NOTIFY_URL"], ""),
+      platformPublicKey: valueFor(env, ["WECHAT_PAY_PLATFORM_PUBLIC_KEY", "WECHAT_PAY_PUBLIC_KEY"], ""),
     },
   };
 
@@ -280,6 +289,12 @@ function toRuntimeEnv(config, sourceEnv = {}) {
     MINIAPP_IMAGE_PROVIDER: config.generation.provider,
     PAYMENT_PROVIDER: config.payment.provider,
     MINIAPP_PAYMENT_MODE: config.payment.mode,
+    WECHAT_PAY_MERCHANT_ID: config.payment.merchantId,
+    WECHAT_PAY_CERTIFICATE_SERIAL: config.payment.certificateSerial,
+    WECHAT_PAY_API_V3_KEY: config.payment.apiV3Key,
+    WECHAT_PAY_PRIVATE_KEY: config.payment.privateKey,
+    WECHAT_PAY_NOTIFY_URL: config.payment.notifyUrl,
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: config.payment.platformPublicKey,
   };
 }
 
