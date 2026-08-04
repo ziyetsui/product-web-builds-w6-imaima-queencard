@@ -101,14 +101,7 @@ export function CheckoutButton({
         throw new UnsafeCheckoutUrlError("Unsafe checkout URL");
       }
 
-      if (provider === "waffo") {
-        const checkoutWindow = window.open(url, "_blank", "noopener,noreferrer");
-        if (!checkoutWindow) {
-          throw new Error("Checkout popup was blocked");
-        }
-      } else {
-        window.location.href = url;
-      }
+      window.location.href = url;
     } catch (error) {
       console.warn("Checkout session error:", error);
       toast.error("无法创建支付链接", {

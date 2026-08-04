@@ -186,10 +186,11 @@ describe("CheckoutButton", () => {
     ).toBe(true);
   });
 
-  it("opens Waffo checkout in a new tab with opener isolation", async () => {
+  it("does not rely on a popup for Waffo checkout", async () => {
     const user = userEvent.setup();
     vi.stubEnv("NEXT_PUBLIC_BILLING_PROVIDER", "waffo");
-    const open = vi.spyOn(window, "open").mockReturnValue(window);
+    const open = vi.spyOn(window, "open");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const url =
       "https://pancake.waffo.ai/store/demo/checkout/CHK_123#token=test";
     vi.stubGlobal(
@@ -203,7 +204,9 @@ describe("CheckoutButton", () => {
     await user.click(screen.getByRole("button", { name: "月付订阅" }));
 
     await waitFor(() => {
-      expect(open).toHaveBeenCalledWith(url, "_blank", "noopener,noreferrer");
+      expect(fetch).toHaveBeenCalled();
     });
+    expect(open).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });
