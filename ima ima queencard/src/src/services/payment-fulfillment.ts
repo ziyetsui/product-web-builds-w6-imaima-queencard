@@ -145,7 +145,7 @@ export function markRefunded(
 }
 
 export async function fulfillCreditGrantOnce(params: FulfillCreditGrantParams) {
-  return db.transaction(async (trx) => {
+  const result = await db.transaction(async (trx) => {
     await trx
       .insert(paymentFulfillments)
       .values({
@@ -296,4 +296,21 @@ export async function fulfillCreditGrantOnce(params: FulfillCreditGrantParams) {
       packageId: pkgResult.id,
     };
   });
+
+  if (result.fulfilled) {
+    try {
+      const { notifyPaymentFulfilled } = await import("@/services/ops-notifications");
+      await notifyPaymentFulfilled({
+        userId: params.userId,
+        productKey: params.productKey,
+        provider: params.provider,
+        credits: params.credits,
+        orderNo: params.orderNo,
+      });
+    } catch (error) {
+      console.error("[Payment] Failed to send fulfillment notification:", error);
+    }
+  }
+
+  return result;
 }

@@ -207,6 +207,21 @@ export const auth = betterAuth({
     },
   }),
 
+  databaseHooks: {
+    user: {
+      create: {
+        after: async (user) => {
+          try {
+            const { notifyNewRegistration } = await import("@/services/ops-notifications");
+            await notifyNewRegistration(user);
+          } catch (error) {
+            console.error("[Auth] Failed to send registration notification:", error);
+          }
+        },
+      },
+    },
+  },
+
   // Plugins
   plugins,
 

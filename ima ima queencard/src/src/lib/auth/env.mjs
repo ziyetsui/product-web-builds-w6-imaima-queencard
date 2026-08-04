@@ -27,6 +27,8 @@ export const env = createEnv({
     // Admin
     ADMIN_EMAIL: z.string().email().default(DEFAULT_ADMIN_EMAIL),
     SUPERADMIN_EMAILS: z.string().optional(),
+    FEISHU_OPS_WEBHOOK_URL: z.string().url().optional(),
+    OPS_ALERT_EMAIL: z.string().email().optional(),
     // Debug
     IS_DEBUG: z.string().optional(),
   },
@@ -53,6 +55,8 @@ export const env = createEnv({
     ZEABUR_EMAIL_API_URL: process.env.ZEABUR_EMAIL_API_URL?.trim(),
     ADMIN_EMAIL: process.env.ADMIN_EMAIL?.trim() || undefined,
     SUPERADMIN_EMAILS: process.env.SUPERADMIN_EMAILS?.trim(),
+    FEISHU_OPS_WEBHOOK_URL: process.env.FEISHU_OPS_WEBHOOK_URL?.trim(),
+    OPS_ALERT_EMAIL: process.env.OPS_ALERT_EMAIL?.trim(),
     IS_DEBUG: process.env.IS_DEBUG?.trim(),
   },
 });
