@@ -231,6 +231,8 @@ Page({
         availableModels: available,
         modelIndex: index,
         modelLabel: available[index].label,
+      }, function () {
+        page.clampReferencesForModel();
       });
     }).catch(function () {
       // Keep the local fallback while the authoritative registry is unavailable.
@@ -295,7 +297,7 @@ Page({
       updates.modelLabel = modeModels[modelIndex].label;
     }
 
-    if (restoredReferences.referenceImagePaths.length) {
+    if (restoredReferences.referenceImagePaths.length || restoredReferences.referenceAssetIds.length) {
       updates.referenceImagePath = restoredReferences.referenceImagePath;
       updates.referenceImagePaths = restoredReferences.referenceImagePaths;
       updates.referenceAssetIds = restoredReferences.referenceAssetIds;
@@ -430,7 +432,7 @@ Page({
   clampReferencesForModel: function () {
     var limit = this.getReferenceLimit();
     var paths = (this.data.referenceImagePaths || []).slice(0, limit);
-    var assetIds = (this.data.referenceAssetIds || []).slice(0, paths.length);
+    var assetIds = (this.data.referenceAssetIds || []).slice(0, limit);
     this.setData({
       maxReferenceImages: limit,
       referenceImagePath: paths[0] || "",
@@ -705,16 +707,27 @@ Page({
     var prompt = trim(this.data.prompt);
     var topic = trim(this.data.topic);
     var capability = this.data.capability;
-    var referenceImagePaths = capability === MODE_TEXT_TO_IMAGE ? [] : this.data.referenceImagePaths;
+    var referenceImagePaths = capability === MODE_TEXT_TO_IMAGE ? [] : (this.data.referenceImagePaths || []);
+    var referenceAssetIds = capability === MODE_TEXT_TO_IMAGE ? [] : (this.data.referenceAssetIds || []);
+    var referenceCount = Math.max(referenceImagePaths.length, referenceAssetIds.length);
+    var referenceLimit = this.getReferenceLimit();
 
     if (!this.data.apiReady) {
       this.showBackendNotice();
       return;
     }
 
-    if (capability !== MODE_TEXT_TO_IMAGE && referenceImagePaths.length === 0) {
+    if (capability !== MODE_TEXT_TO_IMAGE && referenceCount === 0) {
       wx.showToast({
         title: "先上传参考图",
+        icon: "none",
+      });
+      return;
+    }
+
+    if (capability !== MODE_TEXT_TO_IMAGE && referenceCount > referenceLimit) {
+      wx.showToast({
+        title: "参考图数量超过当前模型限制",
         icon: "none",
       });
       return;
@@ -739,9 +752,9 @@ Page({
           userLabel: userLabel(currentUser),
           userDesc: userDesc(currentUser),
         });
-        return Promise.all(referenceImagePaths.map(function (referenceImagePath) {
+        return Promise.all(referenceImagePaths.map(function (referenceImagePath, index) {
           if (isRemoteUrl(referenceImagePath)) {
-            return Promise.resolve({ url: referenceImagePath });
+            return Promise.resolve({ url: referenceImagePath, assetId: page.data.referenceAssetIds[index] || "" });
           }
           return generation.uploadReferenceImage(referenceImagePath);
         }));

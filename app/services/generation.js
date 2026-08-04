@@ -161,7 +161,7 @@ function normalizeTask(raw) {
   var source = raw || {};
   var task = source.task || source.generationTask || source;
   var request = requestPayload(task);
-  var outputValue = task.imageItems || task.images || task.resultImages || task.outputImages || task.outputs || task.assets || [];
+  var outputValue = task.imageItems || task.images || task.resultImages || task.outputImages || task.outputs || [];
   var imageItems = normalizeImageItems(outputValue);
   var assetItems = normalizeImageItems(task.imageAssets || task.generatedAssets || []);
   var status = task.status || task.state || "running";
@@ -281,7 +281,7 @@ function restoreReferenceState(options, maxReferences) {
   return {
     referenceImagePath: pathValues[0] || "",
     referenceImagePaths: pathValues,
-    referenceAssetIds: idValues.slice(0, pathValues.length),
+    referenceAssetIds: idValues.slice(0, limit),
   };
 }
 
@@ -300,11 +300,17 @@ function buildGenerationRequest(form, uploadedReferences) {
   var capability = source.capability || "text-to-image";
   var textOnly = capability === "text-to-image";
   var paths = uniqueStrings(source.referenceImagePaths || source.referenceImages || [], DEFAULT_REFERENCE_LIMIT);
+  var sourceAssetIds = uniqueStrings(source.referenceAssetIds || [], DEFAULT_REFERENCE_LIMIT);
   var uploads = Array.isArray(uploadedReferences) ? uploadedReferences.map(function (item) {
     var normalized = normalizeImageItems(item)[0];
     return normalized || { url: "", assetId: "" };
   }).filter(function (item) { return item.url || item.assetId; }) : [];
-  var references = uploads.length ? uploads : paths.map(function (path) { return { url: path, assetId: "" }; });
+  var references = uploads.length ? uploads : paths.map(function (path, index) {
+    return { url: path, assetId: sourceAssetIds[index] || "" };
+  });
+  if (!references.length && sourceAssetIds.length) {
+    references = sourceAssetIds.map(function (assetId) { return { url: "", assetId: assetId }; });
+  }
   var allUploaded = references.length > 0 && references.every(function (item) { return Boolean(item.assetId); });
   var request = {
     source: source.source || "wechat-miniapp",
@@ -326,7 +332,7 @@ function buildGenerationRequest(form, uploadedReferences) {
 function continuationReferenceState(task, preferredImage, maxReferences) {
   var normalized = normalizeTask(task);
   var limit = Number(maxReferences || DEFAULT_REFERENCE_LIMIT);
-  var items = normalized.imageItems.filter(function (item) { return Boolean(item.url); });
+  var items = normalized.imageItems.filter(function (item) { return Boolean(item.url || item.assetId); });
   var ordered = [];
   var preferred = String(preferredImage || "");
   var i = 0;
@@ -341,8 +347,8 @@ function continuationReferenceState(task, preferredImage, maxReferences) {
   ordered = ordered.slice(0, limit);
   return {
     referenceImagePath: ordered[0] ? ordered[0].url : "",
-    referenceImagePaths: ordered.map(function (item) { return item.url; }),
-    referenceAssetIds: [],
+    referenceImagePaths: ordered.map(function (item) { return item.url; }).filter(Boolean),
+    referenceAssetIds: ordered.map(function (item) { return item.assetId; }).filter(Boolean),
   };
 }
 
@@ -351,6 +357,7 @@ function buildGenerateUrlFromTask(task, options) {
   var continuation = continuationReferenceState(normalized, options && options.referenceImage, DEFAULT_REFERENCE_LIMIT);
   var params = [];
   if (continuation.referenceImagePaths.length) params.push("referenceImagePaths=" + encodeURIComponent(JSON.stringify(continuation.referenceImagePaths)));
+  if (continuation.referenceAssetIds.length) params.push("referenceAssetIds=" + encodeURIComponent(JSON.stringify(continuation.referenceAssetIds)));
   if (normalized.prompt) params.push("prompt=" + encodeURIComponent(normalized.prompt));
   if (normalized.topic) params.push("topic=" + encodeURIComponent(normalized.topic));
   if (normalized.model) params.push("model=" + encodeURIComponent(normalized.model));
@@ -378,9 +385,9 @@ function canSaveOutput(task, image) {
   var candidate = normalizeImageItems(image)[0];
   var isCompleted = ["completed", "succeeded", "success"].indexOf(statusValue(normalized.status)) >= 0;
   var matchesOutput = normalized.imageItems.some(function (item) {
-    return (candidate.assetId && item.assetId === candidate.assetId) || (candidate.url && item.url === candidate.url);
+    return Boolean(candidate.assetId) && item.assetId === candidate.assetId;
   });
-  return isCompleted && matchesOutput && Boolean(candidate.assetId || candidate.downloadUrl);
+  return isCompleted && matchesOutput;
 }
 
 function listTasks(query) {

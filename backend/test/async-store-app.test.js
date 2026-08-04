@@ -150,13 +150,13 @@ test("all API routes await a genuinely asynchronous store and return concrete DT
   assert.equal(typeof regenerated.data.taskId, "string");
   assert.notEqual(regenerated.data.taskId, submitted.data.taskId);
 
-  const assetId = encodeURIComponent("https://cdn.example.com/async-result.png");
+  const assetId = encodeURIComponent(completed.imageAssets[0].assetId);
   const download = await app.fetch(new Request(`http://local/api/miniapp/image-assets/${assetId}/download`, {
     headers: { authorization },
     redirect: "manual",
   }));
   assert.equal(download.status, 302);
-  assert.equal(download.headers.get("location"), "https://cdn.example.com/async-result.png");
+  assert.match(download.headers.get("location"), /\/uploads\/provider\//);
 
   await app.close();
 });

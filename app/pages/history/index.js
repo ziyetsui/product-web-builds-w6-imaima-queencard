@@ -45,6 +45,7 @@ function normalizePagination(payload, page, records) {
 
 Page({
   searchTimer: null,
+  recordsRequestVersion: 0,
 
   data: {
     apiReady: api.isConfigured(),
@@ -75,6 +76,7 @@ Page({
 
   onUnload: function () {
     if (this.searchTimer) clearTimeout(this.searchTimer);
+    this.recordsRequestVersion += 1;
   },
 
   syncAuthState: function (load) {
@@ -144,7 +146,10 @@ Page({
     var reset = !options || options.reset !== false;
     var nextPage = reset ? 1 : this.data.page + 1;
     var query = trim(this.data.q);
+    var statusFilter = this.data.statusFilter;
     var user = auth.getCurrentUser();
+    var requestVersion = this.recordsRequestVersion + 1;
+    this.recordsRequestVersion = requestVersion;
 
     if (!this.data.apiReady) {
       this.setData({ error: "后端 API 未配置，请先设置 API_BASE_URL。", loading: false, loadingMore: false, refreshing: false, loginRequired: false });
@@ -162,9 +167,10 @@ Page({
       page: nextPage,
       limit: PAGE_SIZE,
       q: query,
-      status: this.data.statusFilter,
+      status: statusFilter,
     })
       .then(function (payload) {
+        if (requestVersion !== page.recordsRequestVersion) return;
         var records = pickRecords(payload).map(generation.normalizeHistoryRecord);
         var pagination = normalizePagination(payload, nextPage, records);
         page.setData({
@@ -180,6 +186,7 @@ Page({
         wx.stopPullDownRefresh();
       })
       .catch(function (error) {
+        if (requestVersion !== page.recordsRequestVersion) return;
         page.setData({ loading: false, loadingMore: false, refreshing: false, error: error.message || "作品列表加载失败，请稍后重试。" });
         wx.stopPullDownRefresh();
       });

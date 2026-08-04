@@ -245,6 +245,7 @@ Request:
   "prompt": "generation prompt",
   "topic": "optional topic",
   "referenceImages": ["https://cdn.example.com/reference.jpg"],
+  "referenceAssetIds": ["asset_reference-or-generated-id"],
   "outputCount": 1,
   "aspectRatio": "3:4",
   "resolution": "1k"
@@ -286,8 +287,23 @@ Response when complete:
     "id": "task-id",
     "status": "completed",
     "images": [
-      "https://cdn.example.com/result-1.jpg"
-    ]
+      "https://signed.example.com/result-1.jpg"
+    ],
+    "imageAssets": [
+      {
+        "assetId": "asset-generated-1",
+        "url": "https://signed.example.com/result-1.jpg"
+      }
+    ],
+    "referenceAssetIds": ["asset-reference-or-generated-id"]
   }
 }
 ```
+
+`imageAssets[].assetId` is the authorization primitive for saving or reusing a
+generated output. The mini program must call the authenticated
+`/api/miniapp/image-assets/:assetId/download` endpoint for downloads; it must
+not treat `images[]`, provider URLs, or client-supplied `downloadUrl` values as
+authorization. Generated asset IDs may be submitted again in
+`referenceAssetIds`; the backend verifies ownership and resolves short-lived
+worker URLs server-side.

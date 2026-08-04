@@ -71,7 +71,7 @@
         </view>
       </scroll-view>
       <view class="image-actions">
-        <button class="small-button white" bindtap="chooseReference">{{referenceImagePaths.length >= 3 ? '替换' : '继续添加'}}</button>
+        <button class="small-button white" bindtap="chooseReference">{{referenceImagePaths.length >= maxReferenceImages ? '替换' : '继续添加'}}</button>
       </view>
     </view>
     <button wx:else class="upload-box" bindtap="chooseReference">

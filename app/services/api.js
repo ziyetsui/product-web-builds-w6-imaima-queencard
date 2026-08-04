@@ -299,12 +299,9 @@ function buildImageAssetDownloadEndpoint(assetId, options) {
 }
 
 function getImageAssetDownloadUrl(assetId, options) {
-  return request({
-    path: imageAssetDownloadPath(assetId, options),
-  }).then(function (payload) {
-    if (typeof payload === "string") return payload;
-    return payload && (payload.url || payload.downloadUrl || payload.redirectUrl || payload.href);
-  });
+  // wx.request does not expose a 302 Location reliably. Let wx.downloadFile
+  // follow the owner-scoped redirect with the Authorization header instead.
+  return Promise.resolve(buildImageAssetDownloadEndpoint(assetId, options));
 }
 
 function createGenerationTask(input) {

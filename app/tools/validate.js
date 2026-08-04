@@ -266,15 +266,41 @@ function runTask8Fixtures() {
   }).firstImage, "");
   assert.match(generation.taskFailureMessage({ status: "failed", errorCode: "PROVIDER_TIMEOUT" }), /生成|稍后/);
   assert.equal(generation.canSaveOutput(task, task.imageItems[0]), true);
+  assert.equal(generation.canSaveOutput(task, {
+    url: "https://cdn.example.com/output.jpg",
+    downloadUrl: "https://attacker.example.com/not-owned.jpg",
+  }), false);
   assert.equal(generation.canSaveOutput(generation.normalizeTask({
     status: "completed",
     images: ["https://cdn.example.com/input.jpg"],
     referenceImages: ["https://cdn.example.com/input.jpg"],
   }), { url: "https://cdn.example.com/input.jpg" }), false);
 
+  const assetOnlyTask = generation.normalizeTask({
+    id: "task-asset-only",
+    status: "completed",
+    imageItems: [{ assetId: "generated-only-1" }],
+  });
+  const assetOnlyContinuation = generation.continuationReferenceState(assetOnlyTask, "", 3);
+  assert.deepEqual(assetOnlyContinuation.referenceAssetIds, ["generated-only-1"]);
+
+  const inputOnlyTask = generation.normalizeTask({
+    status: "completed",
+    assets: [{ assetId: "input-only-1", url: "https://cdn.example.com/input.jpg" }],
+  });
+  assert.deepEqual(inputOnlyTask.imageItems, []);
+
   const continuationUrl = generation.buildGenerateUrlFromTask(task, { referenceImage: task.images[0] });
   assert.match(continuationUrl, /referenceImagePaths=/);
+  assert.match(continuationUrl, /referenceAssetIds=/);
   assert.match(continuationUrl, /output.jpg/);
+  const continuedRequest = generation.buildGenerationRequest({
+    capability: "image-edit",
+    referenceImagePaths: ["https://signed.example.com/generated.jpg"],
+    referenceAssetIds: ["generated-1"],
+    prompt: "continue",
+  });
+  assert.deepEqual(continuedRequest.referenceAssetIds, ["generated-1"]);
   assert.match(resultSource, /backToGenerate/);
   assert.match(historySource, /statusFilter/);
 }

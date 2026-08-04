@@ -102,7 +102,22 @@ function createAssetService(options = {}) {
   async function resolveReferenceUrls(userId, assetIds, input = {}) {
     const ids = normalizeAssetIds(assetIds);
     const urls = [];
-    for (const assetId of ids) urls.push(await getDownloadUrl(userId, assetId, input));
+    for (const assetId of ids) {
+      const reference = await store.getReferenceAsset(assetId);
+      if (reference && reference.userId === userId) {
+        urls.push(await storage.getSignedDownloadUrl(reference.objectKey, {
+          baseUrl: input.baseUrl,
+          expiresInSeconds: Math.min(Number(input.expiresInSeconds || 300), 900),
+        }));
+        continue;
+      }
+      const generated = await store.findOwnedAsset(userId, assetId);
+      if (!generated) throw assetError("Asset not found", "ASSET_NOT_FOUND", 404);
+      urls.push(await storage.getSignedDownloadUrl(generated.objectKey, {
+        baseUrl: input.baseUrl,
+        expiresInSeconds: Math.min(Number(input.expiresInSeconds || 300), 900),
+      }));
+    }
     return urls;
   }
 

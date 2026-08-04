@@ -364,6 +364,10 @@ test("generic generation returns a pending task before slow image creation compl
   assert.equal(providerStarted, true);
   assert.equal(completedTask.data.status, "completed");
   assert.deepEqual(completedTask.data.images, ["https://cdn.example.com/generated.png"]);
+  assert.equal(completedTask.data.rawProviderResult, undefined);
+  assert.equal(completedTask.data.metadata, undefined);
+  assert.equal(completedTask.data.ownerId, undefined);
+  assert.equal(completedTask.data.providerTaskId, undefined);
   app.close();
 });
 

@@ -86,13 +86,14 @@ function estimateCredits(body = {}) {
 }
 
 function generationCapability(body = {}, referenceImages = [], referenceAssetIds = []) {
-  return body.capability || (referenceImages.length + referenceAssetIds.length > 0 ? "image-edit" : "text-to-image");
+  return body.capability || (Math.max(referenceImages.length, referenceAssetIds.length) > 0 ? "image-edit" : "text-to-image");
 }
 
 function validateGenerationBody(body = {}) {
   const referenceImages = Array.isArray(body.referenceImages) ? body.referenceImages : [];
   const referenceAssetIds = Array.isArray(body.referenceAssetIds) ? body.referenceAssetIds : [];
   const capability = generationCapability(body, referenceImages, referenceAssetIds);
+  const referenceCount = Math.max(referenceImages.length, referenceAssetIds.length);
   const outputCount = estimateCredits(body);
 
   if (!["text-to-image", "image-edit", "image-to-image"].includes(capability)) {
@@ -107,14 +108,14 @@ function validateGenerationBody(body = {}) {
     throw error;
   }
 
-  if (capability === "text-to-image" && referenceImages.length + referenceAssetIds.length > 0) {
+  if (capability === "text-to-image" && referenceCount > 0) {
     const error = new Error("Text-to-image generation must not include reference images");
     error.code = "MODEL_REFERENCES_UNSUPPORTED";
     error.status = 400;
     throw error;
   }
 
-  if (capability !== "text-to-image" && (referenceImages.length + referenceAssetIds.length < 1 || referenceImages.length + referenceAssetIds.length > 3)) {
+  if (capability !== "text-to-image" && (referenceCount < 1 || referenceCount > 3)) {
     const error = new Error("Image reference generation requires 1 to 3 reference images");
     error.status = 400;
     throw error;
@@ -511,12 +512,67 @@ function createApp(options = {}) {
     return result.task;
   }
 
-  function serializeTask(task) {
-    const images = Array.isArray(task?.images) ? task.images : [];
+  function publicTaskError(task) {
+    const messages = {
+      PROVIDER_TIMEOUT: "生成服务响应超时，请稍后重试。",
+      GENERATION_PROVIDER_ERROR: "生成服务暂时不可用，请稍后重试。",
+      MODEL_UNAVAILABLE: "当前模型暂不可用，请更换模型后重试。",
+      MODEL_OUTPUT_LIMIT_EXCEEDED: "当前模型不支持这个输出数量，请减少张数后重试。",
+      MODEL_REFERENCES_UNSUPPORTED: "当前模型不支持参考图，请更换模型或模式。",
+      INSUFFICIENT_CREDITS: "生成额度不足，请先充值。",
+    };
+    const code = String(task?.errorCode || "");
+    return messages[code] || (code ? "生成失败，请稍后重试。" : "");
+  }
+
+  async function serializeTask(task, request) {
+    const rawImages = Array.isArray(task?.images) ? task.images : [];
+    const outputItems = rawImages.map((image) => ({
+      assetId: typeof image === "string" ? "" : String(image?.assetId || ""),
+      url: typeof image === "string" ? image : String(image?.url || ""),
+    })).filter((image) => image.assetId || image.url);
+    const publicImages = [];
+    for (const item of outputItems) {
+      let url = item.url;
+      if (!url && item.assetId) {
+        try {
+          url = await assetService.getGeneratedDownloadUrl(task.ownerId, item.assetId, {
+            baseUrl: publicBaseUrl(env, request),
+            expiresInSeconds: 300,
+          });
+        } catch {
+          url = "";
+        }
+      }
+      item.url = url;
+      if (url) publicImages.push(url);
+    }
     return {
-      ...task,
-      images: images.map((image) => typeof image === "string" ? image : image?.url || "").filter(Boolean),
-      imageAssets: images.filter((image) => image && typeof image === "object" && image.assetId),
+      id: task.id,
+      taskId: task.taskId || task.id,
+      status: task.status,
+      images: publicImages,
+      imageAssets: outputItems.filter((image) => image.assetId).map((image) => ({
+        assetId: image.assetId,
+        url: image.url,
+      })),
+      templateId: task.templateId || "",
+      provider: task.provider || "",
+      mode: task.mode || "",
+      prompt: task.prompt || "",
+      topic: task.topic || "",
+      referenceImages: Array.isArray(task.referenceImages) ? task.referenceImages : [],
+      referenceAssetIds: Array.isArray(task.referenceAssetIds) ? task.referenceAssetIds : [],
+      model: task.model || "",
+      outputCount: Number(task.outputCount || 1),
+      aspectRatio: task.aspectRatio || "",
+      resolution: task.resolution || "",
+      errorCode: task.errorCode || "",
+      error: publicTaskError(task),
+      createdAt: task.createdAt || null,
+      updatedAt: task.updatedAt || null,
+      startedAt: task.startedAt || null,
+      completedAt: task.completedAt || null,
     };
   }
 
@@ -893,7 +949,7 @@ function createApp(options = {}) {
         return json({
           success: true,
           data: {
-            records: data.records.map(serializeTask),
+            records: await Promise.all(data.records.map((task) => serializeTask(task, request))),
             pagination: data.pagination,
           },
         });
@@ -940,18 +996,10 @@ function createApp(options = {}) {
       if (imageAssetDownloadMatch && request.method === "GET") {
         const { user } = await getCurrentUser(request, authService);
         const assetId = decodeURIComponent(imageAssetDownloadMatch[1]);
-        let location;
-        try {
-          location = await assetService.getGeneratedDownloadUrl(user.id, assetId, {
-            baseUrl: publicBaseUrl(env, request),
-            expiresInSeconds: 300,
-          });
-        } catch (error) {
-          if (error.code !== "ASSET_NOT_FOUND") throw error;
-          const legacy = await store.findOwnedImageAsset(user.id, assetId);
-          if (!legacy) return json({ success: false, error: "Image asset not found" }, 404);
-          location = legacy.url;
-        }
+        const location = await assetService.getGeneratedDownloadUrl(user.id, assetId, {
+          baseUrl: publicBaseUrl(env, request),
+          expiresInSeconds: 300,
+        });
         return new Response(null, {
           status: 302,
           headers: {
@@ -978,7 +1026,12 @@ function createApp(options = {}) {
           resolution: body.resolution || "1k",
           outputCount: validation.outputCount,
         });
-        for (const assetId of validation.referenceAssetIds) await assetService.getReferenceAsset(user.id, assetId);
+        if (validation.referenceAssetIds.length) {
+          await assetService.resolveReferenceUrls(user.id, validation.referenceAssetIds, {
+            baseUrl: publicBaseUrl(env, request),
+            expiresInSeconds: 300,
+          });
+        }
         const referenceImages = validation.referenceImages;
         const template = body.templateId ? await getTemplate(String(body.templateId), request) : {
           id: "custom",
@@ -1062,11 +1115,11 @@ function createApp(options = {}) {
         if (!task || task.ownerId !== user.id) {
           return json({ success: false, error: "Task not found" }, 404);
         }
+        const publicTask = await serializeTask(task, request);
         return json({
           success: true,
           data: {
-            ...serializeTask(task),
-            error: task.rawProviderResult && task.rawProviderResult.error ? task.rawProviderResult.error : task.errorMessage || "",
+            ...publicTask,
           },
         });
       }

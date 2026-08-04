@@ -171,7 +171,7 @@ Page({
     var updates = {
       referenceImagePath: references.referenceImagePath,
       referenceImagePaths: references.referenceImagePaths,
-      referenceAssetIds: [],
+      referenceAssetIds: references.referenceAssetIds,
       capability: "image-edit",
       sourceTaskId: task.id || this.data.taskId,
       prompt: task.prompt || "",
@@ -257,14 +257,10 @@ Page({
       return;
     }
     this.setData({ savingIndex: index });
-    if (safeAsset.downloadUrl) {
-      this.downloadAndSave(safeAsset.downloadUrl, false);
-      return;
-    }
     safeEndpoint = api.buildImageAssetDownloadEndpoint(safeAsset.assetId);
     api.getImageAssetDownloadUrl(safeAsset.assetId)
       .then(function (downloadUrl) {
-        page.downloadAndSave(downloadUrl || safeEndpoint, !downloadUrl);
+        page.downloadAndSave(downloadUrl || safeEndpoint, true);
       })
       .catch(function () {
         page.downloadAndSave(safeEndpoint, true);
