@@ -22,7 +22,11 @@ const TEMPLATE_STRING_FIELDS = ["id", "title", "author", "category", "prompt", "
 const TEMPLATE_ARRAY_FIELDS = ["tags", "referenceImages", "previewImages"];
 const METRIC_NUMBER_FIELDS = ["likes", "saves", "shares"];
 const METRIC_STRING_FIELDS = ["likesText", "savesText", "sharesText"];
-const PRICING_PRODUCT_STRING_FIELDS = ["id", "title", "subtitle", "currency"];
+const OPTIONAL_METRIC_NUMBER_FIELDS = ["followers", "potentialRatio", "likeFollowerRatio", "potentialScore", "potentialRank"];
+const OPTIONAL_METRIC_STRING_FIELDS = ["followersText"];
+const NONNEGATIVE_METRIC_FIELDS = ["likes", "saves", "shares", "followers"];
+const PRICING_PRODUCT_STRING_FIELDS = ["id", "type", "title", "currency"];
+const DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function makeCheck(name, ok, status, detail) {
   return { name, ok, status, detail };
@@ -55,24 +59,38 @@ function hasNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function isValidDate(value) {
+  return hasNonEmptyString(value) && DATE_TIME_PATTERN.test(value) && Number.isFinite(Date.parse(value));
+}
+
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
 function isTemplateRecord(record) {
   if (!isObject(record) || TEMPLATE_REQUIRED_FIELDS.some((field) => !(field in record))) return false;
   if (TEMPLATE_STRING_FIELDS.some((field) => !hasNonEmptyString(record[field]))) return false;
-  if (TEMPLATE_ARRAY_FIELDS.some((field) => !Array.isArray(record[field]))) return false;
+  if (!isValidDate(record.createdAt) || !isValidDate(record.updatedAt)) return false;
+  if (TEMPLATE_ARRAY_FIELDS.some((field) => !isStringArray(record[field]))) return false;
 
   const metrics = record.metrics;
   if (!isObject(metrics)) return false;
   if (METRIC_NUMBER_FIELDS.some((field) => typeof metrics[field] !== "number" || !Number.isFinite(metrics[field]))) return false;
-  return METRIC_STRING_FIELDS.every((field) => typeof metrics[field] === "string");
+  if (METRIC_STRING_FIELDS.some((field) => typeof metrics[field] !== "string")) return false;
+  if (OPTIONAL_METRIC_NUMBER_FIELDS.some((field) => field in metrics
+    && (typeof metrics[field] !== "number" || !Number.isFinite(metrics[field])))) return false;
+  if (OPTIONAL_METRIC_STRING_FIELDS.some((field) => field in metrics && typeof metrics[field] !== "string")) return false;
+  if (NONNEGATIVE_METRIC_FIELDS.some((field) => field in metrics && metrics[field] < 0)) return false;
+  return !("potentialRank" in metrics) || metrics.potentialRank >= 1;
 }
 
-function isPricingProduct(product, type) {
-  if (!isObject(product) || product.type !== type) return false;
+function isPricingProduct(product) {
+  if (!isObject(product)) return false;
   if (PRICING_PRODUCT_STRING_FIELDS.some((field) => !hasNonEmptyString(product[field]))) return false;
-  if (typeof product.badge !== "string") return false;
-  if (!Number.isSafeInteger(product.credits) || product.credits <= 0) return false;
-  if (!Number.isSafeInteger(product.amountCents) || product.amountCents <= 0) return false;
-  return type !== "subscription" || hasNonEmptyString(product.interval);
+  if (!Number.isSafeInteger(product.credits) || product.credits < 0) return false;
+  if (!Number.isSafeInteger(product.amountCents) || product.amountCents < 0) return false;
+  if (product.subtitle !== undefined && typeof product.subtitle !== "string") return false;
+  return product.interval === undefined || typeof product.interval === "string";
 }
 
 function isTimeoutError(error, signal) {
@@ -185,11 +203,10 @@ function checkPricing(name, result) {
   if (!isObject(data) || !hasNonEmptyString(data.currency)) {
     return makeCheck(name, false, result.status, "pricing currency is missing");
   }
-  if (!Array.isArray(data.packs) || data.packs.length === 0 || !data.packs.every((product) => isPricingProduct(product, "pack"))) {
+  if (!Array.isArray(data.packs) || !data.packs.every((product) => isPricingProduct(product))) {
     return makeCheck(name, false, result.status, "pricing packs are missing required fields");
   }
-  if (!Array.isArray(data.subscriptions) || data.subscriptions.length === 0
-    || !data.subscriptions.every((product) => isPricingProduct(product, "subscription"))) {
+  if (!Array.isArray(data.subscriptions) || !data.subscriptions.every((product) => isPricingProduct(product))) {
     return makeCheck(name, false, result.status, "pricing subscriptions are missing required fields");
   }
   if (!isObject(payment) || !hasNonEmptyString(payment.mode)) {

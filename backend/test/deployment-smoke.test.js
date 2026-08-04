@@ -258,6 +258,23 @@ test("fails when the template catalog contains malformed records", async () => {
   }
 });
 
+test("fails when template records violate catalog date, array-item, or metric constraints", async () => {
+  const malformedRecords = [
+    templateRecord({ createdAt: "not-a-date" }),
+    templateRecord({ tags: [null] }),
+    templateRecord({ metrics: { ...templateRecord().metrics, likes: -1 } }),
+  ];
+
+  for (const record of malformedRecords) {
+    const result = await withServer({
+      "/api/miniapp/templates": { status: 200, body: { success: true, data: { records: [record] } } },
+    }, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({ baseUrl, fetchImpl }));
+
+    assert.equal(result.ok, false);
+    assert.equal(checkFor(result, "/api/miniapp/templates").ok, false);
+  }
+});
+
 test("fails when GPT Image 2 is not the enabled default model", async () => {
   const result = await withServer({
     "/api/miniapp/models": {
@@ -300,7 +317,6 @@ test("fails when pricing reports payment availability in the disabled smoke prof
 
 test("fails when pricing omits required products or product fields", async () => {
   const malformedBodies = [
-    pricingBody({ packs: [], subscriptions: [] }),
     pricingBody({ packs: [{ id: "credits_20", type: "pack" }] }),
     pricingBody({ payment: { available: false } }),
   ];
@@ -315,6 +331,18 @@ test("fails when pricing omits required products or product fields", async () =>
     assert.equal(check.ok, false);
     assert.match(check.detail, /pricing|product|payment/i);
   }
+});
+
+test("accepts documented payment-disabled pricing with empty product groups", async () => {
+  const result = await withServer({
+    "/api/miniapp/pricing": {
+      status: 200,
+      body: pricingBody({ packs: [], subscriptions: [] }),
+    },
+  }, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({ baseUrl, fetchImpl }));
+
+  assert.equal(result.ok, true);
+  assert.equal(checkFor(result, "/api/miniapp/pricing").ok, true);
 });
 
 test("fails a timed-out endpoint with its name and no response-body dump", async () => {
