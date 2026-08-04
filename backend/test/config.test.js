@@ -92,6 +92,7 @@ test("returns typed runtime sections and redacted public diagnostics", () => {
 
   assert.equal(config.server.port, 9090);
   assert.equal(config.server.buildSha, "build-123");
+  assert.equal(config.public.server.buildSha, "build-123");
   assert.equal(config.database.driver, "postgres");
   assert.equal(config.database.url, "postgres://db-user:db-password@db.example/miniapp");
   assert.equal(config.storage.driver, "s3");

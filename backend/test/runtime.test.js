@@ -119,7 +119,7 @@ test("health returns 503 and dependency details while any runtime dependency is 
   assert.deepEqual(payload.data.dependencies.storage, { ready: false, driver: "local" });
 });
 
-test("fully configured production listens when its runtime adapters are injected", async () => {
+test("fully configured production listens when its runtime adapters are injected", async (t) => {
   const created = [];
   let storeCloseCalls = 0;
   const store = {
@@ -130,7 +130,7 @@ test("fully configured production listens when its runtime adapters are injected
   };
   const storage = storageAdapter();
   const runtime = await createServer({
-    env: productionEnv(),
+    env: productionEnv({ GPTPROTO_API_KEY: "runtime-provider-api-key" }),
     factories: {
       createStore() {
         created.push("store");
@@ -146,16 +146,66 @@ test("fully configured production listens when its runtime adapters are injected
     },
     logger: quietLogger(),
   });
+  t.after(() => runtime.shutdown());
   await runtime.listen();
   const response = await fetch(`${addressFor(runtime)}/health`);
   const payload = await response.json();
+  const serialized = JSON.stringify(payload);
 
   assert.equal(response.status, 200);
   assert.equal(payload.success, true);
   assert.equal(payload.data.buildSha, "build-runtime-test");
+  assert.deepEqual(payload.data.build, { ready: true, sha: "build-runtime-test" });
+  for (const secret of [
+    "postgres://runtime-user:runtime-password@db.example/miniapp",
+    "https://s3.example.com",
+    "miniapp-assets",
+    "runtime-wechat-secret",
+    "runtime-provider-api-key",
+    "runtime-asset-signing-secret",
+  ]) {
+    assert.equal(serialized.includes(secret), false, `health response leaked ${secret}`);
+  }
   assert.deepEqual(created, ["store", "storage"]);
   await runtime.shutdown();
   assert.equal(storeCloseCalls, 1);
+});
+
+test("health returns 503 with BUILD_NOT_SET while preserving ready dependency details", async (t) => {
+  const runtime = await createServer({
+    env: productionEnv({
+      BUILD_SHA: "replace-with-source-commit-sha",
+      GPTPROTO_API_KEY: "runtime-provider-api-key",
+    }),
+    factories: {
+      createStore() {
+        return { ready: true };
+      },
+      createStorage() {
+        return storageAdapter();
+      },
+    },
+    dependencies: {
+      workers: { ready: true, stop() {} },
+    },
+    logger: quietLogger(),
+  });
+  t.after(() => runtime.shutdown());
+  await runtime.listen();
+
+  const response = await fetch(`${addressFor(runtime)}/health`);
+  const payload = await response.json();
+
+  assert.equal(response.status, 503);
+  assert.equal(payload.success, false);
+  assert.equal(payload.data.ok, false);
+  assert.equal(payload.data.build.ready, false);
+  assert.equal(payload.data.build.reason, "BUILD_NOT_SET");
+  assert.deepEqual(payload.data.dependencies, {
+    database: { ready: true, driver: "postgres" },
+    storage: { ready: true, driver: "s3" },
+    workers: { ready: true, mode: "durable" },
+  });
 });
 
 test("shutdown waits for the internally owned asynchronous store close exactly once", async () => {

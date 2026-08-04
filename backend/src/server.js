@@ -145,10 +145,19 @@ async function healthData(config, dependencies) {
   const databaseReady = await readinessFor(databaseResource, config.database.driver === "sqlite");
   const storageReady = await readinessFor(storageResource, config.storage.driver === "local");
   const workersReady = await readinessFor(workerResource, config.generation.workerMode === "in-process");
+  const buildSha = typeof config.server.buildSha === "string" ? config.server.buildSha.trim() : "";
+  const buildReady = Boolean(buildSha)
+    && !["unknown", "replace-with-source-commit-sha"].includes(buildSha.toLowerCase());
+  const build = {
+    ready: buildReady,
+    sha: buildReady ? buildSha : null,
+  };
+  if (!buildReady) build.reason = "BUILD_NOT_SET";
 
   return {
-    ok: databaseReady && storageReady && workersReady,
+    ok: buildReady && databaseReady && storageReady && workersReady,
     buildSha: config.server.buildSha,
+    build,
     environment: config.server.environment,
     dependencies: {
       database: { ready: databaseReady, driver: config.database.driver },
