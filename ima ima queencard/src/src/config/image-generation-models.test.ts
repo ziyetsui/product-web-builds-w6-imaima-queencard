@@ -1,3 +1,6 @@
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -36,5 +39,16 @@ describe("image generation model options", () => {
   it("defaults to the main reference-image model", () => {
     expect(defaultImageGenerationModel(["https://example.com/ref.png"])).toBe("gpt-image-2-edit");
     expect(defaultImageGenerationModel([])).toBe("gpt-image-2-edit");
+  });
+
+  it("ships every configured brand logo as a public static asset", () => {
+    const logoPaths = new Set(
+      IMAGE_GENERATION_MODEL_OPTIONS.map((option) => option.brandLogo.src)
+    );
+
+    for (const logoPath of logoPaths) {
+      const publicFile = resolve(process.cwd(), "public", logoPath.replace(/^\//, ""));
+      expect(statSync(publicFile).size, `${logoPath} should not be empty`).toBeGreaterThan(100);
+    }
   });
 });
