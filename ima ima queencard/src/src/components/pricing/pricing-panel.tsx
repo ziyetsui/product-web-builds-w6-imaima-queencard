@@ -57,29 +57,34 @@ function toSubscriptionCards(
   plans: SubscriptionPlan[],
   mode: Exclude<PricingMode, "one-time">
 ): DisplayCard[] {
-  return plans.map((plan, index) => {
+  return plans.flatMap((plan, index) => {
     const isFree = plan.pricesCny.monthly === 0;
+
+    if (mode === "monthly" && isFree) return [];
+
     const productKey = mode === "yearly" ? plan.productKeys.yearly : plan.productKeys.monthly;
     const price = mode === "yearly" ? plan.pricesCny.yearly : plan.pricesCny.monthly;
 
-    return {
-      id: `${plan.title}-${mode}`,
-      title: plan.title,
-      eyebrow: `[ ${plan.title} ]`,
-      description: plan.description,
-      price,
-      priceSuffix: isFree ? "/ 月" : mode === "yearly" ? "/ 年" : "/ 月",
-      creditLine: getSubscriptionCreditLine(plan, mode),
-      benefits: plan.benefits,
-      productKey,
-      cta: isFree ? "免费开始" : mode === "yearly" ? "选择年付" : "选择月付",
-      tone: index === 1 ? "lemon" : "seafoam",
-      paymentNote: isFree
-        ? "注册后领取欢迎积分"
-        : "银行卡 / Apple Pay / Link · 支付宝订阅开通后支持",
-      highlighted: index === 1,
-      href: isFree ? "/register" : undefined,
-    };
+    return [
+      {
+        id: `${plan.title}-${mode}`,
+        title: plan.title,
+        eyebrow: `[ ${plan.title} ]`,
+        description: plan.description,
+        price,
+        priceSuffix: isFree ? "/ 月" : mode === "yearly" ? "/ 年" : "/ 月",
+        creditLine: getSubscriptionCreditLine(plan, mode),
+        benefits: plan.benefits,
+        productKey,
+        cta: isFree ? "免费开始" : mode === "yearly" ? "选择年付" : "选择月付",
+        tone: index === 1 ? "lemon" : "seafoam",
+        paymentNote: isFree
+          ? "注册后领取欢迎积分"
+          : "银行卡 / Apple Pay / Link · 支付宝订阅开通后支持",
+        highlighted: index === 1,
+        href: isFree ? "/register" : undefined,
+      },
+    ];
   });
 }
 
