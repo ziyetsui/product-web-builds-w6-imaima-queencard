@@ -2,9 +2,9 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import * as schema from "./schema";
+import { resolveDatabaseUrl } from "./config";
 
-const databaseUrl =
-  process.env.DATABASE_URL?.trim() || process.env.POSTGRES_URL?.trim() || "";
+const databaseUrl = resolveDatabaseUrl();
 
 const parseSslConfig = (url: string) => {
   const mode = (
@@ -30,7 +30,7 @@ const parseSslConfig = (url: string) => {
 function createDb() {
   if (!databaseUrl || !databaseUrl.startsWith("postgres")) {
     throw new Error(
-      "Missing or invalid DATABASE_URL. Set a valid PostgreSQL connection string in your .env file.\n" +
+      "Missing or invalid PostgreSQL connection URL. Set DATABASE_URL, POSTGRES_URL, POSTGRES_URI, or POSTGRES_CONNECTION_STRING.\n" +
         "Example: DATABASE_URL='postgresql://user:password@host:port/database'"
     );
   }
