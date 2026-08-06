@@ -10,7 +10,7 @@
 
   <view class="hero-panel">
     <text class="kicker">REFERENCE TO POST</text>
-    <text class="title">上传参考图，生成自己的爆款图文</text>
+    <text class="title">{{templateTitle || '上传参考图，生成自己的爆款图文'}}</text>
     <text class="subtitle">小程序用微信 openid 作为入口，后端负责独立账号、额度和生成记录。</text>
   </view>
 
@@ -51,7 +51,7 @@
     </view>
 
     <view class="section-head compact-head">
-      <text class="section-title">参考图</text>
+      <text class="section-title">固定图块</text>
       <text class="section-hint">{{capability == 'text-to-image' ? '纯文生图不使用参考图' : '最多 ' + maxReferenceImages + ' 张'}}</text>
     </view>
 
@@ -83,11 +83,36 @@
 
   <view class="section form-section">
     <view class="section-head">
-      <text class="section-title">生成要求</text>
+      <text class="section-title">填入词槽</text>
       <button class="text-button" bindtap="resetPrompt">恢复示例</button>
     </view>
     <input class="input" value="{{topic}}" placeholder="你的主题，比如：女性成长、门店活动、知识拆解" bindinput="onTopicInput" />
-    <textarea class="textarea" value="{{prompt}}" maxlength="900" bindinput="onPromptInput" />
+
+    <view wx:if="{{fixedPromptMode}}" class="prompt-block-card">
+      <view class="prompt-block-head">
+        <text class="prompt-block-title">固定提示结构</text>
+        <text class="prompt-block-hint">只替换词，不改变模板结构</text>
+      </view>
+      <view wx:for="{{promptSlots}}" wx:key="key" class="prompt-slot-row">
+        <text class="prompt-slot-label">{{item.label}}</text>
+        <input
+          class="prompt-slot-input {{item.kind == 'visual_style' ? 'visual-slot-input' : 'content-slot-input'}}"
+          value="{{item.value}}"
+          placeholder="填写{{item.label}}"
+          data-index="{{index}}"
+          bindinput="onPromptSlotInput"
+        />
+      </view>
+      <view class="prompt-pattern-preview">
+        <text class="prompt-pattern-label">固定结构预览</text>
+        <text class="prompt-pattern-text">{{promptPreview}}</text>
+      </view>
+      <view class="prompt-final-card">
+        <text class="prompt-final-label">发送给生成服务的最终提示词</text>
+        <text class="prompt-final-text">{{prompt}}</text>
+      </view>
+    </view>
+    <textarea wx:else class="textarea" value="{{prompt}}" maxlength="900" bindinput="onPromptInput" />
 
     <view class="control-row">
       <view class="control">

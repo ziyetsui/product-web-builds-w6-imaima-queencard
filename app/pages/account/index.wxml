@@ -46,5 +46,10 @@
     <button wx:if="{{user && user.isAdmin}}" class="nav-button lavender" bindtap="goAdmin">管理入口</button>
   </view>
 
+  <view class="legal-links">
+    <button class="legal-link" bindtap="openPrivacy">隐私政策</button>
+    <button class="legal-link" bindtap="openTerms">用户协议</button>
+  </view>
+
   <view wx:if="{{loading}}" class="load-row">正在读取账号...</view>
 </view>

@@ -32,16 +32,20 @@ function paymentError(message, status, code) {
   return error;
 }
 
-async function readResponse(response) {
+async function readResponse(response, verifySignature) {
   const text = await response.text();
+  if (verifySignature) verifySignature(response.headers, text);
   let payload = null;
   try {
     payload = text ? JSON.parse(text) : null;
   } catch {
-    payload = text;
+    throw paymentError("Malformed WeChat Pay response JSON", 502, "PAYMENT_RESPONSE_INVALID");
   }
   if (!response.ok) throw errorFromResponse(response.status, payload);
-  return payload || {};
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw paymentError("Malformed WeChat Pay response payload", 502, "PAYMENT_RESPONSE_INVALID");
+  }
+  return payload;
 }
 
 function unixTimestamp(clock) {
@@ -60,6 +64,7 @@ function authorizationHeader({ merchantId, serial, privateKey, nonce, timestamp,
 
 function headerValue(headers, name) {
   if (!headers) return "";
+  if (typeof headers.get === "function") return String(headers.get(name) || "");
   const target = name.toLowerCase();
   for (const [key, value] of Object.entries(headers)) {
     if (key.toLowerCase() === target) return String(value || "");
@@ -84,8 +89,17 @@ function createWechatPayV3Provider(options = {}) {
   const privateKey = pem(value(env, ["WECHAT_PAY_PRIVATE_KEY"]));
   const apiV3Key = value(env, ["WECHAT_PAY_API_V3_KEY"]);
   const notifyUrl = value(env, ["WECHAT_PAY_NOTIFY_URL"]);
+  const refundNotifyUrl = value(env, ["WECHAT_PAY_REFUND_NOTIFY_URL"]);
+  const publicKeyId = value(env, ["WECHAT_PAY_PUBLIC_KEY_ID", "WECHAT_PAY_PLATFORM_PUBLIC_KEY_ID"]);
+  const platformCertificateSerial = value(env, ["WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL", "WECHAT_PAY_PLATFORM_CERT_SERIAL"]);
   const platformPublicKey = pem(value(env, ["WECHAT_PAY_PLATFORM_PUBLIC_KEY", "WECHAT_PAY_PUBLIC_KEY"]));
+  const platformCertificate = pem(value(env, ["WECHAT_PAY_PLATFORM_CERTIFICATE", "WECHAT_PAY_CERTIFICATE"]));
+  const publicKeys = value(env, ["WECHAT_PAY_PUBLIC_KEYS"]);
   const origin = value(env, ["WECHAT_PAY_API_ORIGIN"], API_ORIGIN).replace(/\/$/, "");
+  const configuredRequestTimeoutMs = Number(value(env, ["WECHAT_PAY_REQUEST_TIMEOUT_MS"], "10000"));
+  const requestTimeoutMs = Number.isFinite(configuredRequestTimeoutMs)
+    ? Math.min(Math.max(configuredRequestTimeoutMs, 1), 30000)
+    : 10000;
 
   function assertCreateConfig() {
     if (!merchantId || !appId || !serial || !privateKey || !notifyUrl) {
@@ -93,13 +107,113 @@ function createWechatPayV3Provider(options = {}) {
     }
   }
 
-  function assertNotifyConfig() {
-    if (!serial || !apiV3Key || apiV3Key.length !== 32 || !platformPublicKey) {
-      throw paymentError("WeChat Pay notification verification is not configured", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+  function assertRequestConfig() {
+    if (!merchantId || !serial || !privateKey) {
+      throw paymentError("WeChat Pay request signing is not configured", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
     }
   }
 
+  function parsePublicKeys() {
+    if (!publicKeys) return null;
+    let parsed;
+    try {
+      parsed = JSON.parse(publicKeys);
+    } catch {
+      throw paymentError("WeChat Pay public key map is invalid", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw paymentError("WeChat Pay public key map is invalid", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+    }
+    const keys = new Map();
+    for (const [id, key] of Object.entries(parsed)) {
+      if (String(id).trim() && String(key || "").trim()) keys.set(String(id).trim(), pem(key));
+    }
+    if (!keys.size) throw paymentError("WeChat Pay public key map is empty", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+    return keys;
+  }
+
+  function assertVerificationConfig() {
+    if (!platformPublicKey && !platformCertificate && !publicKeys) {
+      throw paymentError("WeChat Pay response verification is not configured", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+    }
+    if (publicKeys) {
+      parsePublicKeys();
+      return;
+    }
+    if (platformPublicKey) {
+      if (!publicKeyId) {
+        throw paymentError("WeChat Pay public key ID is required for response verification", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+      }
+      return;
+    }
+    if (!platformCertificateSerial) {
+      throw paymentError("WeChat Pay platform certificate serial is required for response verification", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+    }
+  }
+
+  function verificationKey(serialValue) {
+    const keyMap = parsePublicKeys();
+    if (keyMap) {
+      const key = keyMap.get(serialValue);
+      if (!key) throw paymentError("Unknown WeChat Pay public key id", 400, "PAYMENT_SIGNATURE_INVALID");
+      return key;
+    }
+
+    if (platformPublicKey) {
+      if (serialValue !== publicKeyId) throw paymentError("Unknown WeChat Pay public key id", 400, "PAYMENT_SIGNATURE_INVALID");
+      return platformPublicKey;
+    }
+    if (platformCertificate) {
+      if (serialValue !== platformCertificateSerial) {
+        throw paymentError("Unknown WeChat Pay platform certificate serial", 400, "PAYMENT_SIGNATURE_INVALID");
+      }
+      return platformCertificate;
+    }
+    throw paymentError("WeChat Pay response verification is not configured", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+  }
+
+  function verifySignedPayload(headers, body, kind, status) {
+    assertVerificationConfig();
+    const timestamp = headerValue(headers, "wechatpay-timestamp");
+    const nonceValue = headerValue(headers, "wechatpay-nonce");
+    const signature = headerValue(headers, "wechatpay-signature");
+    const serialValue = headerValue(headers, "wechatpay-serial");
+    if (!timestamp || !nonceValue || !signature || !serialValue) {
+      throw paymentError(`Invalid WeChat Pay ${kind} signature headers`, status, "PAYMENT_SIGNATURE_INVALID");
+    }
+    const timestampNumber = Number(timestamp);
+    const age = Math.abs(Math.floor(clock().getTime() / 1000) - timestampNumber);
+    if (!/^\d+$/.test(timestamp) || !Number.isSafeInteger(timestampNumber) || age > 300) {
+      throw paymentError(`WeChat Pay ${kind} signature timestamp is outside the allowed window`, status, "PAYMENT_SIGNATURE_INVALID");
+    }
+    const key = verificationKey(serialValue);
+    let valid = false;
+    try {
+      valid = crypto.verify(
+        "RSA-SHA256",
+        Buffer.from(`${timestamp}\n${nonceValue}\n${body}\n`),
+        crypto.createPublicKey(key),
+        Buffer.from(signature, "base64"),
+      );
+    } catch {
+      valid = false;
+    }
+    if (!valid) throw paymentError(`Invalid WeChat Pay ${kind} signature`, status, "PAYMENT_SIGNATURE_INVALID");
+  }
+
+  function verifyResponse(headers, body) {
+    verifySignedPayload(headers, body, "response", 502);
+  }
+
+  function assertNotifyConfig() {
+    if (!apiV3Key || apiV3Key.length !== 32) {
+      throw paymentError("WeChat Pay notification verification is not configured", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+    }
+    assertVerificationConfig();
+  }
+
   async function request(method, path, body) {
+    assertRequestConfig();
     const encoded = body ? JSON.stringify(body) : "";
     const requestNonce = nonce();
     const timestamp = unixTimestamp(clock);
@@ -108,8 +222,19 @@ function createWechatPayV3Provider(options = {}) {
       "Content-Type": "application/json",
       Authorization: authorizationHeader({ merchantId, serial, privateKey, nonce: requestNonce, timestamp, method, path, body: encoded }),
     };
-    const response = await fetchImpl(`${origin}${path}`, { method, headers, body: encoded || undefined });
-    return readResponse(response);
+    const signal = AbortSignal.timeout(requestTimeoutMs);
+    let response;
+    try {
+      response = await fetchImpl(`${origin}${path}`, { method, headers, body: encoded || undefined, signal });
+    } catch (error) {
+      if (signal.aborted || error?.name === "AbortError" || error?.name === "TimeoutError") {
+        const timeoutError = paymentError("WeChat Pay request timed out", 504, "PAYMENT_PROVIDER_TIMEOUT");
+        timeoutError.retryable = true;
+        throw timeoutError;
+      }
+      throw error;
+    }
+    return readResponse(response, verifyResponse);
   }
 
   async function createPayment(input = {}) {
@@ -141,15 +266,7 @@ function createWechatPayV3Provider(options = {}) {
 
   function verifyNotification(headers, body) {
     assertNotifyConfig();
-    const timestamp = headerValue(headers, "wechatpay-timestamp");
-    const nonceValue = headerValue(headers, "wechatpay-nonce");
-    const signature = headerValue(headers, "wechatpay-signature");
-    const serialValue = headerValue(headers, "wechatpay-serial");
-    if (!timestamp || !nonceValue || !signature || serialValue !== serial) throw paymentError("Invalid WeChat Pay notification headers", 400, "PAYMENT_NOTIFICATION_INVALID");
-    const age = Math.abs(Math.floor(clock().getTime() / 1000) - Number(timestamp));
-    if (!Number.isSafeInteger(Number(timestamp)) || age > 300) throw paymentError("WeChat Pay notification timestamp is outside the allowed window", 400, "PAYMENT_NOTIFICATION_INVALID");
-    const valid = crypto.verify("RSA-SHA256", Buffer.from(`${timestamp}\n${nonceValue}\n${body}\n`), platformPublicKey, Buffer.from(signature, "base64"));
-    if (!valid) throw paymentError("Invalid WeChat Pay notification signature", 400, "PAYMENT_NOTIFICATION_INVALID");
+    verifySignedPayload(headers, body, "notification", 400);
   }
 
   function decryptNotification(resource) {
@@ -171,17 +288,40 @@ function createWechatPayV3Provider(options = {}) {
 
   async function refund(input = {}) {
     assertCreateConfig();
+    if (!refundNotifyUrl) {
+      throw paymentError("WeChat Pay refund notify URL is not configured", 503, "PAYMENT_PROVIDER_NOT_CONFIGURED");
+    }
     const order = input.order || {};
     const total = amountCents(order);
     const refund = Number(input.refundAmountCents || total);
     if (!Number.isSafeInteger(refund) || refund <= 0 || refund > total) throw new Error("Refund amount must be between 1 and the paid amount");
     return request("POST", REFUND_PATH, {
-      transaction_id: input.providerTransactionId || undefined,
       out_trade_no: order.id,
       out_refund_no: `refund_${order.id}`,
       reason: String(input.reason || "").slice(0, 80) || undefined,
+      notify_url: refundNotifyUrl,
       amount: { refund, total, currency: order.currency || "CNY" },
     });
+  }
+
+  function inputValue(input, keys, label) {
+    const source = typeof input === "string" ? input : input || {};
+    for (const key of keys) {
+      const candidate = typeof source === "string" ? source : source[key];
+      if (candidate !== undefined && candidate !== null && String(candidate).trim()) return String(candidate).trim();
+    }
+    throw new Error(`WeChat Pay ${label} is required`);
+  }
+
+  async function queryOrder(input) {
+    const outTradeNo = inputValue(input, ["outTradeNo", "out_trade_no"], "out_trade_no");
+    const path = `/v3/pay/transactions/out-trade-no/${encodeURIComponent(outTradeNo)}?mchid=${encodeURIComponent(merchantId)}`;
+    return request("GET", path);
+  }
+
+  async function queryRefund(input) {
+    const outRefundNo = inputValue(input, ["outRefundNo", "out_refund_no"], "out_refund_no");
+    return request("GET", `/v3/refund/domestic/refunds/${encodeURIComponent(outRefundNo)}`);
   }
 
   return {
@@ -189,6 +329,8 @@ function createWechatPayV3Provider(options = {}) {
     mode: "wechat",
     createPayment,
     refund,
+    queryOrder,
+    queryRefund,
     parseNotification,
     verifyNotification,
     decryptNotification,

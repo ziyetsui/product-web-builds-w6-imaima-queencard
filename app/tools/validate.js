@@ -53,11 +53,25 @@ const requiredFiles = [
   "services/credits.js",
   "services/generation.js",
   "services/session.js",
+  "services/template-pattern.js",
+  "services/template-prompt.js",
   "services/templates.js",
   "test/api-auth.test.js",
   "test/catalog-client.test.js",
+  "test/release-gate.test.js",
+  "test/template-prompt.test.js",
   "docs/miniapp-backend-contract.md",
+  "docs/release-checklist.md",
+  "docs/superpowers/specs/2026-07-27-full-miniapp-migration-design.md",
   "data/landing.js",
+  "pages/legal/privacy.json",
+  "pages/legal/privacy.js",
+  "pages/legal/privacy.wxml",
+  "pages/legal/privacy.wxss",
+  "pages/legal/terms.json",
+  "pages/legal/terms.js",
+  "pages/legal/terms.wxml",
+  "pages/legal/terms.wxss",
 ];
 
 function fail(message) {
@@ -110,11 +124,24 @@ if (projectJson.compileType !== "miniprogram") {
   fail("project.config.json compileType must be miniprogram");
 }
 
+const registeredPages = Array.isArray(appJson.pages) ? appJson.pages : [];
+registeredPages.forEach((page) => {
+  [".js", ".json", ".wxml", ".wxss"].forEach((extension) => {
+    const file = path.join(root, page + extension);
+    if (!fs.existsSync(file)) fail(`registered page is missing ${page + extension}`);
+  });
+});
+
 const landing = require(path.join(root, "data/landing.js"));
 const env = require(path.join(root, "config/env.js"));
 const assetPaths = new Set();
 const remoteUrls = [];
 const apiBaseUrl = (env.API_BASE_URL || "").replace(/\/$/, "");
+
+if (/(localhost|127\.0\.0\.1|0\.0\.0\.0)/i.test(apiBaseUrl)
+  && process.env.VALIDATE_ALLOW_LOCALHOST !== "1") {
+  fail("config/env.js points to localhost; set VALIDATE_ALLOW_LOCALHOST=1 only for local validation");
+}
 
 walk(landing, (value) => {
   if (typeof value !== "string") return;
@@ -148,6 +175,28 @@ const wxml = fs.readFileSync(path.join(root, "pages/index/index.wxml"), "utf8");
 if (wxml.includes("href=") || wxml.includes("<a ")) {
   fail("WXML should not contain web anchor tags");
 }
+
+function sourceFiles(directory) {
+  const result = [];
+  if (!fs.existsSync(directory)) return result;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) result.push(...sourceFiles(fullPath));
+    else if (/\.(js|json|wxml|wxss)$/.test(entry.name)) result.push(fullPath);
+  }
+  return result;
+}
+
+const secretPattern = /(OPENAI_IMAGE_API_KEY|GPTPROTO_API_KEY|WECHAT_MINIAPP_APP_SECRET|WECHAT_PAY_API_V3_KEY|PRIVATE_KEY)\s*[:=]/;
+const clientSourceRoots = ["config", "services", "pages", "data", "utils"];
+clientSourceRoots.forEach((directory) => {
+  sourceFiles(path.join(root, directory)).forEach((file) => {
+    const source = fs.readFileSync(file, "utf8");
+    if (secretPattern.test(source)) {
+      fail(`client source contains a server secret assignment: ${path.relative(root, file)}`);
+    }
+  });
+});
 
 const resultPageSource = fs.readFileSync(path.join(root, "pages/result/index.js"), "utf8");
 const apiSource = fs.readFileSync(path.join(root, "services/api.js"), "utf8");

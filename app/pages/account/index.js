@@ -224,4 +224,12 @@ Page({
   goAdmin: function () {
     wx.navigateTo({ url: "/pages/admin/index" });
   },
+
+  openPrivacy: function () {
+    wx.navigateTo({ url: "/pages/legal/privacy" });
+  },
+
+  openTerms: function () {
+    wx.navigateTo({ url: "/pages/legal/terms" });
+  },
 });

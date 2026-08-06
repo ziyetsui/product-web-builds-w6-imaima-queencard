@@ -210,6 +210,41 @@ test("passes all deployment smoke checks for a ready payment-disabled deployment
   assert.equal(checkFor(result, "/api/miniapp/auth/me").status, 401);
 });
 
+test("passes the payment-enabled deployment smoke profile for a WeChat deployment", async () => {
+  const result = await withServer({
+    "/api/miniapp/pricing": {
+      status: 200,
+      body: pricingBody({ payment: { available: true, mode: "wechat" } }),
+    },
+  }, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({
+    baseUrl,
+    fetchImpl,
+    profile: "payment-enabled",
+  }));
+
+  assert.equal(result.ok, true);
+  assert.equal(checkFor(result, "/api/miniapp/pricing").ok, true);
+  assert.match(checkFor(result, "/api/miniapp/pricing").detail, /enabled/i);
+});
+
+test("rejects a payment-enabled profile unless pricing exposes available WeChat payment", async () => {
+  for (const payment of [
+    { available: false, mode: "wechat" },
+    { available: true, mode: "manual" },
+  ]) {
+    const result = await withServer({
+      "/api/miniapp/pricing": { status: 200, body: pricingBody({ payment }) },
+    }, ({ baseUrl, fetchImpl }) => runDeploymentSmoke({
+      baseUrl,
+      fetchImpl,
+      profile: "payment-enabled",
+    }));
+
+    assert.equal(result.ok, false);
+    assert.match(checkFor(result, "/api/miniapp/pricing").detail, /available|wechat/i);
+  }
+});
+
 test("rejects HTTP, malformed, and credential-bearing base URLs before making requests", async () => {
   let calls = 0;
   const fetchImpl = async () => {

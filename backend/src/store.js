@@ -162,6 +162,7 @@ function createMemoryStore(options = {}) {
   let activeCatalogVersionId = null;
   const orders = new Map();
   const paymentAudit = [];
+  const adminAudit = [];
   const paymentFulfillments = new Map();
 
   function nowIso(value) {
@@ -379,6 +380,16 @@ function createMemoryStore(options = {}) {
       refundedAt: null,
       canceledAt: null,
       adminNote: "",
+      paymentVerified: false,
+      refundStatus: "none",
+      refundProviderId: "",
+      refundAmountCents: 0,
+      refundAcceptedAt: null,
+      refundCompletedAt: null,
+      refundError: "",
+      reconcileLeaseOwner: "",
+      reconcileLeaseExpiresAt: null,
+      lastReconciledAt: null,
     };
     Object.defineProperty(saved, "requestFingerprint", { value: requestFingerprint, enumerable: false });
     orders.set(saved.id, saved);
@@ -387,6 +398,10 @@ function createMemoryStore(options = {}) {
 
   function getOrder(id) {
     return orders.get(id) || null;
+  }
+
+  function getOrderByIdempotencyKey(userId, key) {
+    return Array.from(orders.values()).find((order) => order.userId === userId && order.idempotencyKey === key) || null;
   }
 
   function listOrders(userId, options = new URLSearchParams()) {
@@ -518,13 +533,53 @@ function createMemoryStore(options = {}) {
     return { order, canceled: true };
   }
 
-  function refundOrder(id, input = {}) {
+  function acceptRefund(id, input = {}) {
     const order = orders.get(id);
     if (!order) return null;
-    if (order.refundedAt) return { order, refunded: false, revokedCredits: 0 };
+    if (order.refundedAt || order.refundStatus === "succeeded") return { order, accepted: false };
+    if (["accepted", "processing"].includes(order.refundStatus)) return { order, accepted: false };
+    if (order.status !== "paid") {
+      const error = new Error("Only paid orders can be refunded");
+      error.status = 409;
+      throw error;
+    }
+    const now = nowIso();
+    order.paymentStatus = "refund_pending";
+    order.refundStatus = input.refundStatus || "accepted";
+    order.refundProviderId = input.refundId || order.refundProviderId || "";
+    order.refundAmountCents = Number(input.refundAmountCents || order.amountCents);
+    order.refundAcceptedAt = order.refundAcceptedAt || now;
+    order.refundError = "";
+    order.metadata = { ...(order.metadata || {}), refund: { ...(order.metadata?.refund || {}), ...(input.metadata || {}), id: order.refundProviderId, status: order.refundStatus } };
+    order.updatedAt = now;
+    return { order, accepted: true };
+  }
+
+  function failRefund(id, input = {}) {
+    const order = orders.get(id);
+    if (!order) return null;
+    if (order.refundedAt) return { order, failed: false };
+    const now = nowIso();
+    if (order.paymentStatus === "refund_pending") order.paymentStatus = "fulfilled";
+    order.refundStatus = "failed";
+    order.refundError = input.error || "Refund failed";
+    order.metadata = { ...(order.metadata || {}), refund: { ...(order.metadata?.refund || {}), ...(input.metadata || {}), status: "failed" } };
+    order.updatedAt = now;
+    return { order, failed: true };
+  }
+
+  function completeRefund(id, input = {}) {
+    const order = orders.get(id);
+    if (!order) return null;
+    if (order.refundedAt || order.refundStatus === "succeeded") return { order, completed: false, revokedCredits: 0 };
+    if (!input.allowUnaccepted && !input.verified && !["accepted", "processing"].includes(order.refundStatus)) {
+      const error = new Error("Verified refund completion required");
+      error.status = 409;
+      throw error;
+    }
     const user = users.get(order.userId);
     if (!user) throw new Error("User not found");
-    const now = new Date().toISOString();
+    const now = nowIso();
     let revokedCredits = 0;
     const grantRemainder = Math.max(0, Number(order.creditsGranted || 0) - Number(order.creditsRevoked || 0));
     if (input.revokeCredits !== false && grantRemainder > 0) {
@@ -544,11 +599,49 @@ function createMemoryStore(options = {}) {
     }
     order.status = "refunded";
     order.paymentStatus = "refunded";
+    order.refundStatus = "succeeded";
     order.refundedAt = now;
+    order.refundCompletedAt = now;
+    order.refundProviderId = input.refundId || order.refundProviderId || "";
+    order.refundAmountCents = Number(input.refundAmountCents || order.refundAmountCents || order.amountCents);
+    order.refundError = "";
     order.creditsRevoked = Number(order.creditsRevoked || 0) + revokedCredits;
     order.adminNote = input.reason || order.adminNote || "";
     order.updatedAt = now;
-    return { order, refunded: true, revokedCredits };
+    return { order, refunded: true, completed: true, revokedCredits };
+  }
+
+  function refundOrder(id, input = {}) {
+    return completeRefund(id, { ...input, allowUnaccepted: true });
+  }
+
+  function claimStaleOrders(workerId, input = {}) {
+    const now = nowIso(input.now);
+    const staleBefore = Date.parse(now) - Number(input.staleAfterMs || 300000);
+    const limit = Math.min(Math.max(Number(input.limit || 10), 1), 100);
+    const leaseExpiresAt = new Date(Date.parse(now) + Number(input.leaseDurationMs || 60000)).toISOString();
+    const candidates = Array.from(orders.values())
+      .filter((order) => order.paymentMode === "wechat")
+      .filter((order) => (order.status === "pending" && !["fulfilled", "canceled", "refunded"].includes(order.paymentStatus))
+        || ["accepted", "processing"].includes(order.refundStatus))
+      .filter((order) => !order.reconcileLeaseExpiresAt || Date.parse(order.reconcileLeaseExpiresAt) <= Date.parse(now))
+      .filter((order) => Date.parse(order.lastReconciledAt || order.updatedAt || order.createdAt) <= staleBefore)
+      .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)) || left.id.localeCompare(right.id))
+      .slice(0, limit);
+    for (const order of candidates) {
+      order.reconcileLeaseOwner = workerId;
+      order.reconcileLeaseExpiresAt = leaseExpiresAt;
+    }
+    return candidates;
+  }
+
+  function releaseOrderReconciliationLease(id, workerId, input = {}) {
+    const order = orders.get(id);
+    if (!order || order.reconcileLeaseOwner !== workerId) return null;
+    order.reconcileLeaseOwner = "";
+    order.reconcileLeaseExpiresAt = null;
+    if (input.reconciledAt) order.lastReconciledAt = nowIso(input.reconciledAt);
+    return order;
   }
 
   function recordPaymentEvent(event) {
@@ -577,6 +670,35 @@ function createMemoryStore(options = {}) {
     if (type) records = records.filter((event) => event.type === type);
     records.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
     return paginateRecords(records, options);
+  }
+
+  function recordAdminAudit(input = {}) {
+    const saved = {
+      id: input.id || auditId(),
+      actorUserId: input.actorUserId || "",
+      targetUserId: input.targetUserId || null,
+      action: input.action || "",
+      entityType: input.entityType || "",
+      entityId: input.entityId || null,
+      reason: input.reason || "",
+      before: input.before == null ? null : input.before,
+      after: input.after == null ? null : input.after,
+      ipAddress: input.ipAddress || "",
+      userAgent: input.userAgent || "",
+      createdAt: input.createdAt || nowIso(),
+    };
+    adminAudit.push(saved);
+    return saved;
+  }
+
+  function listAdminAudit(options = {}) {
+    const params = options instanceof URLSearchParams ? options : new URLSearchParams(options || {});
+    let records = adminAudit.slice();
+    if (params.get("actorUserId")) records = records.filter((record) => record.actorUserId === params.get("actorUserId"));
+    if (params.get("targetUserId")) records = records.filter((record) => record.targetUserId === params.get("targetUserId"));
+    if (params.get("action")) records = records.filter((record) => record.action === params.get("action"));
+    records.sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id));
+    return paginateRecords(records, params);
   }
 
   function findOwnedImageAsset(userId, assetId) {
@@ -1081,6 +1203,7 @@ function createMemoryStore(options = {}) {
     listCreditTransactions,
     createOrder,
     getOrder,
+    getOrderByIdempotencyKey,
     listOrders,
     listAllOrders,
     fulfillOrder,
@@ -1088,9 +1211,16 @@ function createMemoryStore(options = {}) {
     fulfillPayment,
     getPaymentFulfillment,
     cancelOrder,
+    acceptRefund,
+    completeRefund,
+    failRefund,
     refundOrder,
+    claimStaleOrders,
+    releaseOrderReconciliationLease,
     recordPaymentEvent,
     listPaymentAudit,
+    recordAdminAudit,
+    listAdminAudit,
     findOwnedImageAsset,
     createTask,
     createTaskWithCreditHold,
@@ -1555,47 +1685,75 @@ function createSqliteStore(options = {}) {
       error.status = 409;
       throw error;
     }
-    const existing = getPaymentFulfillment(input.fulfillmentKey);
-    if (existing) {
-      if (existing.orderId !== input.orderId || existing.eventId !== input.eventId || existing.providerTransactionId !== input.providerTransactionId) {
-        const error = new Error("Payment fulfillment identity conflict");
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const matches = db.prepare(`
+        SELECT * FROM payment_fulfillments
+        WHERE fulfillment_key = ? OR (provider = ? AND provider_transaction_id = ?) OR (provider = ? AND event_id = ?)
+      `).all(input.fulfillmentKey, input.provider, input.providerTransactionId, input.provider, input.eventId);
+      if (matches.length) {
+        if (matches.length !== 1) throw new Error("Payment fulfillment identity conflict");
+        const existing = rowToPaymentFulfillment(matches[0]);
+        if (existing.orderId !== input.orderId || existing.eventId !== input.eventId || existing.providerTransactionId !== input.providerTransactionId) {
+          const error = new Error("Payment fulfillment identity conflict");
+          error.status = 409;
+          throw error;
+        }
+        db.exec("COMMIT");
+        return existing;
+      }
+      const orderRow = db.prepare("SELECT * FROM orders WHERE id = ?").get(input.orderId);
+      const order = orderRow ? rowToOrder(orderRow) : null;
+      if (!order || order.paymentMode !== "wechat" || order.fulfilledAt || order.status === "paid") {
+        const error = new Error("Verified WeChat payment required");
         error.status = 409;
         throw error;
       }
-      return existing;
-    }
-    const order = getOrder(input.orderId);
-    if (!order || order.paymentMode !== "wechat" || order.fulfilledAt || order.status === "paid") {
-      const error = new Error("Verified WeChat payment required");
-      error.status = 409;
+      const userRow = db.prepare("SELECT balance FROM users WHERE id = ?").get(order.userId);
+      if (!userRow) throw new Error("User not found");
+      const now = new Date().toISOString();
+      const credits = positiveInt(order.credits, 0);
+      const balanceAfter = Number(userRow.balance) + credits;
+      db.prepare("UPDATE users SET balance = ?, updated_at = ? WHERE id = ?").run(balanceAfter, now, order.userId);
+      if (credits > 0) {
+        db.prepare("INSERT INTO credit_transactions (id, user_id, amount, reason, balance_after, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(transactionId(), order.userId, credits, `wechat-payment:${input.eventId}`, balanceAfter, now);
+      }
+      const metadata = { ...(order.metadata || {}), ...(input.metadata || {}), paymentVerification: "verified", paymentEventId: input.eventId };
+      db.prepare(`
+        UPDATE orders
+        SET status = 'paid', payment_status = 'fulfilled', payment_verified = 1,
+            paid_at = COALESCE(paid_at, ?), fulfilled_at = ?, credits_granted = ?,
+            external_payment_id = COALESCE(external_payment_id, ?), metadata_json = ?, updated_at = ?
+        WHERE id = ?
+      `).run(input.paidAt || now, now, credits, input.providerTransactionId, stringify(metadata), now, order.id);
+      const fulfillmentId = input.id || `fulfillment_${crypto.randomUUID()}`;
+      db.prepare(`
+        INSERT INTO payment_fulfillments (
+          id, fulfillment_key, order_id, provider, event_id, event_type,
+          provider_order_id, provider_transaction_id, status, metadata_json,
+          fulfilled_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        fulfillmentId,
+        input.fulfillmentKey,
+        order.id,
+        "wechat",
+        input.eventId,
+        input.eventType || "",
+        input.providerOrderId || "",
+        input.providerTransactionId,
+        "FULFILLED",
+        stringify({ ...(input.metadata || {}), paymentVerified: true, verificationMode: "wechat" }),
+        input.paidAt || now,
+        now,
+        now,
+      );
+      db.exec("COMMIT");
+      return getPaymentFulfillment(input.fulfillmentKey);
+    } catch (error) {
+      db.exec("ROLLBACK");
       throw error;
     }
-    const result = fulfillOrder(order.id, { paidAt: input.paidAt, reason: `wechat-payment:${input.eventId}` });
-    db.prepare("UPDATE orders SET external_payment_id = ? WHERE id = ?").run(input.providerTransactionId, order.id);
-    const createdAt = new Date().toISOString();
-    const fulfillmentId = input.id || `fulfillment_${crypto.randomUUID()}`;
-    db.prepare(`
-      INSERT INTO payment_fulfillments (
-        id, fulfillment_key, order_id, provider, event_id, event_type,
-        provider_order_id, provider_transaction_id, status, metadata_json,
-        fulfilled_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      fulfillmentId,
-      input.fulfillmentKey,
-      order.id,
-      "wechat",
-      input.eventId,
-      input.eventType || "",
-      input.providerOrderId || "",
-      input.providerTransactionId,
-      "FULFILLED",
-      stringify({ ...(input.metadata || {}), paymentVerified: true, verificationMode: "wechat" }),
-      input.paidAt || createdAt,
-      createdAt,
-      createdAt,
-    );
-    return getPaymentFulfillment(input.fulfillmentKey) || result.order;
   }
 
   function cancelOrder(id, input = {}) {
@@ -1616,10 +1774,58 @@ function createSqliteStore(options = {}) {
     return { order: getOrder(id), canceled: true };
   }
 
-  function refundOrder(id, input = {}) {
+  function acceptRefund(id, input = {}) {
     const order = getOrder(id);
     if (!order) return null;
-    if (order.refundedAt) return { order, refunded: false, revokedCredits: 0 };
+    if (order.refundedAt || order.refundStatus === "succeeded") return { order, accepted: false };
+    if (["accepted", "processing"].includes(order.refundStatus)) return { order, accepted: false };
+    if (order.status !== "paid") {
+      const error = new Error("Only paid orders can be refunded");
+      error.status = 409;
+      throw error;
+    }
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE orders
+      SET payment_status = 'refund_pending', refund_status = ?, refund_provider_id = ?,
+          refund_amount_cents = ?, refund_accepted_at = COALESCE(refund_accepted_at, ?),
+          refund_error = '', metadata_json = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      input.refundStatus || "accepted",
+      input.refundId || order.refundProviderId || "",
+      Number(input.refundAmountCents || order.amountCents),
+      now,
+      stringify({ ...(order.metadata || {}), refund: { ...((order.metadata || {}).refund || {}), ...(input.metadata || {}) } }),
+      now,
+      order.id,
+    );
+    return { order: getOrder(id), accepted: true };
+  }
+
+  function failRefund(id, input = {}) {
+    const order = getOrder(id);
+    if (!order) return null;
+    if (order.refundedAt) return { order, failed: false };
+    const now = new Date().toISOString();
+    db.prepare("UPDATE orders SET payment_status = CASE WHEN payment_status = 'refund_pending' THEN 'fulfilled' ELSE payment_status END, refund_status = 'failed', refund_error = ?, metadata_json = ?, updated_at = ? WHERE id = ?").run(
+      input.error || "Refund failed",
+      stringify({ ...(order.metadata || {}), refund: { ...((order.metadata || {}).refund || {}), ...(input.metadata || {}), status: "failed" } }),
+      now,
+      id,
+    );
+    return { order: getOrder(id), failed: true };
+  }
+
+  function completeRefund(id, input = {}) {
+    const order = getOrder(id);
+    if (!order) return null;
+    if (order.refundedAt || order.refundStatus === "succeeded") return { order, completed: false, revokedCredits: 0 };
+    if (!input.allowUnaccepted && !input.verified && !["accepted", "processing"].includes(order.refundStatus)) {
+      const error = new Error("Verified refund completion required");
+      error.status = 409;
+      throw error;
+    }
     const user = getUser(order.userId);
     if (!user) throw new Error("User not found");
     const now = new Date().toISOString();
@@ -1638,15 +1844,54 @@ function createSqliteStore(options = {}) {
       db.prepare(`
         UPDATE orders
         SET status = ?, payment_status = ?, refunded_at = ?,
+            refund_status = 'succeeded', refund_completed_at = ?,
+            refund_provider_id = COALESCE(?, refund_provider_id),
+            refund_amount_cents = COALESCE(?, refund_amount_cents),
             credits_revoked = credits_revoked + ?, admin_note = ?, updated_at = ?
         WHERE id = ?
-      `).run("refunded", "refunded", now, revokedCredits, input.reason || order.adminNote || "", now, order.id);
+      `).run("refunded", "refunded", now, now, input.refundId || null, Number(input.refundAmountCents || 0) || null, revokedCredits, input.reason || order.adminNote || "", now, order.id);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
     }
-    return { order: getOrder(id), refunded: true, revokedCredits };
+    return { order: getOrder(id), refunded: true, completed: true, revokedCredits };
+  }
+
+  function refundOrder(id, input = {}) {
+    return completeRefund(id, { ...input, allowUnaccepted: true });
+  }
+
+  function claimStaleOrders(workerId, input = {}) {
+    const now = input.now instanceof Date ? input.now : new Date(input.now || Date.now());
+    const nowIsoValue = now.toISOString();
+    const staleBefore = new Date(now.getTime() - Number(input.staleAfterMs || 300000)).toISOString();
+    const limit = Math.min(Math.max(Number(input.limit || 10), 1), 100);
+    const expires = new Date(now.getTime() + Number(input.leaseDurationMs || 60000)).toISOString();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const rows = db.prepare(`
+        SELECT * FROM orders
+        WHERE payment_mode = 'wechat'
+          AND ((status = 'pending' AND payment_status NOT IN ('fulfilled', 'canceled', 'refunded'))
+            OR refund_status IN ('accepted', 'processing'))
+          AND COALESCE(last_reconciled_at, updated_at) <= ?
+          AND (reconcile_lease_expires_at IS NULL OR reconcile_lease_expires_at <= ?)
+        ORDER BY created_at ASC, id ASC LIMIT ?
+      `).all(staleBefore, nowIsoValue, limit);
+      for (const row of rows) db.prepare("UPDATE orders SET reconcile_lease_owner = ?, reconcile_lease_expires_at = ? WHERE id = ?").run(workerId, expires, row.id);
+      db.exec("COMMIT");
+      return rows.map((row) => getOrder(row.id));
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  function releaseOrderReconciliationLease(id, workerId, input = {}) {
+    const now = input.reconciledAt instanceof Date ? input.reconciledAt.toISOString() : input.reconciledAt || null;
+    const result = db.prepare("UPDATE orders SET reconcile_lease_owner = NULL, reconcile_lease_expires_at = NULL, last_reconciled_at = COALESCE(?, last_reconciled_at) WHERE id = ? AND reconcile_lease_owner = ?").run(now, id, workerId);
+    return result.changes ? getOrder(id) : null;
   }
 
   function recordPaymentEvent(event) {
@@ -1706,6 +1951,47 @@ function createSqliteStore(options = {}) {
         totalPages: Math.max(1, Math.ceil(total / limit)),
       },
     };
+  }
+
+  function recordAdminAudit(input = {}) {
+    const id = input.id || `admin_audit_${crypto.randomUUID()}`;
+    const createdAt = input.createdAt || new Date().toISOString();
+    db.prepare(`
+      INSERT INTO admin_audit_logs (
+        id, actor_user_id, target_user_id, action, entity_type, entity_id, reason,
+        before_state_json, after_state_json, ip_address, user_agent, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.actorUserId,
+      input.targetUserId || null,
+      input.action,
+      input.entityType,
+      input.entityId || null,
+      input.reason || "",
+      stringify(input.before == null ? null : input.before),
+      stringify(input.after == null ? null : input.after),
+      input.ipAddress || null,
+      input.userAgent || null,
+      createdAt,
+    );
+    return rowToAdminAudit(db.prepare("SELECT * FROM admin_audit_logs WHERE id = ?").get(id));
+  }
+
+  function listAdminAudit(options = {}) {
+    const params = options instanceof URLSearchParams ? options : new URLSearchParams(options || {});
+    const page = positiveInt(params.get("page"), 1);
+    const limit = Math.min(positiveInt(params.get("limit"), 20), 100);
+    const offset = (page - 1) * limit;
+    const filters = [];
+    const values = [];
+    if (params.get("actorUserId")) { filters.push("actor_user_id = ?"); values.push(params.get("actorUserId")); }
+    if (params.get("targetUserId")) { filters.push("target_user_id = ?"); values.push(params.get("targetUserId")); }
+    if (params.get("action")) { filters.push("action = ?"); values.push(params.get("action")); }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const total = db.prepare(`SELECT COUNT(*) AS total FROM admin_audit_logs ${where}`).get(...values).total;
+    const rows = db.prepare(`SELECT * FROM admin_audit_logs ${where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit, offset);
+    return { records: rows.map(rowToAdminAudit), pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) } };
   }
 
   function findOwnedImageAsset(userId, assetId) {
@@ -2289,6 +2575,10 @@ function createSqliteStore(options = {}) {
     listCreditTransactions,
     createOrder,
     getOrder,
+    getOrderByIdempotencyKey(userId, key) {
+      const row = db.prepare("SELECT * FROM orders WHERE user_id = ? AND idempotency_key = ?").get(userId, key);
+      return row ? rowToOrder(row) : null;
+    },
     listOrders,
     listAllOrders,
     fulfillOrder,
@@ -2296,9 +2586,16 @@ function createSqliteStore(options = {}) {
     fulfillPayment,
     getPaymentFulfillment,
     cancelOrder,
+    acceptRefund,
+    completeRefund,
+    failRefund,
     refundOrder,
+    claimStaleOrders,
+    releaseOrderReconciliationLease,
     recordPaymentEvent,
     listPaymentAudit,
+    recordAdminAudit,
+    listAdminAudit,
     findOwnedImageAsset,
     createTask,
     createTaskWithCreditHold,
@@ -2508,8 +2805,19 @@ function migrate(db) {
       paid_at TEXT,
       fulfilled_at TEXT,
       refunded_at TEXT,
+      refund_status TEXT NOT NULL DEFAULT 'none',
+      refund_provider_id TEXT,
+      refund_amount_cents INTEGER,
+      refund_accepted_at TEXT,
+      refund_completed_at TEXT,
+      refund_error TEXT NOT NULL DEFAULT '',
+      reconcile_lease_owner TEXT,
+      reconcile_lease_expires_at TEXT,
+      last_reconciled_at TEXT,
       canceled_at TEXT,
-      admin_note TEXT
+      admin_note TEXT,
+      payment_verified INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
     );
     CREATE TABLE IF NOT EXISTS payment_audit (
       id TEXT PRIMARY KEY,
@@ -2535,6 +2843,20 @@ function migrate(db) {
       fulfilled_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS admin_audit_logs (
+      id TEXT PRIMARY KEY,
+      actor_user_id TEXT NOT NULL,
+      target_user_id TEXT,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT,
+      reason TEXT NOT NULL DEFAULT '',
+      before_state_json TEXT,
+      after_state_json TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TEXT NOT NULL
     );
   `);
   ensureColumn(db, "users", "status", "TEXT NOT NULL DEFAULT 'active'");
@@ -2581,9 +2903,24 @@ function migrate(db) {
   ensureColumn(db, "orders", "paid_at", "TEXT");
   ensureColumn(db, "orders", "fulfilled_at", "TEXT");
   ensureColumn(db, "orders", "refunded_at", "TEXT");
+  ensureColumn(db, "orders", "refund_status", "TEXT NOT NULL DEFAULT 'none'");
+  ensureColumn(db, "orders", "refund_provider_id", "TEXT");
+  ensureColumn(db, "orders", "refund_amount_cents", "INTEGER");
+  ensureColumn(db, "orders", "refund_accepted_at", "TEXT");
+  ensureColumn(db, "orders", "refund_completed_at", "TEXT");
+  ensureColumn(db, "orders", "refund_error", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "orders", "reconcile_lease_owner", "TEXT");
+  ensureColumn(db, "orders", "reconcile_lease_expires_at", "TEXT");
+  ensureColumn(db, "orders", "last_reconciled_at", "TEXT");
   ensureColumn(db, "orders", "canceled_at", "TEXT");
   ensureColumn(db, "orders", "admin_note", "TEXT");
+  ensureColumn(db, "orders", "payment_verified", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "orders", "metadata_json", "TEXT NOT NULL DEFAULT '{}' ");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS orders_user_idempotency_key_unique ON orders (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL");
+  db.exec("CREATE INDEX IF NOT EXISTS orders_reconcile_lease_idx ON orders (payment_mode, status, updated_at, reconcile_lease_expires_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS orders_refund_status_idx ON orders (payment_mode, refund_status, updated_at)");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS payment_fulfillments_provider_transaction_unique ON payment_fulfillments (provider, provider_transaction_id)");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS payment_fulfillments_provider_event_unique ON payment_fulfillments (provider, event_id)");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS generation_tasks_owner_idempotency_unique ON generation_tasks (owner_id, idempotency_key) WHERE idempotency_key IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS generation_tasks_lease_idx ON generation_tasks (status, lease_expires_at, next_attempt_at)");
 }
@@ -2875,6 +3212,17 @@ function rowToOrder(row) {
     refundedAt: row.refunded_at || null,
     canceledAt: row.canceled_at || null,
     adminNote: row.admin_note || "",
+    paymentVerified: Boolean(row.payment_verified),
+    refundStatus: row.refund_status || "none",
+    refundProviderId: row.refund_provider_id || "",
+    refundAmountCents: Number(row.refund_amount_cents || 0),
+    refundAcceptedAt: row.refund_accepted_at || null,
+    refundCompletedAt: row.refund_completed_at || null,
+    refundError: row.refund_error || "",
+    reconcileLeaseOwner: row.reconcile_lease_owner || "",
+    reconcileLeaseExpiresAt: row.reconcile_lease_expires_at || null,
+    lastReconciledAt: row.last_reconciled_at || null,
+    metadata: parseJson(row.metadata_json, {}),
   };
 }
 
@@ -2907,6 +3255,23 @@ function rowToPaymentFulfillment(row) {
     fulfilledAt: row.fulfilled_at || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function rowToAdminAudit(row) {
+  return {
+    id: row.id,
+    actorUserId: row.actor_user_id,
+    targetUserId: row.target_user_id || null,
+    action: row.action,
+    entityType: row.entity_type,
+    entityId: row.entity_id || null,
+    reason: row.reason || "",
+    before: parseJson(row.before_state_json, null),
+    after: parseJson(row.after_state_json, null),
+    ipAddress: row.ip_address || "",
+    userAgent: row.user_agent || "",
+    createdAt: row.created_at,
   };
 }
 

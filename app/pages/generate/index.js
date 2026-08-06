@@ -3,6 +3,8 @@ var api = require("../../services/api.js");
 var auth = require("../../services/auth.js");
 var generation = require("../../services/generation.js");
 var templatesService = require("../../services/templates.js");
+var templatePrompt = require("../../services/template-prompt.js");
+var templatePattern = require("../../services/template-pattern.js");
 
 var DEFAULT_MODEL_VALUE = "gpt-image-2-edit";
 var DEFAULT_MODEL_LABEL = "GPT Image 2";
@@ -170,6 +172,13 @@ Page({
     maxReferenceImages: MAX_REFERENCE_IMAGES,
     templateId: "",
     templateTitle: "",
+    templatePrompt: "",
+    pattern: null,
+    patternValues: {},
+    patternDefaults: {},
+    promptPreview: "",
+    fixedPromptMode: false,
+    promptSlots: [],
     topic: "",
     prompt: landing.hero.samplePrompt,
     modes: [
@@ -208,6 +217,11 @@ Page({
   onLoad: function (options) {
     var templateId = options && options.templateId ? decodeOption(options.templateId) : "";
     this.prefillFromOptions(options || {});
+    if (!templateId) {
+      this.setPromptSource(
+        decodeOption(options && options.prompt) || landing.hero.samplePrompt,
+      );
+    }
     this.loadModels();
     if (templateId) {
       this.loadTemplateSeed(templateId);
@@ -315,6 +329,47 @@ Page({
     }
   },
 
+  promptValues: function (slots) {
+    var values = {};
+    (slots || []).forEach(function (slot) {
+      values[slot.key] = slot.value || "";
+    });
+    return values;
+  },
+
+  setPromptSource: function (source, callback, pattern, initialValues) {
+    var prompt = String(source || "");
+    if (pattern) {
+      var patternValues = Object.assign({}, initialValues || {});
+      var patternSlots = templatePattern.buildPatternSlots(pattern, patternValues);
+      this.setData({
+        templatePrompt: prompt,
+        pattern: pattern,
+        patternValues: patternValues,
+        patternDefaults: Object.assign({}, patternValues),
+        promptPreview: templatePattern.renderPatternTemplate(pattern, patternValues),
+        prompt: templatePattern.compilePatternPrompt(pattern, patternValues),
+        promptSlots: patternSlots,
+        fixedPromptMode: true,
+        topic: patternValues.topic || this.data.topic,
+      }, callback);
+      return;
+    }
+    var parsed = templatePrompt.parseTemplatePrompt(prompt);
+    var slots = parsed.slots || [];
+    var rendered = templatePrompt.renderTemplatePrompt(prompt, this.promptValues(slots));
+    this.setData({
+      templatePrompt: prompt,
+      pattern: null,
+      patternValues: {},
+      patternDefaults: {},
+      promptPreview: rendered,
+      prompt: rendered,
+      promptSlots: slots,
+      fixedPromptMode: parsed.hasEditableSlots,
+    }, callback);
+  },
+
   loadTemplateSeed: function (templateId) {
     var page = this;
     if (!this.data.apiReady) {
@@ -332,15 +387,15 @@ Page({
         var capability = MODE_IMAGE_EDIT;
         var modeModels = modelsForCapability(page.data.models, capability);
         var modelIndex = modelIndexFor(modeModels, DEFAULT_MODEL_VALUE);
-        var referenceImages = template.referenceImages || [];
+        var referenceImages = template.previewImages && template.previewImages.length
+          ? template.previewImages
+          : (template.referenceImages || []);
         var referenceImage = firstReferenceImage(template);
         var referenceImagePaths = uniqueImages(referenceImages.length ? referenceImages : [referenceImage], MAX_REFERENCE_IMAGES);
+        var pattern = templatePattern.getPatternForTemplate(template);
+        var patternValues = templatePattern.getSuggestedValues(template, pattern);
         page.setData({
           templateTitle: template.title || "",
-          referenceImagePath: referenceImagePaths[0] || "",
-          referenceImagePaths: referenceImagePaths,
-          referenceAssetIds: [],
-          prompt: template.prompt || seed.prompt || page.data.prompt,
           capability: capability,
           modeIndex: modeIndexFor(page.data.modes, capability),
           modeLabel: "参考图生成",
@@ -349,7 +404,14 @@ Page({
           modelLabel: modeModels[modelIndex].label,
           templateLoading: false,
         }, function () {
-          page.scheduleEstimate();
+          page.setData({
+            referenceImagePath: referenceImagePaths[0] || "",
+            referenceImagePaths: referenceImagePaths,
+            referenceAssetIds: [],
+          });
+          page.setPromptSource(template.prompt || seed.prompt || page.data.prompt, function () {
+            page.scheduleEstimate();
+          }, pattern, patternValues);
         });
       })
       .catch(function (error) {
@@ -540,15 +602,61 @@ Page({
   },
 
   onTopicInput: function (event) {
-    this.setData({
-      topic: event.detail.value,
-    });
+    var value = event.detail.value;
+    if (this.data.pattern) {
+      var patternValues = Object.assign({}, this.data.patternValues || {}, { topic: value });
+      this.setData({
+        topic: value,
+        patternValues: patternValues,
+        promptSlots: templatePattern.buildPatternSlots(this.data.pattern, patternValues),
+        promptPreview: templatePattern.renderPatternTemplate(this.data.pattern, patternValues),
+        prompt: templatePattern.compilePatternPrompt(this.data.pattern, patternValues),
+      });
+    } else {
+      this.setData({ topic: value });
+    }
     this.scheduleEstimate();
   },
 
   onPromptInput: function (event) {
+    var value = event.detail.value;
     this.setData({
-      prompt: event.detail.value,
+      prompt: value,
+      templatePrompt: value,
+      pattern: null,
+      patternValues: {},
+      patternDefaults: {},
+      promptPreview: value,
+      promptSlots: [],
+      fixedPromptMode: false,
+    });
+    this.scheduleEstimate();
+  },
+
+  onPromptSlotInput: function (event) {
+    var index = Number(event && event.currentTarget && event.currentTarget.dataset.index);
+    var value = event && event.detail ? event.detail.value : "";
+    if (this.data.pattern) {
+      var patternSlot = this.data.promptSlots[index];
+      var patternValues = Object.assign({}, this.data.patternValues || {});
+      if (patternSlot) patternValues[patternSlot.key] = value;
+      var patternSlots = templatePattern.buildPatternSlots(this.data.pattern, patternValues);
+      this.setData({
+        patternValues: patternValues,
+        promptSlots: patternSlots,
+        promptPreview: templatePattern.renderPatternTemplate(this.data.pattern, patternValues),
+        prompt: templatePattern.compilePatternPrompt(this.data.pattern, patternValues),
+        topic: patternValues.topic || this.data.topic,
+      });
+      this.scheduleEstimate();
+      return;
+    }
+    var slots = (this.data.promptSlots || []).map(function (slot, slotIndex) {
+      return slotIndex === index ? Object.assign({}, slot, { value: value }) : slot;
+    });
+    this.setData({
+      promptSlots: slots,
+      prompt: templatePrompt.renderTemplatePrompt(this.data.templatePrompt, this.promptValues(slots)),
     });
     this.scheduleEstimate();
   },
@@ -687,10 +795,11 @@ Page({
   },
 
   resetPrompt: function () {
-    this.setData({
-      prompt: landing.hero.samplePrompt,
-    });
-    this.scheduleEstimate();
+    var pattern = this.data.pattern;
+    var defaults = pattern ? this.data.patternDefaults : null;
+    this.setPromptSource(this.data.templatePrompt || landing.hero.samplePrompt, function () {
+      this.scheduleEstimate();
+    }.bind(this), pattern, defaults);
   },
 
   ensureLogin: function () {
@@ -736,6 +845,16 @@ Page({
     if (!prompt) {
       wx.showToast({
         title: "先填写生成要求",
+        icon: "none",
+      });
+      return;
+    }
+
+    if (this.data.fixedPromptMode && (this.data.promptSlots || []).some(function (slot) {
+      return !trim(slot.value);
+    })) {
+      wx.showToast({
+        title: "请填写全部词槽",
         icon: "none",
       });
       return;

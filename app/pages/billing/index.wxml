@@ -38,7 +38,7 @@
       </view>
       <view class="row-side">
         <text class="amount">{{item.amount}}</text>
-        <text class="status">{{item.status}}</text>
+        <text class="status {{item.statusKey}}">{{item.status}}</text>
       </view>
     </view>
   </view>

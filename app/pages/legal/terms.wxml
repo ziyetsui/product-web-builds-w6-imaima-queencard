@@ -1,0 +1,34 @@
+<view class="page">
+  <view class="topbar">
+    <button class="icon-button" bindtap="goBack">‹</button>
+    <view class="brand">
+      <text class="brand-main">ima ima</text>
+      <text class="brand-accent">用户协议</text>
+    </view>
+    <view class="status-dot"></view>
+  </view>
+
+  <view class="legal-card">
+    <text class="kicker">TERMS</text>
+    <text class="title">用户协议</text>
+    <text class="updated">更新日期：2026年8月5日</text>
+
+    <text class="heading">一、服务内容</text>
+    <text class="paragraph">本小程序提供模板浏览、参考图上传、提示词编辑、AI 图像生成、结果保存、生成历史、积分和订单查询等功能。具体模型、生成速度、输出数量和可用功能以页面及服务端实际状态为准。</text>
+
+    <text class="heading">二、账号与积分</text>
+    <text class="paragraph">你应通过本人微信账号使用服务，并妥善保管登录设备。积分用于抵扣生成服务，不是现金，不得转让、倒卖或兑换现金。生成任务提交后，积分可能先进入冻结状态；任务成功、失败或取消时，服务端按照实际结果结算或释放。</text>
+
+    <text class="heading">三、内容责任</text>
+    <text class="paragraph">你应确保上传的参考图、输入的提示词和生成内容合法，并拥有必要的使用权。不得生成或传播违法、侵权、欺诈、骚扰、暴力、色情、误导性或侵犯他人隐私的内容。生成结果由模型自动产生，仅供创作参考，你应在发布前自行核验。</text>
+
+    <text class="heading">四、支付与退款</text>
+    <text class="paragraph">购买积分前请核对套餐、金额和账号。支付成功后，积分通常由服务端根据支付回调自动到账；重复通知不会重复发放。因支付失败、重复扣款、订单状态异常或依法应当退款的情形，请通过客服渠道提交订单号，我们会按支付渠道和相关规则处理。</text>
+
+    <text class="heading">五、服务中断与风控</text>
+    <text class="paragraph">因模型服务、网络、存储、支付渠道、系统维护或不可抗力导致的延迟和中断，我们会尽力恢复。为保护账号和服务安全，我们可能限制异常频率、危险内容、恶意调用或违反本协议的账号。</text>
+
+    <text class="heading">六、协议更新</text>
+    <text class="paragraph">我们可能根据服务变化和法律要求更新本协议。更新后会在本页面展示新的版本日期；继续使用服务即表示你接受更新后的协议。</text>
+  </view>
+</view>

@@ -1,0 +1,31 @@
+<view class="page">
+  <view class="topbar">
+    <button class="icon-button" bindtap="goBack">‹</button>
+    <view class="brand">
+      <text class="brand-main">ima ima</text>
+      <text class="brand-accent">隐私政策</text>
+    </view>
+    <view class="status-dot"></view>
+  </view>
+
+  <view class="legal-card">
+    <text class="kicker">PRIVACY</text>
+    <text class="title">隐私政策</text>
+    <text class="updated">更新日期：2026年8月5日</text>
+
+    <text class="heading">一、我们收集什么</text>
+    <text class="paragraph">为提供微信登录、账号管理、图文生成、积分扣减、订单支付和客服支持，我们可能处理微信登录标识、账号资料、昵称头像、上传的参考图片、生成提示词、生成任务状态、生成结果、积分流水和订单支付信息。</text>
+
+    <text class="heading">二、我们如何使用</text>
+    <text class="paragraph">上述信息仅用于身份识别、生成任务执行、结果展示与下载、积分和订单核对、安全风控、故障排查以及依法需要的服务记录。生成提示词和图片不会被用于公开展示，除非你主动分享。</text>
+
+    <text class="heading">三、存储与安全</text>
+    <text class="paragraph">登录凭证、数据库密码、模型服务密钥、微信支付密钥和商户证书只保存在服务端，不会打包进小程序。参考图和生成结果由服务端存储和处理，并通过权限校验和短期下载地址访问。</text>
+
+    <text class="heading">四、你的权利</text>
+    <text class="paragraph">你可以在账号页退出登录、修改昵称并查看积分、订单和生成历史。如需查询、更正或删除账号资料，或处理图片、订单和支付问题，请通过产品提供的客服渠道联系我们。</text>
+
+    <text class="heading">五、联系我们</text>
+    <text class="paragraph">如需隐私相关帮助，请在反馈时提供小程序账号标识、问题描述和必要的订单信息。请不要在公开反馈中提交密码、密钥或完整支付凭证。</text>
+  </view>
+</view>

@@ -9,6 +9,7 @@ RUN npm ci --omit=dev
 COPY src ./src
 COPY public ./public
 COPY template-data ./template-data
+COPY catalog ./catalog
 COPY migrations ./migrations
 
 ENV NODE_ENV=production

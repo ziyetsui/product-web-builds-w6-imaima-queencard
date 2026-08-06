@@ -5,3 +5,4 @@
 .env.*
 !.env.example
 !.env.zeabur.example
+/app/project.private.config.json

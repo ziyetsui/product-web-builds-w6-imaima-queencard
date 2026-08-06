@@ -96,6 +96,42 @@ test("runtime waits for application initialization before accepting traffic", as
   await runtime.shutdown();
 });
 
+test("runtime starts and reports its application worker in durable mode", async (t) => {
+  let starts = 0;
+  let stops = 0;
+  const worker = {
+    ready: true,
+    start() { starts += 1; },
+    stop() { stops += 1; },
+  };
+  const runtime = await createServer({
+    env: {
+      NODE_ENV: "test",
+      BUILD_SHA: "durable-worker-test",
+      PORT: "0",
+      MINIAPP_BACKEND_HOST: "127.0.0.1",
+      GENERATION_WORKER_MODE: "durable",
+    },
+    app: {
+      fetch: () => Response.json({ success: true }),
+      worker,
+    },
+    dependencies: { store: { ready: true } },
+    logger: quietLogger(),
+  });
+  t.after(() => runtime.shutdown());
+  await runtime.listen();
+
+  const response = await fetch(`${addressFor(runtime)}/health`);
+  const body = await response.json();
+
+  assert.equal(starts, 1);
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.data.dependencies.workers, { ready: true, mode: "durable" });
+  await runtime.shutdown();
+  assert.equal(stops, 1);
+});
+
 test("health returns 503 and dependency details while any runtime dependency is unready", async (t) => {
   const runtime = await createServer({
     env: { NODE_ENV: "test", PORT: "0", MINIAPP_BACKEND_HOST: "127.0.0.1" },

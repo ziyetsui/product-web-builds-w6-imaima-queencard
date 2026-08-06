@@ -6,6 +6,7 @@ const {
 const PRODUCTION_ENVIRONMENTS = new Set(["production", "prod"]);
 const PLACEHOLDER_BUILD_SHAS = new Set(["unknown", "replace-with-source-commit-sha"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
+const PAYMENT_PROVIDERS = new Set(["disabled", "wechat"]);
 
 function valueFor(env, keys, fallback = "") {
   for (const key of keys) {
@@ -38,6 +39,80 @@ function isHttpsUrl(value) {
     return url.protocol === "https:" && Boolean(url.hostname);
   } catch {
     return false;
+  }
+}
+
+function urlPathname(value) {
+  try {
+    return new URL(value).pathname;
+  } catch {
+    return "";
+  }
+}
+
+function validateWechatPaymentEnvironment(env, missing, invalid) {
+  const fields = [
+    ["WECHAT_PAY_MERCHANT_ID", ["WECHAT_PAY_MERCHANT_ID", "WECHAT_MCHID"]],
+    ["WECHAT_PAY_CERTIFICATE_SERIAL", ["WECHAT_PAY_CERTIFICATE_SERIAL"]],
+    ["WECHAT_PAY_API_V3_KEY", ["WECHAT_PAY_API_V3_KEY"]],
+    ["WECHAT_PAY_PRIVATE_KEY", ["WECHAT_PAY_PRIVATE_KEY"]],
+    ["WECHAT_PAY_NOTIFY_URL", ["WECHAT_PAY_NOTIFY_URL"]],
+    ["WECHAT_PAY_REFUND_NOTIFY_URL", ["WECHAT_PAY_REFUND_NOTIFY_URL"]],
+  ];
+  const values = new Map(fields.map(([canonicalKey, keys]) => [canonicalKey, valueFor(env, keys, "")]));
+
+  for (const [canonicalKey, value] of values) {
+    if (!value) addIssue(missing, canonicalKey);
+  }
+
+  const apiV3Key = values.get("WECHAT_PAY_API_V3_KEY");
+  if (apiV3Key && Buffer.byteLength(apiV3Key, "utf8") !== 32) {
+    addIssue(invalid, "WECHAT_PAY_API_V3_KEY");
+  }
+
+  const platformPublicKey = valueFor(env, ["WECHAT_PAY_PLATFORM_PUBLIC_KEY", "WECHAT_PAY_PUBLIC_KEY"], "");
+  const publicKeyId = valueFor(env, ["WECHAT_PAY_PUBLIC_KEY_ID", "WECHAT_PAY_PLATFORM_PUBLIC_KEY_ID"], "");
+  const platformCertificate = valueFor(
+    env,
+    ["WECHAT_PAY_PLATFORM_CERTIFICATE", "WECHAT_PAY_CERTIFICATE"],
+    "",
+  );
+  const platformCertificateSerial = valueFor(
+    env,
+    ["WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL", "WECHAT_PAY_PLATFORM_CERT_SERIAL"],
+    "",
+  );
+  if (platformCertificate && !platformCertificateSerial) {
+    addIssue(missing, "WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL");
+  }
+  const publicKeys = valueFor(env, ["WECHAT_PAY_PUBLIC_KEYS"], "");
+  if (publicKeys) {
+    try {
+      const parsed = JSON.parse(publicKeys);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+        || !Object.entries(parsed).some(([key, value]) => String(key).trim() && String(value || "").trim())) {
+        addIssue(invalid, "WECHAT_PAY_PUBLIC_KEYS");
+      }
+    } catch {
+      addIssue(invalid, "WECHAT_PAY_PUBLIC_KEYS");
+    }
+  }
+  if (!platformPublicKey && !platformCertificate && !publicKeys) {
+    addIssue(missing, "WECHAT_PAY_PLATFORM_PUBLIC_KEY");
+  } else if (platformPublicKey && !publicKeyId) {
+    addIssue(missing, "WECHAT_PAY_PUBLIC_KEY_ID");
+  }
+
+  const notifyUrl = values.get("WECHAT_PAY_NOTIFY_URL");
+  if (notifyUrl && !isHttpsUrl(notifyUrl)) addIssue(invalid, "WECHAT_PAY_NOTIFY_URL");
+  const refundNotifyUrl = values.get("WECHAT_PAY_REFUND_NOTIFY_URL");
+  if (refundNotifyUrl && !isHttpsUrl(refundNotifyUrl)) addIssue(invalid, "WECHAT_PAY_REFUND_NOTIFY_URL");
+  if (notifyUrl && refundNotifyUrl && urlPathname(notifyUrl) === urlPathname(refundNotifyUrl)) {
+    addIssue(invalid, "WECHAT_PAY_REFUND_NOTIFY_URL");
+  }
+  const requestTimeoutMs = Number(valueFor(env, ["WECHAT_PAY_REQUEST_TIMEOUT_MS"], "10000"));
+  if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 30000) {
+    addIssue(invalid, "WECHAT_PAY_REQUEST_TIMEOUT_MS");
   }
 }
 
@@ -127,7 +202,8 @@ function validateProductionEnvironment(env = process.env) {
   const paymentProvider = (config?.payment.provider
     || valueFor(env, ["PAYMENT_PROVIDER"], "disabled"))
     .toLowerCase();
-  if (paymentProvider !== "disabled") addIssue(invalid, "PAYMENT_PROVIDER");
+  if (!PAYMENT_PROVIDERS.has(paymentProvider)) addIssue(invalid, "PAYMENT_PROVIDER");
+  if (paymentProvider === "wechat") validateWechatPaymentEnvironment(env, missing, invalid);
 
   if (provider === "gptproto" && !valueFor(env, ["GPTPROTO_API_KEY"], "")) {
     addIssue(missing, "GPTPROTO_API_KEY");

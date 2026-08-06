@@ -33,6 +33,14 @@ function isProduction(environment) {
   return environment === "production" || environment === "prod";
 }
 
+function urlPathname(value) {
+  try {
+    return new URL(value).pathname;
+  } catch {
+    return "";
+  }
+}
+
 function requiredValue(env, keys, canonicalKey, missing) {
   const value = valueFor(env, keys, "");
   if (!value) missing.push(canonicalKey);
@@ -66,6 +74,9 @@ function isSecretKey(key) {
     || normalized.includes("token")
     || normalized.includes("password")
     || normalized.includes("privatekey")
+    || normalized.includes("publickey")
+    || normalized.includes("certificate")
+    || normalized.includes("notifyurl")
     || normalized.includes("accesskey")
     || normalized.endsWith("apikey")
     || normalized === "apiv3key"
@@ -176,15 +187,60 @@ function loadConfig(env = process.env) {
       ? legacyPaymentMode
       : "disabled",
   ).toLowerCase();
+  const merchantId = valueFor(env, ["WECHAT_PAY_MERCHANT_ID", "WECHAT_MCHID"], "");
+  const certificateSerial = valueFor(env, ["WECHAT_PAY_CERTIFICATE_SERIAL"], "");
+  const apiV3Key = valueFor(env, ["WECHAT_PAY_API_V3_KEY"], "");
+  const privateKey = valueFor(env, ["WECHAT_PAY_PRIVATE_KEY"], "");
+  const notifyUrl = valueFor(env, ["WECHAT_PAY_NOTIFY_URL"], "");
+  const refundNotifyUrl = valueFor(env, ["WECHAT_PAY_REFUND_NOTIFY_URL"], "");
+  const publicKeyId = valueFor(env, ["WECHAT_PAY_PUBLIC_KEY_ID", "WECHAT_PAY_PLATFORM_PUBLIC_KEY_ID"], "");
+  const platformCertificateSerial = valueFor(
+    env,
+    ["WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL", "WECHAT_PAY_PLATFORM_CERT_SERIAL"],
+    "",
+  );
+  const platformPublicKey = valueFor(env, ["WECHAT_PAY_PLATFORM_PUBLIC_KEY", "WECHAT_PAY_PUBLIC_KEY"], "");
+  const platformCertificate = valueFor(env, ["WECHAT_PAY_PLATFORM_CERTIFICATE", "WECHAT_PAY_CERTIFICATE"], "");
+  const publicKeys = valueFor(env, ["WECHAT_PAY_PUBLIC_KEYS"], "");
+  const paymentRequestTimeoutRaw = valueFor(env, ["WECHAT_PAY_REQUEST_TIMEOUT_MS"], "");
+  const parsedPaymentRequestTimeoutMs = paymentRequestTimeoutRaw ? Number(paymentRequestTimeoutRaw) : 10000;
+  const paymentRequestTimeoutValid = Number.isSafeInteger(parsedPaymentRequestTimeoutMs)
+    && parsedPaymentRequestTimeoutMs >= 1
+    && parsedPaymentRequestTimeoutMs <= 30000;
+  const paymentRequestTimeoutMs = paymentRequestTimeoutValid ? parsedPaymentRequestTimeoutMs : 10000;
+  if (!paymentRequestTimeoutValid) invalid.push("WECHAT_PAY_REQUEST_TIMEOUT_MS");
   if (production && legacyPaymentMode === "mock") invalid.push("MINIAPP_PAYMENT_MODE");
   if (production && paymentProvider === "mock") invalid.push("PAYMENT_PROVIDER");
   if (production && paymentProvider === "wechat") {
-    requiredValue(env, ["WECHAT_PAY_MERCHANT_ID", "WECHAT_MCHID"], "WECHAT_PAY_MERCHANT_ID", missing);
-    requiredValue(env, ["WECHAT_PAY_CERTIFICATE_SERIAL"], "WECHAT_PAY_CERTIFICATE_SERIAL", missing);
-    requiredValue(env, ["WECHAT_PAY_API_V3_KEY"], "WECHAT_PAY_API_V3_KEY", missing);
-    requiredValue(env, ["WECHAT_PAY_PRIVATE_KEY"], "WECHAT_PAY_PRIVATE_KEY", missing);
-    requiredValue(env, ["WECHAT_PAY_NOTIFY_URL"], "WECHAT_PAY_NOTIFY_URL", missing);
-    requiredValue(env, ["WECHAT_PAY_PLATFORM_PUBLIC_KEY", "WECHAT_PAY_PUBLIC_KEY"], "WECHAT_PAY_PLATFORM_PUBLIC_KEY", missing);
+    if (!merchantId) missing.push("WECHAT_PAY_MERCHANT_ID");
+    if (!certificateSerial) missing.push("WECHAT_PAY_CERTIFICATE_SERIAL");
+    if (!apiV3Key) missing.push("WECHAT_PAY_API_V3_KEY");
+    if (!privateKey) missing.push("WECHAT_PAY_PRIVATE_KEY");
+    if (!notifyUrl) missing.push("WECHAT_PAY_NOTIFY_URL");
+    if (!refundNotifyUrl) missing.push("WECHAT_PAY_REFUND_NOTIFY_URL");
+    if (notifyUrl && refundNotifyUrl && urlPathname(notifyUrl) === urlPathname(refundNotifyUrl)) {
+      invalid.push("WECHAT_PAY_REFUND_NOTIFY_URL");
+    }
+    if (!platformPublicKey && !platformCertificate && !publicKeys) {
+      missing.push("WECHAT_PAY_PLATFORM_PUBLIC_KEY");
+    }
+    if (platformCertificate && !platformCertificateSerial) {
+      missing.push("WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL");
+    }
+    if (platformPublicKey && !publicKeyId) {
+      missing.push("WECHAT_PAY_PUBLIC_KEY_ID");
+    }
+    if (publicKeys) {
+      try {
+        const parsed = JSON.parse(publicKeys);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+          || !Object.entries(parsed).some(([key, value]) => String(key).trim() && String(value || "").trim())) {
+          invalid.push("WECHAT_PAY_PUBLIC_KEYS");
+        }
+      } catch {
+        invalid.push("WECHAT_PAY_PUBLIC_KEYS");
+      }
+    }
   }
   const paymentMode = paymentProvider === "mock"
     ? "mock"
@@ -242,12 +298,18 @@ function loadConfig(env = process.env) {
     payment: {
       provider: paymentProvider,
       mode: paymentMode,
-      merchantId: valueFor(env, ["WECHAT_PAY_MERCHANT_ID", "WECHAT_MCHID"], ""),
-      certificateSerial: valueFor(env, ["WECHAT_PAY_CERTIFICATE_SERIAL"], ""),
-      apiV3Key: valueFor(env, ["WECHAT_PAY_API_V3_KEY"], ""),
-      privateKey: valueFor(env, ["WECHAT_PAY_PRIVATE_KEY"], ""),
-      notifyUrl: valueFor(env, ["WECHAT_PAY_NOTIFY_URL"], ""),
-      platformPublicKey: valueFor(env, ["WECHAT_PAY_PLATFORM_PUBLIC_KEY", "WECHAT_PAY_PUBLIC_KEY"], ""),
+      merchantId,
+      certificateSerial,
+      apiV3Key,
+      privateKey,
+      notifyUrl,
+      refundNotifyUrl,
+      publicKeyId,
+      platformCertificateSerial,
+      platformCertificate,
+      publicKeys,
+      platformPublicKey,
+      requestTimeoutMs: paymentRequestTimeoutMs,
     },
   };
 
@@ -294,7 +356,13 @@ function toRuntimeEnv(config, sourceEnv = {}) {
     WECHAT_PAY_API_V3_KEY: config.payment.apiV3Key,
     WECHAT_PAY_PRIVATE_KEY: config.payment.privateKey,
     WECHAT_PAY_NOTIFY_URL: config.payment.notifyUrl,
+    WECHAT_PAY_REFUND_NOTIFY_URL: config.payment.refundNotifyUrl,
+    WECHAT_PAY_PUBLIC_KEY_ID: config.payment.publicKeyId,
+    WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL: config.payment.platformCertificateSerial,
+    WECHAT_PAY_PLATFORM_CERTIFICATE: config.payment.platformCertificate,
+    WECHAT_PAY_PUBLIC_KEYS: config.payment.publicKeys,
     WECHAT_PAY_PLATFORM_PUBLIC_KEY: config.payment.platformPublicKey,
+    WECHAT_PAY_REQUEST_TIMEOUT_MS: String(config.payment.requestTimeoutMs),
   };
 }
 

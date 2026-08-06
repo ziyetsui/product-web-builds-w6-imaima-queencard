@@ -356,6 +356,15 @@ function rowToOrder(row) {
     fulfilledAt: iso(row.fulfilled_at),
     refundedAt: iso(row.refunded_at),
     canceledAt: iso(row.canceled_at),
+    refundStatus: row.refund_status || "none",
+    refundProviderId: row.refund_provider_id || "",
+    refundAmountCents: Number(row.refund_amount_cents || 0),
+    refundAcceptedAt: iso(row.refund_accepted_at),
+    refundCompletedAt: iso(row.refund_completed_at),
+    refundError: row.refund_error || "",
+    reconcileLeaseOwner: row.reconcile_lease_owner || "",
+    reconcileLeaseExpiresAt: iso(row.reconcile_lease_expires_at),
+    lastReconciledAt: iso(row.last_reconciled_at),
     adminNote: row.admin_note || "",
     metadata: parseJson(row.metadata, {}),
   };
@@ -1385,12 +1394,46 @@ function createPostgresStore(options = {}) {
     return { order: rowToOrder(result.rows[0]), canceled: true };
   }
 
-  async function refundOrder(orderId, input = {}) {
+  async function acceptRefund(orderId, input = {}) {
     return withTransaction(pool, async (client) => {
       const found = await client.query("SELECT * FROM miniapp_orders WHERE id = $1 FOR UPDATE", [orderId]);
       if (!found.rowCount) return null;
       const order = rowToOrder(found.rows[0]);
-      if (order.refundedAt) return { order, refunded: false, revokedCredits: 0 };
+      if (order.refundedAt || order.refundStatus === "succeeded") return { order, accepted: false };
+      if (["accepted", "processing"].includes(order.refundStatus)) return { order, accepted: false };
+      if (order.status !== "paid") throw err("Only paid orders can be refunded", 409);
+      const now = timestamp(clock);
+      const providerId = input.refundId || order.refundProviderId || "";
+      const metadata = { ...order.metadata, refund: { ...(order.metadata?.refund || {}), ...(input.metadata || {}), id: providerId, status: input.refundStatus || "accepted" } };
+      const result = await client.query(`
+        UPDATE miniapp_orders
+        SET payment_status = 'refund_pending', refund_status = $1, refund_provider_id = $2,
+            refund_amount_cents = $3, refund_accepted_at = COALESCE(refund_accepted_at, $4),
+            refund_error = '', metadata = $5, updated_at = $4
+        WHERE id = $6 RETURNING *
+      `, [input.refundStatus || "accepted", providerId, Number(input.refundAmountCents || order.amountCents), now, JSON.stringify(metadata), order.id]);
+      return { order: rowToOrder(result.rows[0]), accepted: true };
+    });
+  }
+
+  async function failRefund(orderId, input = {}) {
+    const now = timestamp(clock);
+    const current = await getOrder(orderId);
+    if (!current) return null;
+    const metadata = { ...current.metadata, refund: { ...(current.metadata?.refund || {}), ...(input.metadata || {}), status: "failed" } };
+    const result = await pool.query("UPDATE miniapp_orders SET payment_status = CASE WHEN payment_status = 'refund_pending' THEN 'fulfilled' ELSE payment_status END, refund_status = 'failed', refund_error = $1, metadata = $2, updated_at = $3 WHERE id = $4 AND refunded_at IS NULL RETURNING *", [input.error || "Refund failed", JSON.stringify(metadata), now, orderId]);
+    return result.rowCount ? { order: rowToOrder(result.rows[0]), failed: true } : { order: await getOrder(orderId), failed: false };
+  }
+
+  async function completeRefund(orderId, input = {}) {
+    return withTransaction(pool, async (client) => {
+      const found = await client.query("SELECT * FROM miniapp_orders WHERE id = $1 FOR UPDATE", [orderId]);
+      if (!found.rowCount) return null;
+      const order = rowToOrder(found.rows[0]);
+      if (order.refundedAt || order.refundStatus === "succeeded") return { order, refunded: false, completed: false, revokedCredits: 0 };
+      if (!input.allowUnaccepted && !input.verified && !["accepted", "processing"].includes(order.refundStatus)) {
+        throw err("Verified refund completion required", 409);
+      }
       const remainder = Math.max(0, order.creditsGranted - order.creditsRevoked);
       const now = timestamp(clock);
       const available = await client.query("SELECT COALESCE(SUM(remaining_credits), 0)::int AS credits FROM credit_packages WHERE user_id = $1 AND order_no = $2 AND status = 'ACTIVE'", [order.userId, order.id]);
@@ -1400,10 +1443,52 @@ function createPostgresStore(options = {}) {
         const allocations = await consumePackageCredits(client, order.userId, revoked, now, { orderNo: order.id, onlyOrder: true });
         await insertTransaction(client, { userId: order.userId, transType: "REFUND", credits: -revoked, balanceAfter: nextBalance, orderNo: order.id, reason: input.reason || `refund:${order.id}`, metadata: { allocations }, createdAt: now });
       }
-      await client.query("UPDATE miniapp_orders SET status = 'refunded', payment_status = 'refunded', refunded_at = $1, credits_revoked = credits_revoked + $2, admin_note = $3, updated_at = $1 WHERE id = $4", [now, revoked, input.reason || order.adminNote || "", order.id]);
+      await client.query("UPDATE miniapp_orders SET status = 'refunded', payment_status = 'refunded', refund_status = 'succeeded', refunded_at = $1, refund_completed_at = $1, refund_provider_id = COALESCE($2, refund_provider_id), refund_amount_cents = COALESCE($3, refund_amount_cents), refund_error = '', credits_revoked = credits_revoked + $4, admin_note = $5, updated_at = $1 WHERE id = $6", [now, input.refundId || null, Number(input.refundAmountCents || 0) || null, revoked, input.reason || order.adminNote || "", order.id]);
       const updated = await client.query("SELECT * FROM miniapp_orders WHERE id = $1", [order.id]);
-      return { order: rowToOrder(updated.rows[0]), refunded: true, revokedCredits: revoked };
+      return { order: rowToOrder(updated.rows[0]), refunded: true, completed: true, revokedCredits: revoked };
     });
+  }
+
+  async function refundOrder(orderId, input = {}) {
+    return completeRefund(orderId, { ...input, allowUnaccepted: true });
+  }
+
+  async function claimStaleOrders(workerId, input = {}) {
+    const now = input.now instanceof Date ? input.now : new Date(input.now || Date.now());
+    const nowIsoValue = now.toISOString();
+    const staleBefore = new Date(now.getTime() - Number(input.staleAfterMs || 300000)).toISOString();
+    const expires = new Date(now.getTime() + Number(input.leaseDurationMs || 60000)).toISOString();
+    const limit = Math.min(Math.max(Number(input.limit || 10), 1), 100);
+    return withTransaction(pool, async (client) => {
+      const claimSql = `
+        SELECT * FROM miniapp_orders
+        WHERE payment_mode = 'wechat'
+          AND ((status = 'pending' AND payment_status NOT IN ('fulfilled', 'canceled', 'refunded'))
+            OR refund_status IN ('accepted', 'processing'))
+          AND COALESCE(last_reconciled_at, updated_at) <= $1
+          AND (reconcile_lease_expires_at IS NULL OR reconcile_lease_expires_at <= $2)
+          ORDER BY created_at ASC, id ASC LIMIT $3 FOR UPDATE SKIP LOCKED
+      `;
+      let found;
+      try {
+        found = await client.query(claimSql, [staleBefore, nowIsoValue, limit]);
+      } catch (error) {
+        // pg-mem cannot execute SKIP LOCKED, but production PostgreSQL must use it.
+        if (!/skip locked|query planner|not supported/i.test(String(error.message || error))) throw error;
+        found = await client.query(claimSql.replace("FOR UPDATE SKIP LOCKED", "FOR UPDATE"), [staleBefore, nowIsoValue, limit]);
+      }
+      const claimed = [];
+      for (const row of found.rows) {
+        const updated = await client.query("UPDATE miniapp_orders SET reconcile_lease_owner = $1, reconcile_lease_expires_at = $2 WHERE id = $3 RETURNING *", [workerId, expires, row.id]);
+        if (updated.rowCount) claimed.push(rowToOrder(updated.rows[0]));
+      }
+      return claimed;
+    });
+  }
+
+  async function releaseOrderReconciliationLease(orderId, workerId, input = {}) {
+    const result = await pool.query("UPDATE miniapp_orders SET reconcile_lease_owner = NULL, reconcile_lease_expires_at = NULL, last_reconciled_at = COALESCE($1, last_reconciled_at) WHERE id = $2 AND reconcile_lease_owner = $3 RETURNING *", [input.reconciledAt || null, orderId, workerId]);
+    return rowToOrder(result.rows[0]);
   }
 
   async function recordPaymentFulfillment(input) {
@@ -1482,7 +1567,8 @@ function createPostgresStore(options = {}) {
     createAsset, createGeneratedAsset: createAsset, getAsset, getGeneratedAsset: getAsset, findOwnedAsset, findOwnedImageAsset, listAssets, listGeneratedAssets: listAssets, deleteAsset,
     createReferenceAsset, getReferenceAsset, listReferenceAssets, deleteReferenceAsset,
     createCatalogVersion, getCatalogVersion, getCatalogVersionState, getActiveCatalogVersion, activateCatalogVersion, importCatalogVersion, syncTemplates, listTemplates, getTemplate,
-    createOrder, getOrder, getOrderByIdempotencyKey, listOrders, listAllOrders, fulfillOrder, fulfillMockOrder, cancelOrder, refundOrder,
+    createOrder, getOrder, getOrderByIdempotencyKey, listOrders, listAllOrders, fulfillOrder, fulfillMockOrder, cancelOrder,
+    acceptRefund, completeRefund, failRefund, refundOrder, claimStaleOrders, releaseOrderReconciliationLease,
     recordPaymentFulfillment, fulfillPayment, getPaymentFulfillment, recordPaymentEvent, listPaymentAudit,
     recordAdminAudit, listAdminAudit,
     isReady: () => true,

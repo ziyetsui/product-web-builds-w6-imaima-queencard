@@ -325,8 +325,8 @@ async function createServer(options = {}) {
       });
     }
     trackResource(acquiredResources, app.worker);
-    if (config.generation.workerMode === "in-process" && typeof app.worker?.start === "function") app.worker.start();
     if (typeof app.initialize === "function") await app.initialize();
+    if (typeof app.worker?.start === "function") app.worker.start();
   } catch (error) {
     const cleanupErrors = await rollbackResources(acquiredResources);
     if (error && error.code === "RUNTIME_DEPENDENCY_MISSING" && cleanupErrors.length === 0) throw error;
@@ -338,10 +338,14 @@ async function createServer(options = {}) {
     runtimeError.code = "RUNTIME_INIT_FAILED";
     throw runtimeError;
   }
+  const healthDependencies = {
+    ...dependencies,
+    workers: dependencies.workers || dependencies.worker || app.worker,
+  };
   const server = http.createServer(createRequestHandler({
     app,
     config,
-    dependencies,
+    dependencies: healthDependencies,
     listenOptions,
     logger,
     sanitizeError,
@@ -384,7 +388,7 @@ async function createServer(options = {}) {
       }
       try {
         await stopResourceGroups([
-          [dependencies.workers, dependencies.worker].flatMap(asResourceList),
+          [dependencies.workers, dependencies.worker, app.worker].flatMap(asResourceList),
           app,
           options.app ? dependencies.store : null,
           dependencies.imageProvider,

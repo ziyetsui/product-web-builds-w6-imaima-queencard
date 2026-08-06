@@ -52,6 +52,8 @@ Page({
     payingProductId: "",
     error: "",
     notice: "",
+    paymentState: "",
+    paymentStateLabel: "",
   },
 
   onLoad: function () {
@@ -69,6 +71,8 @@ Page({
       loading: true,
       error: "",
       notice: "",
+      paymentState: "",
+      paymentStateLabel: "",
     });
 
     if (!api.isConfigured()) {
@@ -119,14 +123,18 @@ Page({
 
   completeOrder: function (order, message) {
     var page = this;
+    var status = billing.describeOrderStatus(order, "fulfilled");
     this.refreshCredits();
     this.setData({
       payingProductId: "",
-      notice: message || "订单已完成，积分正在同步。",
+      notice: message || status.message,
+      paymentState: status.state,
+      paymentStateLabel: status.label,
+      error: "",
     });
     wx.showModal({
-      title: "订单完成",
-      content: message || "订单已完成，积分会自动刷新。",
+      title: status.label,
+      content: message || status.message,
       confirmText: "查看订单",
       cancelText: "留在本页",
       success: function (res) {
@@ -142,22 +150,38 @@ Page({
     });
   },
 
-  waitForOrder: function (orderId, attempt) {
+  setPaymentState: function (state, message) {
+    var status = billing.describeOrderStatus({}, state);
+    this.setData({
+      payingProductId: "",
+      paymentState: status.state,
+      paymentStateLabel: status.label,
+      notice: message || status.message,
+      error: "",
+    });
+  },
+
+  waitForOrder: function (orderId, attempt, previousOrder) {
     var page = this;
     var currentAttempt = attempt || 0;
-    return billing.getOrder(orderId).then(function (latest) {
-      var paymentStatus = String(latest.paymentStatus || "").toLowerCase();
-      var status = String(latest.status || "").toLowerCase();
-      if (paymentStatus === "fulfilled" || status === "paid") return latest;
-      if (["failed", "canceled", "refunded"].indexOf(paymentStatus) >= 0 || ["failed", "canceled", "refunded"].indexOf(status) >= 0) {
-        throw new Error("订单状态为" + (latest.status || latest.paymentStatus));
+    return billing.reconcileOrder(orderId).then(function (result) {
+      var latest = result.order || previousOrder || {};
+      var payment = billing.describeOrderStatus(latest, "paid_syncing");
+      if (payment.state === "fulfilled") return latest;
+      if (["failed", "canceled", "refunded"].indexOf(payment.state) >= 0) {
+        var terminalError = new Error(payment.message);
+        terminalError.paymentState = payment.state;
+        throw terminalError;
       }
       if (currentAttempt >= 10) {
-        throw new Error("支付已提交，积分仍在同步，请稍后到订单页查看。");
+        var syncError = new Error(payment.message);
+        syncError.paymentState = "paid_syncing";
+        throw syncError;
       }
+      page.setPaymentState("paid_syncing", payment.message);
       return new Promise(function (resolve) {
         setTimeout(function () {
-          resolve(page.waitForOrder(orderId, currentAttempt + 1));
+          resolve(page.waitForOrder(orderId, currentAttempt + 1, latest));
         }, 1500);
       });
     });
@@ -165,6 +189,10 @@ Page({
 
   offerMockPay: function (order) {
     var page = this;
+    if (!billing.isMockPaymentAvailable(order)) {
+      this.setPaymentState("failed", "当前订单缺少可用支付参数，支付通道暂不可用，请稍后重试。");
+      return;
+    }
     wx.showModal({
       title: "开发支付完成",
       content: "后端没有返回 paymentParams。可调用 mock-pay 接口把这笔订单标记为已支付。",
@@ -172,10 +200,7 @@ Page({
       cancelText: "稍后处理",
       success: function (res) {
         if (!res.confirm) {
-          page.setData({
-            payingProductId: "",
-            notice: "订单已创建，可稍后在订单页继续处理。",
-          });
+          page.setPaymentState("pending", "订单已创建，可稍后在订单页继续处理。");
           return;
         }
         billing.mockPayOrder(order.id)
@@ -183,10 +208,7 @@ Page({
             page.completeOrder(result.order || order, "mock-pay 已完成，积分已刷新。");
           })
           .catch(function (error) {
-            page.setData({
-              payingProductId: "",
-              error: error.message || "mock-pay 失败",
-            });
+            page.setPaymentState("failed", "开发支付未完成，请稍后重试。");
           });
       },
     });
@@ -218,35 +240,40 @@ Page({
           throw new Error("后端没有返回订单 ID");
         }
         if (!result.paymentParams) {
+          if (!billing.isMockPaymentAvailable(order)) {
+            page.setPaymentState("failed", "当前订单缺少可用支付参数，支付通道暂不可用，请稍后重试。");
+            return;
+          }
           page.offerMockPay(order);
           return;
         }
         requestPayment(result.paymentParams)
           .then(function () {
+            page.setPaymentState("paid_syncing");
             page.waitForOrder(order.id)
               .then(function (latest) {
                 page.completeOrder(latest || order, "微信支付已完成，积分已刷新。");
               })
               .catch(function (error) {
-                page.setData({
-                  payingProductId: "",
-                  notice: error.message || "支付已提交，请稍后查看订单状态。",
-                  error: "",
-                });
+                var paymentState = error && error.paymentState || "paid_syncing";
+                var paymentMessage = error && error.paymentState
+                  ? error.message
+                  : billing.describeOrderStatus({}, "paid_syncing").message;
+                page.setPaymentState(paymentState, paymentMessage);
                 page.refreshCredits();
               });
           })
           .catch(function (error) {
-            page.setData({
-              payingProductId: "",
-              error: error.errMsg || error.message || "支付未完成",
-            });
+            var paymentError = billing.describePaymentError(error);
+            page.setPaymentState(paymentError.state, paymentError.message);
           });
       })
       .catch(function (error) {
         page.setData({
           payingProductId: "",
           error: error.message || "订单创建失败",
+          paymentState: "",
+          paymentStateLabel: "",
         });
       });
   },

@@ -21,7 +21,7 @@
   </view>
 
   <view wx:if="{{notice}}" class="notice-card">
-    <text class="notice-title">订单状态</text>
+    <text class="notice-title">{{paymentStateLabel || '订单状态'}}</text>
     <text class="notice-copy">{{notice}}</text>
   </view>
 

@@ -3,16 +3,16 @@
   "packOptions": {
     "ignore": [
       {
-        "type": "folder",
-        "value": "assets"
+        "value": "assets",
+        "type": "folder"
       },
       {
-        "type": "folder",
-        "value": "docs"
+        "value": "docs",
+        "type": "folder"
       },
       {
-        "type": "folder",
-        "value": "tools"
+        "value": "tools",
+        "type": "folder"
       }
     ],
     "include": []

@@ -15,6 +15,10 @@ const { createGenerationWorker } = require("./worker/generation-worker");
 const { createModelRegistry } = require("./services/model-registry");
 const { createPaymentProvider } = require("./payments");
 const { createRateLimiter } = require("./services/rate-limiter");
+const {
+  createPaymentReconciliationService,
+  createPaymentReconciliationWorker,
+} = require("./services/payment-reconciliation-service");
 const orderService = require("./services/order-service");
 const { fetchTemplateById, fetchTemplateList } = require("./templates");
 const { importCatalog, validateCatalog } = require("./services/catalog-service");
@@ -59,6 +63,16 @@ async function readJson(request) {
 
 function getEnv(env, key, fallback = "") {
   return env[key] || fallback;
+}
+
+function notificationPath(value, fallback) {
+  const configured = String(value || "").trim();
+  if (!configured) return fallback;
+  try {
+    return new URL(configured).pathname || fallback;
+  } catch {
+    return configured.startsWith("/") ? configured : fallback;
+  }
 }
 
 function bearerToken(request) {
@@ -112,7 +126,11 @@ async function requireAdmin(request, authService, env) {
   return { payload, user };
 }
 
-function appOrderId() {
+function appOrderId(idempotencySeed) {
+  if (idempotencySeed) {
+    const digest = crypto.createHash("sha256").update(String(idempotencySeed)).digest("hex");
+    return `ord_${digest.slice(0, 28)}`;
+  }
   return `ord_${Date.now().toString(36)}_${crypto.randomBytes(4).toString("hex")}`;
 }
 
@@ -390,6 +408,31 @@ function createApp(options = {}) {
     clock: options.clock,
     nonce: options.paymentNonce,
   });
+  const paymentNotifyPath = notificationPath(getEnv(env, "WECHAT_PAY_NOTIFY_URL"), "/api/miniapp/payments/wechat/notify");
+  const refundNotifyPath = notificationPath(getEnv(env, "WECHAT_PAY_REFUND_NOTIFY_URL"), "/api/miniapp/payments/wechat/refund-notify");
+  if (paymentProvider.mode === "wechat" && paymentNotifyPath === refundNotifyPath) {
+    const error = new Error("WeChat payment and refund notification paths must be different");
+    error.code = "PAYMENT_NOTIFY_PATH_CONFLICT";
+    error.status = 503;
+    throw error;
+  }
+  const paymentReconciliation = options.paymentReconciliationService || createPaymentReconciliationService({
+    store,
+    paymentProvider,
+    env,
+    clock: options.clock,
+  });
+  const paymentReconciliationWorker = options.paymentReconciliationWorker || createPaymentReconciliationWorker({
+    store,
+    paymentProvider,
+    service: paymentReconciliation,
+    env,
+    clock: options.clock,
+    leaseDurationMs: Number(getEnv(env, "MINIAPP_PAYMENT_RECONCILIATION_LEASE_MS", "60000")),
+    staleAfterMs: Number(getEnv(env, "MINIAPP_PAYMENT_RECONCILIATION_STALE_MS", "300000")),
+    batchSize: Number(getEnv(env, "MINIAPP_PAYMENT_RECONCILIATION_BATCH_SIZE", "10")),
+    pollIntervalMs: Number(getEnv(env, "MINIAPP_PAYMENT_RECONCILIATION_POLL_MS", "30000")),
+  });
   const imageProvider = options.imageProvider || createImageProvider({
     env,
     fetch: fetchImpl,
@@ -654,7 +697,20 @@ function createApp(options = {}) {
         return json({ success: true, data: null });
       }
 
-      if (path === "/api/miniapp/payments/wechat/notify" && request.method === "POST") {
+      if (path === refundNotifyPath && request.method === "POST") {
+        if (paymentProvider.mode !== "wechat" || typeof paymentProvider.parseNotification !== "function") {
+          return json({ code: "FAIL", message: "Refund notification endpoint is disabled" }, 503);
+        }
+        const rawBody = await request.text();
+        const transaction = paymentProvider.parseNotification({
+          headers: Object.fromEntries(request.headers.entries()),
+          body: rawBody,
+        });
+        const result = await paymentReconciliation.handleRefundNotification(transaction, { source: "refund-notify", actorId: "wechat-pay" });
+        return json({ code: "SUCCESS", message: "成功", data: { order: orderService.serializeOrder(result.order), refundStatus: result.refundStatus } });
+      }
+
+      if (path === paymentNotifyPath && request.method === "POST") {
         if (paymentProvider.mode !== "wechat" || typeof paymentProvider.parseNotification !== "function") {
           return json({ code: "FAIL", message: "Payment notification endpoint is disabled" }, 503);
         }
@@ -666,17 +722,8 @@ function createApp(options = {}) {
         if (transaction.trade_state !== "SUCCESS") {
           return json({ code: "SUCCESS", message: "非成功交易已忽略" });
         }
-        const appId = getEnv(env, "WECHAT_MINIAPP_APP_ID", getEnv(env, "WECHAT_APP_ID"));
-        const merchantId = getEnv(env, "WECHAT_PAY_MERCHANT_ID", getEnv(env, "WECHAT_MCHID"));
-        if ((transaction.appid && transaction.appid !== appId) || (transaction.mchid && transaction.mchid !== merchantId)) {
-          const error = new Error("WeChat payment identity does not match this application");
-          error.status = 400;
-          error.code = "PAYMENT_NOTIFICATION_IDENTITY_MISMATCH";
-          throw error;
-        }
         const orderId = String(transaction.out_trade_no || "").trim();
-        const transactionId = String(transaction.transaction_id || "").trim();
-        if (!orderId || !transactionId) {
+        if (!orderId) {
           const error = new Error("WeChat payment notification is missing order identity");
           error.status = 400;
           error.code = "PAYMENT_NOTIFICATION_INVALID";
@@ -689,54 +736,8 @@ function createApp(options = {}) {
           error.code = "PAYMENT_ORDER_NOT_FOUND";
           throw error;
         }
-        const total = Number(transaction.amount && transaction.amount.total);
-        if (!Number.isSafeInteger(total) || total !== Number(order.amountCents)) {
-          const error = new Error("WeChat payment amount does not match the order");
-          error.status = 400;
-          error.code = "PAYMENT_AMOUNT_MISMATCH";
-          throw error;
-        }
-        const fulfillmentKey = `wechat:${transactionId}`;
-        const existingFulfillment = store.getPaymentFulfillment
-          ? await store.getPaymentFulfillment(fulfillmentKey)
-          : null;
-        const fulfillment = await store.fulfillPayment({
-          fulfillmentKey,
-          orderId,
-          provider: "wechat",
-          eventId: transactionId,
-          eventType: "TRANSACTION.SUCCESS",
-          providerOrderId: orderId,
-          providerTransactionId: transactionId,
-          status: "FULFILLED",
-          paymentVerified: true,
-          paidAt: transaction.success_time || undefined,
-          metadata: {
-            paymentVerified: true,
-            tradeState: transaction.trade_state,
-            appid: transaction.appid || "",
-            mchid: transaction.mchid || "",
-          },
-        });
-        if (!existingFulfillment) {
-          await store.recordPaymentEvent({
-            orderId,
-            userId: order.userId,
-            type: "pay",
-            actorId: "wechat-pay",
-            message: "WeChat payment completed",
-            metadata: { transactionId, amountCents: total },
-          });
-          await store.recordPaymentEvent({
-            orderId,
-            userId: order.userId,
-            type: "fulfill",
-            actorId: "wechat-pay",
-            message: "Credits granted",
-            metadata: { credits: order.credits },
-          });
-        }
-        return json({ code: "SUCCESS", message: "成功", data: { fulfillmentId: fulfillment && fulfillment.id } });
+        const result = await paymentReconciliation.fulfillFromTransaction(order, transaction, { source: "notify", actorId: "wechat-pay" });
+        return json({ code: "SUCCESS", message: "成功", data: { fulfillmentId: result.fulfillment && result.fulfillment.id } });
       }
 
       if (path === "/api/miniapp/pricing" && request.method === "GET") {
@@ -827,7 +828,7 @@ function createApp(options = {}) {
           request.headers.get("idempotency-key") || body.idempotencyKey || body.orderId || "",
         ).trim() || undefined;
         const draft = {
-          id: appOrderId(),
+          id: appOrderId(idempotencyKey ? `${user.id}:${idempotencyKey}` : ""),
           userId: user.id,
           idempotencyKey,
           productId: product.id,
@@ -938,6 +939,18 @@ function createApp(options = {}) {
         return json({ success: true, data: { order: orderService.serializeOrder(result ? result.order : await store.getOrder(order.id)), idempotent: !(result && result.fulfilled) } });
       }
 
+      const reconcileOrderMatch = path.match(/^\/api\/miniapp\/orders\/([^/]+)\/reconcile$/);
+      if (reconcileOrderMatch && request.method === "POST") {
+        const { user } = await getCurrentUser(request, authService);
+        const limited = checkRateLimit("order", `user:${user.id}`);
+        if (limited) return limited;
+        const orderId = decodeURIComponent(reconcileOrderMatch[1]);
+        const order = await store.getOrder(orderId);
+        if (!order || order.userId !== user.id) return json({ success: false, error: "Order not found" }, 404);
+        const result = await paymentReconciliation.reconcileOrder(orderId, { source: "user", actorId: user.id });
+        return json({ success: true, data: { order: orderService.serializeOrder(result.order), reconciled: Boolean(result.reconciled), refundStatus: result.refundStatus || result.order.refundStatus || "none" } });
+      }
+
       const orderMatch = path.match(/^\/api\/miniapp\/orders\/([^/]+)$/);
       if (orderMatch && request.method === "GET") {
         const { user } = await getCurrentUser(request, authService);
@@ -1007,6 +1020,30 @@ function createApp(options = {}) {
         return json({ success: true, data: await store.listAllOrders(url.searchParams) });
       }
 
+      const adminReconcileMatch = path.match(/^\/api\/miniapp\/admin\/orders\/([^/]+)\/reconcile$/);
+      if (adminReconcileMatch && request.method === "POST") {
+        const admin = await requireAdmin(request, authService, env);
+        const limited = checkRateLimit("admin", `admin:${admin.user.id}`);
+        if (limited) return limited;
+        const orderId = decodeURIComponent(adminReconcileMatch[1]);
+        const before = await store.getOrder(orderId);
+        if (!before) return json({ success: false, error: "Order not found" }, 404);
+        const result = await paymentReconciliation.reconcileOrder(orderId, { source: "admin", actorId: admin.user.id });
+        await store.recordAdminAudit({
+          actorUserId: admin.user.id,
+          targetUserId: before.userId,
+          action: "PAYMENT_RECONCILE",
+          entityType: "order",
+          entityId: orderId,
+          reason: "admin payment reconciliation",
+          before,
+          after: result.order,
+          ipAddress: request.headers.get("x-forwarded-for") || "",
+          userAgent: request.headers.get("user-agent") || "",
+        });
+        return json({ success: true, data: { order: orderService.serializeOrder(result.order), reconciled: Boolean(result.reconciled), refundStatus: result.refundStatus || result.order.refundStatus || "none" } });
+      }
+
       const adminOrderActionMatch = path.match(/^\/api\/miniapp\/admin\/orders\/([^/]+)\/(refund|cancel)$/);
       if (adminOrderActionMatch && request.method === "POST") {
         const admin = await requireAdmin(request, authService, env);
@@ -1017,32 +1054,30 @@ function createApp(options = {}) {
         const body = await readJson(request);
         const reason = body.reason || `admin:${action}`;
         const currentOrder = action === "refund" ? await store.getOrder(orderId) : null;
+        let result;
         if (action === "refund" && currentOrder && currentOrder.paymentMode === "wechat" && !currentOrder.refundedAt) {
-          if (paymentProvider.mode !== "wechat" || typeof paymentProvider.refund !== "function") {
-            const error = new Error("WeChat refund provider is not configured");
-            error.status = 503;
-            error.code = "PAYMENT_PROVIDER_NOT_CONFIGURED";
-            throw error;
-          }
-          await paymentProvider.refund({
-            order: currentOrder,
-            providerTransactionId: currentOrder.externalPaymentId,
-            refundAmountCents: currentOrder.amountCents,
+          const requestedRefundAmount = body.refundAmountCents == null ? body.amountCents : body.refundAmountCents;
+          result = await paymentReconciliation.requestRefund(orderId, {
             reason,
+            actorId: admin.user.id,
+            ...(requestedRefundAmount == null ? {} : { refundAmountCents: requestedRefundAmount }),
           });
         }
-        const result = action === "refund"
+        if (!result) result = action === "refund"
           ? await store.refundOrder(orderId, { reason, revokeCredits: body.revokeCredits !== false })
           : await store.cancelOrder(orderId, { reason });
         if (!result) return json({ success: false, error: "Order not found" }, 404);
-        if ((action === "refund" && result.refunded) || (action === "cancel" && result.canceled)) {
+        const refundAuditAlreadyRecorded = action === "refund" && currentOrder?.paymentMode === "wechat";
+        if (!refundAuditAlreadyRecorded && ((action === "refund" && (result.refunded || result.accepted || result.completed)) || (action === "cancel" && result.canceled))) {
           await store.recordPaymentEvent({
             orderId,
             userId: result.order.userId,
-            type: action === "refund" ? "refund" : "fail",
+            type: action === "refund" ? (result.completed ? "refund" : "refund_accepted") : "fail",
             actorId: admin.user.id,
             message: reason,
-            metadata: action === "refund" ? { revokedCredits: result.revokedCredits } : { action: "cancel" },
+            metadata: action === "refund"
+              ? { revokedCredits: result.revokedCredits || 0, refundStatus: result.refundStatus || result.order.refundStatus || "succeeded" }
+              : { action: "cancel" },
           });
         }
         return json({ success: true, data: result });
@@ -1342,14 +1377,34 @@ function createApp(options = {}) {
     }
   }
 
+  let applicationWorkerStarted = false;
+  const applicationWorker = {
+    schedule: (...args) => generationWorker.schedule?.(...args),
+    runOnce: (...args) => generationWorker.runOnce?.(...args),
+    start() {
+      if (applicationWorkerStarted) return;
+      applicationWorkerStarted = true;
+      generationWorker.start?.();
+      paymentReconciliationWorker.start?.();
+    },
+    stop() {
+      if (!applicationWorkerStarted) return;
+      applicationWorkerStarted = false;
+      generationWorker.stop?.();
+      paymentReconciliationWorker.stop?.();
+    },
+  };
+
   return {
     fetch: handle,
     initialize,
-    worker: generationWorker,
+    worker: applicationWorker,
+    paymentReconciliation,
+    paymentReconciliationWorker,
     modelRegistry,
     assetService,
     close() {
-      generationWorker.stop();
+      applicationWorker.stop();
       if (store.close) return store.close();
     },
   };

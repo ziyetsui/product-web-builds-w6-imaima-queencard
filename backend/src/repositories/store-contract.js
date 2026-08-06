@@ -10,7 +10,8 @@ const STORE_METHODS = [
   "importCatalogVersion",
   "syncTemplates", "listTemplates", "getTemplate",
   "createOrder", "getOrder", "getOrderByIdempotencyKey", "listOrders", "listAllOrders",
-  "fulfillOrder", "fulfillMockOrder", "cancelOrder", "refundOrder", "recordPaymentFulfillment", "fulfillPayment",
+  "fulfillOrder", "fulfillMockOrder", "cancelOrder", "acceptRefund", "completeRefund", "failRefund", "refundOrder",
+  "claimStaleOrders", "releaseOrderReconciliationLease", "recordPaymentFulfillment", "fulfillPayment",
   "getPaymentFulfillment", "recordPaymentEvent", "listPaymentAudit",
   "recordAdminAudit", "listAdminAudit", "close",
 ];

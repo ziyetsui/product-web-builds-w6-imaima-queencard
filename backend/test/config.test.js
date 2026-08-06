@@ -182,6 +182,12 @@ test("redacts every configured secret field including the WeChat Pay API v3 key"
     payment: {
       apiV3Key: "api-v3-secret",
       privateKey: "private-key",
+      notifyUrl: "https://pay.example/notify",
+      refundNotifyUrl: "https://pay.example/refund-notify",
+      publicKeyId: "public-key-id",
+      platformCertificateSerial: "platform-certificate-serial",
+      platformCertificate: "platform-certificate",
+      publicKeys: '{"public-key-id":"platform-public-key"}',
     },
   });
 
@@ -194,6 +200,12 @@ test("redacts every configured secret field including the WeChat Pay API v3 key"
   assert.equal(redacted.generation.upstreamAuthToken, REDACTED_SECRET);
   assert.equal(redacted.payment.apiV3Key, REDACTED_SECRET);
   assert.equal(redacted.payment.privateKey, REDACTED_SECRET);
+  assert.equal(redacted.payment.notifyUrl, REDACTED_SECRET);
+  assert.equal(redacted.payment.refundNotifyUrl, REDACTED_SECRET);
+  assert.equal(redacted.payment.publicKeyId, REDACTED_SECRET);
+  assert.equal(redacted.payment.platformCertificateSerial, REDACTED_SECRET);
+  assert.equal(redacted.payment.platformCertificate, REDACTED_SECRET);
+  assert.equal(redacted.payment.publicKeys, REDACTED_SECRET);
 });
 
 test("propagates the configured WeChat login endpoint into the app runtime", () => {
@@ -217,6 +229,11 @@ test("propagates WeChat Pay v3 credentials into the app runtime", () => {
     WECHAT_PAY_API_V3_KEY: "12345678901234567890123456789012",
     WECHAT_PAY_PRIVATE_KEY: "private-key-test",
     WECHAT_PAY_NOTIFY_URL: "https://pay.example/notify",
+    WECHAT_PAY_REFUND_NOTIFY_URL: "https://pay.example/refund-notify",
+    WECHAT_PAY_PUBLIC_KEY_ID: "public-key-id-test",
+    WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL: "platform-certificate-serial-test",
+    WECHAT_PAY_PLATFORM_CERTIFICATE: "platform-certificate-test",
+    WECHAT_PAY_PUBLIC_KEYS: '{"public-key-id-test":"platform-public-key-test"}',
     WECHAT_PAY_PLATFORM_PUBLIC_KEY: "public-key-test",
   });
   const runtimeEnv = toRuntimeEnv(config);
@@ -227,5 +244,106 @@ test("propagates WeChat Pay v3 credentials into the app runtime", () => {
   assert.equal(runtimeEnv.WECHAT_PAY_API_V3_KEY, "12345678901234567890123456789012");
   assert.equal(runtimeEnv.WECHAT_PAY_PRIVATE_KEY, "private-key-test");
   assert.equal(runtimeEnv.WECHAT_PAY_NOTIFY_URL, "https://pay.example/notify");
+  assert.equal(runtimeEnv.WECHAT_PAY_REFUND_NOTIFY_URL, "https://pay.example/refund-notify");
+  assert.equal(runtimeEnv.WECHAT_PAY_PUBLIC_KEY_ID, "public-key-id-test");
+  assert.equal(runtimeEnv.WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL, "platform-certificate-serial-test");
+  assert.equal(runtimeEnv.WECHAT_PAY_PLATFORM_CERTIFICATE, "platform-certificate-test");
+  assert.equal(runtimeEnv.WECHAT_PAY_PUBLIC_KEYS, '{"public-key-id-test":"platform-public-key-test"}');
   assert.equal(runtimeEnv.WECHAT_PAY_PLATFORM_PUBLIC_KEY, "public-key-test");
+});
+
+test("requires the direct-merchant refund and verification settings in production", () => {
+  const complete = productionEnv({
+    PAYMENT_PROVIDER: "wechat",
+    WECHAT_PAY_MERCHANT_ID: "merchant-test",
+    WECHAT_PAY_CERTIFICATE_SERIAL: "merchant-certificate-serial-test",
+    WECHAT_PAY_API_V3_KEY: "12345678901234567890123456789012",
+    WECHAT_PAY_PRIVATE_KEY: "private-key-test",
+    WECHAT_PAY_NOTIFY_URL: "https://pay.example/notify",
+    WECHAT_PAY_REFUND_NOTIFY_URL: "https://pay.example/refund-notify",
+    WECHAT_PAY_PUBLIC_KEY_ID: "public-key-id-test",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "public-key-test",
+  });
+  const config = loadConfig(complete);
+
+  assert.equal(config.payment.refundNotifyUrl, "https://pay.example/refund-notify");
+  assert.equal(config.payment.publicKeyId, "public-key-id-test");
+
+  for (const key of ["WECHAT_PAY_REFUND_NOTIFY_URL", "WECHAT_PAY_PUBLIC_KEY_ID"]) {
+    assert.throws(() => loadConfig({ ...complete, [key]: "" }), new RegExp(key));
+  }
+});
+
+test("rejects payment and refund notification URLs that resolve to the same route", () => {
+  assert.throws(() => loadConfig(productionEnv({
+    PAYMENT_PROVIDER: "wechat",
+    WECHAT_PAY_MERCHANT_ID: "merchant-test",
+    WECHAT_PAY_CERTIFICATE_SERIAL: "merchant-certificate-serial-test",
+    WECHAT_PAY_API_V3_KEY: "12345678901234567890123456789012",
+    WECHAT_PAY_PRIVATE_KEY: "private-key-test",
+    WECHAT_PAY_NOTIFY_URL: "https://pay.example/hooks/wechat",
+    WECHAT_PAY_REFUND_NOTIFY_URL: "https://refund.example/hooks/wechat",
+    WECHAT_PAY_PUBLIC_KEY_ID: "public-key-id-test",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "public-key-test",
+  })), /WECHAT_PAY_REFUND_NOTIFY_URL/);
+});
+
+test("rejects invalid WeChat Pay request timeout values", () => {
+  const complete = productionEnv({
+    PAYMENT_PROVIDER: "wechat",
+    WECHAT_PAY_MERCHANT_ID: "merchant-test",
+    WECHAT_PAY_CERTIFICATE_SERIAL: "merchant-certificate-serial-test",
+    WECHAT_PAY_API_V3_KEY: "12345678901234567890123456789012",
+    WECHAT_PAY_PRIVATE_KEY: "private-key-test",
+    WECHAT_PAY_NOTIFY_URL: "https://pay.example/notify",
+    WECHAT_PAY_REFUND_NOTIFY_URL: "https://pay.example/refund-notify",
+    WECHAT_PAY_PUBLIC_KEY_ID: "public-key-id-test",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "public-key-test",
+  });
+
+  for (const value of ["invalid", "0", "30001"]) {
+    assert.throws(
+      () => loadConfig({ ...complete, WECHAT_PAY_REQUEST_TIMEOUT_MS: value }),
+      /WECHAT_PAY_REQUEST_TIMEOUT_MS/,
+    );
+  }
+});
+
+test("accepts platform certificate verification settings without a public key id", () => {
+  const config = loadConfig(productionEnv({
+    PAYMENT_PROVIDER: "wechat",
+    WECHAT_PAY_MERCHANT_ID: "merchant-test",
+    WECHAT_PAY_CERTIFICATE_SERIAL: "merchant-certificate-serial-test",
+    WECHAT_PAY_API_V3_KEY: "12345678901234567890123456789012",
+    WECHAT_PAY_PRIVATE_KEY: "private-key-test",
+    WECHAT_PAY_NOTIFY_URL: "https://pay.example/notify",
+    WECHAT_PAY_REFUND_NOTIFY_URL: "https://pay.example/refund-notify",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "",
+    WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL: "platform-certificate-serial-test",
+    WECHAT_PAY_PLATFORM_CERTIFICATE: "platform-certificate-test",
+  }));
+
+  assert.equal(config.payment.publicKeyId, "");
+  assert.equal(config.payment.platformCertificateSerial, "platform-certificate-serial-test");
+});
+
+test("accepts configured public key maps without a single public key id", () => {
+  const env = productionEnv({
+    PAYMENT_PROVIDER: "wechat",
+    WECHAT_PAY_MERCHANT_ID: "merchant-test",
+    WECHAT_PAY_CERTIFICATE_SERIAL: "merchant-certificate-serial-test",
+    WECHAT_PAY_API_V3_KEY: "12345678901234567890123456789012",
+    WECHAT_PAY_PRIVATE_KEY: "private-key-test",
+    WECHAT_PAY_NOTIFY_URL: "https://pay.example/notify",
+    WECHAT_PAY_REFUND_NOTIFY_URL: "https://pay.example/refund-notify",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "",
+    WECHAT_PAY_PUBLIC_KEYS: '{"public-key-id-test":"public-key-test"}',
+    WECHAT_PAY_PUBLIC_KEY_ID: "",
+    WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL: "platform-certificate-serial-test",
+  });
+
+  const config = loadConfig(env);
+
+  assert.equal(config.payment.publicKeyId, "");
+  assert.equal(config.payment.publicKeys, '{"public-key-id-test":"public-key-test"}');
 });

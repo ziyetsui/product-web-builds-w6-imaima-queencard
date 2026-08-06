@@ -25,6 +25,111 @@ function formatMoney(value, currency) {
   return amount + " " + unit;
 }
 
+var PAYMENT_STATE_COPY = {
+  pending: {
+    label: "待支付",
+    message: "订单已创建，请完成支付。",
+  },
+  user_canceled: {
+    label: "已取消支付",
+    message: "你已取消本次支付，订单仍待支付。",
+  },
+  paid_syncing: {
+    label: "支付已提交",
+    message: "支付已提交，积分正在同步，请稍后查看订单。",
+  },
+  refund_pending: {
+    label: "退款处理中",
+    message: "退款申请已提交，结果正在同步，请稍后查看订单。",
+  },
+  refunding: {
+    label: "退款处理中",
+    message: "退款申请已提交，结果正在同步，请稍后查看订单。",
+  },
+  fulfilled: {
+    label: "已完成",
+    message: "支付已完成，积分已到账。",
+  },
+  failed: {
+    label: "支付失败",
+    message: "支付未完成，请稍后重试。",
+  },
+  canceled: {
+    label: "订单已取消",
+    message: "订单已取消，未发放积分。",
+  },
+  refunded: {
+    label: "已退款",
+    message: "订单已退款，相关积分已撤回。",
+  },
+};
+
+function lower(value) {
+  return String(value || "").toLowerCase();
+}
+
+function getMiniProgramEnvVersion() {
+  if (typeof wx === "undefined" || typeof wx.getAccountInfoSync !== "function") return "";
+  try {
+    var account = wx.getAccountInfoSync();
+    return account && account.miniProgram && account.miniProgram.envVersion || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function isProductionEnvironment(envVersion) {
+  return lower(envVersion) === "release";
+}
+
+function isMockPaymentAvailable(order, envVersion) {
+  var version = envVersion === undefined ? getMiniProgramEnvVersion() : envVersion;
+  return Boolean(order && order.paymentMode === "mock") && !isProductionEnvironment(version);
+}
+
+function describeOrderStatus(order, fallbackState) {
+  var item = order || {};
+  var status = lower(item.status);
+  var paymentStatus = lower(item.paymentStatus);
+  var state = "";
+
+  if (status === "refunded" || paymentStatus === "refunded") state = "refunded";
+  else if (status === "refund_pending" || paymentStatus === "refund_pending") state = "refund_pending";
+  else if (status === "refunding" || paymentStatus === "refunding") state = "refunding";
+  else if (status === "canceled" || status === "cancelled" || paymentStatus === "canceled" || paymentStatus === "cancelled") state = "canceled";
+  else if (status === "failed" || paymentStatus === "failed") state = "failed";
+  else if (
+    status === "paid" && (paymentStatus === "fulfilled" || Number(item.creditsGranted || 0) > 0 || item.fulfilledAt)
+    || status === "fulfilled"
+    || ["fulfilled", "succeeded", "success", "completed"].indexOf(paymentStatus) >= 0
+  ) state = "fulfilled";
+  else if (fallbackState && PAYMENT_STATE_COPY[fallbackState]) state = fallbackState;
+  else if (status === "paid" || ["paid", "processing", "reconciling", "syncing"].indexOf(paymentStatus) >= 0) state = "paid_syncing";
+  else state = "pending";
+
+  return {
+    state: state,
+    label: PAYMENT_STATE_COPY[state].label,
+    message: PAYMENT_STATE_COPY[state].message,
+  };
+}
+
+function describePaymentError(error) {
+  var message = lower(error && (error.errMsg || error.message));
+  if (message.indexOf("cancel") >= 0 || message.indexOf("取消") >= 0) {
+    return {
+      state: "user_canceled",
+      label: PAYMENT_STATE_COPY.user_canceled.label,
+      message: PAYMENT_STATE_COPY.user_canceled.message,
+    };
+  }
+  return {
+    state: "failed",
+    label: PAYMENT_STATE_COPY.failed.label,
+    message: PAYMENT_STATE_COPY.failed.message,
+  };
+}
+
 function normalizeProduct(raw, index) {
   var item = raw || {};
   var amount = item.price !== undefined ? item.price : item.amount;
@@ -69,13 +174,14 @@ function normalizeProducts(payload) {
 function normalizeOrder(raw) {
   var item = raw || {};
   var product = item.product || {};
+  var productSnapshot = item.productSnapshot || item.product_snapshot || {};
   var amount = item.amount || item.totalAmount || item.price;
   var cents = item.amountCents !== undefined ? item.amountCents : item.amount_cents;
   if (amount === undefined && cents !== undefined) amount = Number(cents || 0) / 100;
   return {
     id: item.id || item.orderId || item.orderNo || "",
     productId: item.productId || item.product_id || product.id || "",
-    productName: item.productName || item.product_name || product.name || "积分订单",
+    productName: item.productName || item.product_name || productSnapshot.name || productSnapshot.title || product.name || product.title || "积分订单",
     amountLabel: item.amountLabel || item.priceLabel || formatMoney(amount, item.currency),
     amountCents: Number(cents || 0),
     currency: item.currency || "CNY",
@@ -87,6 +193,10 @@ function normalizeOrder(raw) {
     channel: item.channel || item.paymentChannel || "wechat",
     createdAt: item.createdAt || item.created_at || "",
     paidAt: item.paidAt || item.paid_at || "",
+    fulfilledAt: item.fulfilledAt || item.fulfilled_at || null,
+    refundedAt: item.refundedAt || item.refunded_at || null,
+    canceledAt: item.canceledAt || item.canceled_at || null,
+    creditsRevoked: Number(item.creditsRevoked !== undefined ? item.creditsRevoked : item.credits_revoked || 0),
     productSnapshot: item.productSnapshot || item.product_snapshot || null,
     raw: item,
   };
@@ -141,6 +251,13 @@ function createOrder(productId, channel) {
   return api.createOrder(productId, channel || "wechat").then(normalizeOrderResult);
 }
 
+function reconcileOrder(orderId) {
+  return api.request({
+    path: "/orders/" + encodeURIComponent(orderId || "") + "/reconcile",
+    method: "POST",
+  }).then(normalizeOrderResult);
+}
+
 function mockPayOrder(orderId) {
   return api.mockPayOrder(orderId).then(normalizeOrderResult);
 }
@@ -166,8 +283,13 @@ module.exports = {
   listOrders: listOrders,
   getOrder: getOrder,
   getBilling: getBilling,
+  reconcileOrder: reconcileOrder,
   normalizeProducts: normalizeProducts,
   normalizeOrderResult: normalizeOrderResult,
   normalizeBillingList: normalizeBillingList,
   normalizeBillingRow: normalizeBillingRow,
+  describeOrderStatus: describeOrderStatus,
+  describePaymentError: describePaymentError,
+  isMockPaymentAvailable: isMockPaymentAvailable,
+  isProductionEnvironment: isProductionEnvironment,
 };

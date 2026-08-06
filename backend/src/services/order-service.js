@@ -46,6 +46,9 @@ function serializeOrder(order) {
     fulfilledAt: order.fulfilledAt || null,
     refundedAt: order.refundedAt || null,
     canceledAt: order.canceledAt || null,
+    refundStatus: order.refundStatus || "none",
+    refundAcceptedAt: order.refundAcceptedAt || null,
+    refundCompletedAt: order.refundCompletedAt || null,
   };
 }
 

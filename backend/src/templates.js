@@ -140,6 +140,15 @@ function normalizeGithubCase(record, assetBaseUrl, caseMetrics) {
     tags: Array.isArray(record.topics) ? record.topics : [],
     prompt,
     useCase: record.category || "小红书模板",
+    metadata: {
+      sourceTitle: record.sourceTitle || record.title || "",
+      authorUrl: record.authorUrl || "",
+      patternId: record.patternId || "",
+      suggestedPatternValues: record.suggestedPatternValues || null,
+      likesText: record.likesText || "",
+      savesText: record.savesText || "",
+      sharesText: record.sharesText || "",
+    },
     metrics: {
       likes: record.likes || 0,
       saves: record.saves || 0,

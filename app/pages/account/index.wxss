@@ -223,3 +223,18 @@
   font-weight: 900;
   text-align: center;
 }
+
+.legal-links {
+  display: flex;
+  justify-content: center;
+  gap: 28rpx;
+  margin-top: 30rpx;
+}
+
+.legal-link {
+  padding: 8rpx 4rpx;
+  color: rgba(13, 13, 13, 0.6);
+  font-size: 22rpx;
+  font-weight: 800;
+  text-decoration: underline;
+}

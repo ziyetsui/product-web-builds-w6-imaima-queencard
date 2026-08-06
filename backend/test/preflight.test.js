@@ -30,6 +30,21 @@ function productionEnvironment(overrides = {}) {
   };
 }
 
+function paymentEnabledEnvironment(overrides = {}) {
+  return productionEnvironment({
+    PAYMENT_PROVIDER: "wechat",
+    WECHAT_PAY_MERCHANT_ID: "merchant-test",
+    WECHAT_PAY_CERTIFICATE_SERIAL: "certificate-serial-test",
+    WECHAT_PAY_API_V3_KEY: "12345678901234567890123456789012",
+    WECHAT_PAY_PRIVATE_KEY: "private-key-placeholder",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "public-key-placeholder",
+    WECHAT_PAY_PUBLIC_KEY_ID: "public-key-id-test",
+    WECHAT_PAY_NOTIFY_URL: "https://miniapp.example/api/miniapp/payments/wechat/notify",
+    WECHAT_PAY_REFUND_NOTIFY_URL: "https://miniapp.example/api/miniapp/payments/wechat/refund-notify",
+    ...overrides,
+  });
+}
+
 function runPreflight(env) {
   return spawnSync(
     process.platform === "win32" ? "npm.cmd" : "npm",
@@ -48,6 +63,110 @@ test("accepts a payment-disabled GPTProto internal-test environment", () => {
   assert.equal(result.ok, true);
   assert.deepEqual(result.missing, []);
   assert.deepEqual(result.invalid, []);
+});
+
+test("accepts a complete payment-enabled direct-merchant production environment", () => {
+  const result = validateProductionEnvironment(paymentEnabledEnvironment());
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.invalid, []);
+  assert.equal(result.config.payment.provider, "wechat");
+});
+
+test("rejects invalid direct-merchant payment fields", () => {
+  const result = validateProductionEnvironment(paymentEnabledEnvironment({
+    WECHAT_PAY_API_V3_KEY: "short",
+    WECHAT_PAY_NOTIFY_URL: "http://miniapp.example/notify",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "",
+  }));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.missing, ["WECHAT_PAY_PLATFORM_PUBLIC_KEY"]);
+  assert.deepEqual(result.invalid, ["WECHAT_PAY_API_V3_KEY", "WECHAT_PAY_NOTIFY_URL"]);
+});
+
+test("requires a separate public key id for platform public key verification", () => {
+  const result = validateProductionEnvironment(paymentEnabledEnvironment({
+    WECHAT_PAY_PUBLIC_KEY_ID: "",
+  }));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.missing, ["WECHAT_PAY_PUBLIC_KEY_ID"]);
+});
+
+test("accepts public key map verification without a single public key id", () => {
+  const result = validateProductionEnvironment(paymentEnabledEnvironment({
+    WECHAT_PAY_PUBLIC_KEY_ID: "",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "",
+    WECHAT_PAY_PUBLIC_KEYS: '{"public-key-id-test":"public-key-placeholder"}',
+    WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL: "platform-certificate-serial-test",
+  }));
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.invalid, []);
+});
+
+test("accepts explicit platform certificate serial compatibility when public key id is absent", () => {
+  const result = validateProductionEnvironment(paymentEnabledEnvironment({
+    WECHAT_PAY_PUBLIC_KEY_ID: "",
+    WECHAT_PAY_PLATFORM_PUBLIC_KEY: "",
+    WECHAT_PAY_PLATFORM_CERTIFICATE: "certificate-placeholder",
+    WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL: "platform-certificate-serial-test",
+  }));
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.invalid, []);
+});
+
+test("requires a certificate serial when platform certificate verification material is configured", () => {
+  const result = validateProductionEnvironment(paymentEnabledEnvironment({
+    WECHAT_PAY_PLATFORM_CERTIFICATE: "certificate-placeholder",
+    WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL: "",
+  }));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.missing, ["WECHAT_PAY_PLATFORM_CERTIFICATE_SERIAL"]);
+});
+
+test("requires a separate HTTPS refund notification URL", () => {
+  const result = validateProductionEnvironment(paymentEnabledEnvironment({
+    WECHAT_PAY_REFUND_NOTIFY_URL: "http://miniapp.example/refund-notify",
+  }));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.invalid, ["WECHAT_PAY_REFUND_NOTIFY_URL"]);
+});
+
+test("rejects payment and refund notification URLs with the same pathname", () => {
+  const result = validateProductionEnvironment(paymentEnabledEnvironment({
+    WECHAT_PAY_NOTIFY_URL: "https://miniapp.example/hooks/wechat",
+    WECHAT_PAY_REFUND_NOTIFY_URL: "https://refund.example/hooks/wechat",
+  }));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.invalid, ["WECHAT_PAY_REFUND_NOTIFY_URL"]);
+});
+
+test("requires every direct-merchant payment field", () => {
+  const fields = [
+    "WECHAT_PAY_MERCHANT_ID",
+    "WECHAT_PAY_CERTIFICATE_SERIAL",
+    "WECHAT_PAY_API_V3_KEY",
+    "WECHAT_PAY_PRIVATE_KEY",
+    "WECHAT_PAY_PLATFORM_PUBLIC_KEY",
+    "WECHAT_PAY_NOTIFY_URL",
+    "WECHAT_PAY_REFUND_NOTIFY_URL",
+  ];
+
+  for (const field of fields) {
+    const result = validateProductionEnvironment(paymentEnabledEnvironment({ [field]: "" }));
+
+    assert.equal(result.ok, false, field);
+    assert.deepEqual(result.missing, [field], field);
+  }
 });
 
 test("rejects development login, mock payment, preview generation, and placeholder SHA", () => {

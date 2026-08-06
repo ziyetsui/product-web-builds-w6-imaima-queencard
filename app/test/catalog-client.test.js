@@ -88,6 +88,15 @@ test("template client keeps normalized server catalog fields", async () => {
           thumbnailUrl: "https://cdn.example.com/cover.jpg",
           referenceImages: ["https://cdn.example.com/cover.jpg"],
           previewImages: ["https://cdn.example.com/cover.jpg"],
+          metadata: {
+            sourceTitle: "服务端标题",
+            authorUrl: "https://example.com/author",
+            patternId: "library-meme-series",
+            suggestedPatternValues: { topic: "AI 日常" },
+            likesText: "1w",
+            savesText: "2k",
+            sharesText: "300",
+          },
         }],
         pagination: { page: 1, total: 1, totalPages: 1 },
       } },
@@ -96,6 +105,8 @@ test("template client keeps normalized server catalog fields", async () => {
     assert.equal(result.records[0].title, "服务端标题");
     assert.equal(result.records[0].thumbnailUrl, "https://cdn.example.com/cover.jpg");
     assert.equal(result.records[0].category, "梗图");
+    assert.equal(result.records[0].metadata.patternId, "library-meme-series");
+    assert.equal(result.records[0].metadata.suggestedPatternValues.topic, "AI 日常");
   } finally {
     unload();
   }
@@ -115,6 +126,38 @@ test("public fallback retains and aborts its wx.request task", { concurrency: fa
     assert.equal(harness.requests[0].aborted, true);
     harness.requests[0].fail({ errMsg: "request:fail abort" });
     await assert.rejects(pending, (error) => error && error.stale === true);
+  } finally {
+    env.API_BASE_URL = originalApiBaseUrl;
+    env.TEMPLATE_API_BASE_URL = originalTemplateApiBaseUrl;
+    unload();
+  }
+});
+
+test("legacy public records expose preview images for fixed prompt blocks", { concurrency: false }, async () => {
+  const originalApiBaseUrl = env.API_BASE_URL;
+  const originalTemplateApiBaseUrl = env.TEMPLATE_API_BASE_URL;
+  env.API_BASE_URL = "";
+  env.TEMPLATE_API_BASE_URL = "https://templates.example.com";
+  const harness = createWxHarness();
+  try {
+    const service = require(servicePath);
+    const pending = service.listTemplates({ page: 1 });
+    harness.requests[0].success({
+      statusCode: 200,
+      data: { success: true, data: {
+        catalogVersion: "catalog-legacy",
+        records: [{
+          id: "legacy-record",
+          name: "旧格式模板",
+          work_url: "https://cdn.example.com/legacy.jpg",
+          condition_prompt: "生成一组新的【搞笑漫画】主题",
+        }],
+        pagination: { page: 1, total: 1, totalPages: 1 },
+      } },
+    });
+    const result = await pending;
+    assert.deepEqual(result.records[0].previewImages, ["https://cdn.example.com/legacy.jpg"]);
+    assert.deepEqual(result.records[0].referenceImages, ["https://cdn.example.com/legacy.jpg"]);
   } finally {
     env.API_BASE_URL = originalApiBaseUrl;
     env.TEMPLATE_API_BASE_URL = originalTemplateApiBaseUrl;

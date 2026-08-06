@@ -40,6 +40,7 @@ const SEED_STRING_FIELDS = ["templateId", "prompt", "sourceCaseId", "sourceCaseC
 const SEED_FIELDS = [...SEED_STRING_FIELDS, "referenceImages"];
 const PRICING_PRODUCT_STRING_FIELDS = ["id", "type", "title", "currency"];
 const DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const PAYMENT_PROFILES = new Set(["payment-disabled", "payment-enabled"]);
 
 function makeCheck(name, ok, status, detail) {
   return { name, ok, status, detail };
@@ -230,7 +231,14 @@ function checkAuth(name, result) {
   return makeCheck(name, false, result.status, "missing bearer token did not return HTTP 401");
 }
 
-function checkPricing(name, result) {
+function normalizePaymentProfile(value) {
+  const profile = String(value || "payment-disabled").trim().toLowerCase();
+  if (profile === "disabled") return "payment-disabled";
+  if (profile === "enabled" || profile === "wechat") return "payment-enabled";
+  return profile;
+}
+
+function checkPricing(name, result, profile) {
   if (result.body?.success !== true) return makeCheck(name, false, result.status, "pricing response was not successful");
   const data = result.body.data;
   const payment = data?.payment;
@@ -246,11 +254,23 @@ function checkPricing(name, result) {
   if (!isObject(payment) || !hasNonEmptyString(payment.mode)) {
     return makeCheck(name, false, result.status, "pricing payment contract is incomplete");
   }
+  if (profile === "payment-enabled") {
+    if (payment.available !== true || payment.mode !== "wechat") {
+      return makeCheck(name, false, result.status, "payment-enabled profile requires available WeChat payment");
+    }
+    return makeCheck(name, true, result.status, "WeChat payment is enabled");
+  }
   if (payment.available !== false) return makeCheck(name, false, result.status, "payment must be disabled for this smoke run");
   return makeCheck(name, true, result.status, "payment is disabled");
 }
 
-async function runDeploymentSmoke({ baseUrl, fetchImpl = globalThis.fetch, timeoutMs } = {}) {
+async function runDeploymentSmoke({
+  baseUrl,
+  fetchImpl = globalThis.fetch,
+  timeoutMs,
+  profile,
+  paymentProfile,
+} = {}) {
   const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
   if (!normalizedBaseUrl) {
     return {
@@ -262,6 +282,16 @@ async function runDeploymentSmoke({ baseUrl, fetchImpl = globalThis.fetch, timeo
     return {
       ok: false,
       checks: [makeCheck("base-url", false, null, "fetch implementation is unavailable")],
+    };
+  }
+
+  const selectedProfile = normalizePaymentProfile(
+    profile || paymentProfile || process.env.DEPLOYMENT_SMOKE_PROFILE || "payment-disabled",
+  );
+  if (!PAYMENT_PROFILES.has(selectedProfile)) {
+    return {
+      ok: false,
+      checks: [makeCheck("profile", false, null, "profile must be payment-disabled or payment-enabled")],
     };
   }
 
@@ -299,7 +329,7 @@ async function runDeploymentSmoke({ baseUrl, fetchImpl = globalThis.fetch, timeo
     await fetchEndpoint({ name: "/api/miniapp/pricing", url: endpointUrl(ENDPOINTS[4]), fetchImpl, timeoutMs: timeout }),
     "/api/miniapp/pricing",
   );
-  checks.push(pricingResult.check || checkPricing("/api/miniapp/pricing", pricingResult));
+  checks.push(pricingResult.check || checkPricing("/api/miniapp/pricing", pricingResult, selectedProfile));
 
   return { ok: checks.every((check) => check.ok), checks };
 }

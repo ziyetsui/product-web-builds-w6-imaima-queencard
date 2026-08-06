@@ -631,6 +631,45 @@ test("verified payment fulfillment is atomic, replay-safe, and refunds its remai
   await pool.end();
 });
 
+test("postgres persists separate refund acceptance/completion states and leases stale orders", async () => {
+  const { pool, store } = await setup();
+  const user = await store.ensureUser({ sub: "reconciliation-store-user", appid: "wx-reconciliation-store", openid: "reconciliation-store-openid" });
+  const stale = await store.createOrder({
+    id: "stale-store-order",
+    userId: user.id,
+    productId: "credits-5",
+    paymentMode: "wechat",
+    amountCents: 500,
+    credits: 5,
+    createdAt: "2026-08-01T00:00:00.000Z",
+  });
+  const claimed = await store.claimStaleOrders("store-worker", {
+    now: new Date("2026-08-05T00:00:00.000Z"),
+    staleAfterMs: 60_000,
+    leaseDurationMs: 60_000,
+    limit: 1,
+  });
+  assert.equal(claimed[0].id, stale.id);
+  assert.equal((await store.claimStaleOrders("second-worker", { now: new Date("2026-08-05T00:00:00.000Z"), staleAfterMs: 60_000, limit: 1 })).length, 0);
+  assert.equal((pool.__queries || []).some((query) => /FOR UPDATE SKIP LOCKED/i.test(query.sql)), true);
+  await store.releaseOrderReconciliationLease(stale.id, "store-worker", { reconciledAt: "2026-08-05T00:00:00.000Z" });
+  assert.equal((await store.getOrder(stale.id)).reconcileLeaseOwner, "");
+  assert.equal((await store.getOrder(stale.id)).lastReconciledAt, "2026-08-05T00:00:00.000Z");
+
+  const paid = await store.createOrder({ id: "refund-state-order", userId: user.id, productId: "credits-5", paymentMode: "wechat", amountCents: 500, credits: 5 });
+  await store.fulfillPayment({ fulfillmentKey: "refund-state-payment", orderId: paid.id, provider: "wechat", eventId: "refund-state-payment", providerTransactionId: "refund-state-payment", status: "FULFILLED", paymentVerified: true });
+  const accepted = await store.acceptRefund(paid.id, { refundId: "refund-state-1", refundAmountCents: 500, refundStatus: "accepted" });
+  assert.equal(accepted.order.status, "paid");
+  assert.equal(accepted.order.paymentStatus, "refund_pending");
+  assert.equal(accepted.order.refundStatus, "accepted");
+  assert.equal((await store.getUser(user.id)).balance, 15);
+  const completed = await store.completeRefund(paid.id, { verified: true, refundId: "refund-state-1", refundAmountCents: 500 });
+  assert.equal(completed.order.status, "refunded");
+  assert.equal(completed.order.refundStatus, "succeeded");
+  assert.equal((await store.getUser(user.id)).balance, 10);
+  await pool.end();
+});
+
 test("provider transaction replay with another fulfillment key returns the original fulfillment", async () => {
   const { pool, store } = await setup();
   const user = await store.ensureUser({ sub: "payment-replay-user", appid: "wx-payment-replay", openid: "payment-replay-openid" });

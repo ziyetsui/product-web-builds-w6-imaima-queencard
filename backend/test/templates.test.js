@@ -32,6 +32,12 @@ export const xhsPromptCases: XhsPromptCase[] = [
     sharesText: "7.4w",
     prompt: "参考图文生成新主题",
     sourceTitle: "鸡，谁懂？",
+    patternId: "wordplay-reveal-1",
+    suggestedPatternValues: {
+      topic: "AI 创业",
+      setup: "程序员加班",
+      punchline: "模型又崩了",
+    },
   },
 ];
 `, "utf8");
@@ -146,6 +152,12 @@ test("fetchTemplateList can read GitHub xhs prompt cases as local templates", as
   assert.equal(data.records[0].title, "鸡，谁懂？");
   assert.equal(data.records[0].source, "github");
   assert.equal(data.records[0].thumbnailUrl, "https://mini.example/xhs-cases/case-1.jpg");
+  assert.equal(data.records[0].metadata.patternId, "wordplay-reveal-1");
+  assert.deepEqual(data.records[0].metadata.suggestedPatternValues, {
+    topic: "AI 创业",
+    setup: "程序员加班",
+    punchline: "模型又崩了",
+  });
   assert.equal(data.pagination.total, 1);
 });
 

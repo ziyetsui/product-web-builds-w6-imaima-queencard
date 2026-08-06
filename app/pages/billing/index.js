@@ -8,12 +8,15 @@ function formatTime(value) {
 }
 
 function decorateOrder(order) {
+  var payment = billing.describeOrderStatus(order);
   return {
     id: order.id,
     title: order.productName,
     desc: order.credits ? order.credits + " 积分 · " + order.channel : order.channel,
     amount: order.amountLabel,
-    status: order.status,
+    status: payment.label,
+    statusKey: payment.state,
+    statusMessage: payment.message,
     createdAtLabel: formatTime(order.createdAt),
   };
 }

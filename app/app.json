@@ -8,7 +8,9 @@
     "pages/pricing/index",
     "pages/account/index",
     "pages/billing/index",
-    "pages/admin/index"
+    "pages/admin/index",
+    "pages/legal/privacy",
+    "pages/legal/terms"
   ],
   "window": {
     "navigationBarTitleText": "ima ima queencard",
